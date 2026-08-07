@@ -100,6 +100,11 @@ cd IRIS-ISiK-Test-Suite
 scripts/01-provision-host.sh          # asks for your sudo password once
 ```
 
+Run it from an **interactive** shell, or on a host where your account has
+passwordless sudo. Everything it installs is system-wide, so if it can neither
+prompt nor use sudo without a password it stops at once and says so, rather than
+part-provisioning the host.
+
 It installs `unzip make ca-certificates curl gnupg git python3-yaml jq`, then Docker
 Engine, the CLI, containerd, buildx and **the Compose v2 plugin** from Docker's own
 apt repository, enables `docker.service`, and adds your account to the `docker`

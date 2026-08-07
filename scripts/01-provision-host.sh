@@ -57,9 +57,26 @@ fi
 [[ -n "$VERSION_CODENAME" ]] \
   || die "/etc/os-release names no VERSION_CODENAME - Docker's apt repository is per-release and the codename cannot be guessed. Add the repository by hand (https://docs.docker.com/engine/install/)"
 
-# One sudo prompt at the start rather than one per step, so an operator watching the
-# run is not surprised by a password prompt several minutes in.
-sudo -v || die "sudo authentication failed"
+# Establish sudo once at the start rather than once per step, so an operator watching
+# the run is not surprised by a password prompt several minutes in.
+#
+# `sudo -n true` is tried FIRST, and `sudo -v` only if it fails. The order matters and
+# cost a run to discover: on the lab host, `sudo -n true` succeeds (the operator has
+# `(ALL) NOPASSWD: ALL`) while `sudo -v` fails with "a terminal is required to read the
+# password". `sudo -v` revalidates the timestamp for the *whole* sudoers entry set, and
+# this host also carries an earlier password-requiring `(ALL : ALL) ALL` rule, so -v
+# insists on a password that is never actually needed to run a command. Over a
+# non-interactive SSH channel there is no tty to read it from, so the script died at
+# its second step on a host where every privileged command below would have worked.
+if sudo -n true 2>/dev/null; then
+  ok "sudo is available without a password"
+elif [[ -t 0 ]]; then
+  # An interactive terminal: prompt once, here, rather than mid-run.
+  sudo -v || die "sudo authentication failed"
+  ok "sudo authenticated"
+else
+  die "sudo needs a password and this session has no terminal to read it from. Either run this script from an interactive shell, or grant the operator passwordless sudo, or install the prerequisites by hand (the commands are in INSTALL.md section 3)"
+fi
 
 # --- 1. Base packages --------------------------------------------------------
 # `make` is here because the Makefile is the documented interface, `unzip` because
