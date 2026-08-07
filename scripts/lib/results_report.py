@@ -1076,6 +1076,14 @@ def render(doc: dict, run_root: Path) -> str:
         lambda lv: (lv["run"].get("testTool") or {}).get("latestAvailable"))
     row("Deploy mode", lambda lv: lv["run"].get("mode"))
     row("Package source", lambda lv: lv["run"].get("packageSource"))
+    # -Xmx for the JVM that ran the scenarios. Stated because it decides whether a
+    # Stufe 5 level can finish at all, and a level that timed out with a low value
+    # here is explained by it rather than by the SUT.
+    row("Scenario heap", lambda lv: (lv["run"].get("testTool") or {}).get("scenarioHeapMax"))
+    # Present only when this level was run with a command-line override, which is
+    # how a level is re-run with more heap after an out-of-memory stall. Its absence
+    # means every setting came from the frozen configuration record.
+    row("Command-line overrides", lambda lv: lv["run"].get("overrides"))
     row("Container exit code", lambda lv: lv["run"].get("containerExitCode"))
     row("Outcome records in the archive",
         lambda lv: (lv["run"].get("artefacts") or {}).get("testOutcomeRecords"))

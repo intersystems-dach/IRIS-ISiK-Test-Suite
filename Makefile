@@ -52,6 +52,14 @@ ENV_RESOLVED_FILE := $(REPO_ROOT)/.env.resolved
 
 # MODE may be overridden per invocation (`MODE=manual make manual`), which is
 # why it is not simply read from .env here: the command line must win.
+#
+# These two are handled by the resolver, which rewrites their lines when it writes
+# .env.resolved. The run-behaviour knobs - TESTSUITE_HEAP_MAX, TESTSUITE_TIMEOUT,
+# IRIS_BOOTSTRAP_TIMEOUT, MANUAL_STUFE - are overridable too, but through
+# RUN_OVERRIDABLE in scripts/lib.sh rather than here: they need no make variable,
+# since an environment assignment on the command line is already exported to the
+# recipe. Nothing else may be overridden per invocation, because .env.resolved is
+# the round's provenance record.
 MODE ?=
 PACKAGE_SOURCE ?=
 export MODE PACKAGE_SOURCE

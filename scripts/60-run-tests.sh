@@ -497,6 +497,7 @@ M_SUITE_VERSION_SOURCE="${TESTSUITE_VERSION_SOURCE:-}" \
 M_SUITE_LATEST="${TESTSUITE_LATEST_AVAILABLE:-}" \
 M_SUITE_HEAP="${TESTSUITE_HEAP_MAX:-}" \
 M_PACKAGE_SOURCE="${PACKAGE_SOURCE:-refv}" M_MODE="$MODE" \
+M_OVERRIDES="${ENV_OVERRIDES:-}" \
 M_SUT_USER="$SUT_USER" M_SUT_PASSWORD="$SUT_PASSWORD" \
 M_MGMT_USER="$IRIS_MGMT_USER" M_MGMT_PASSWORD="$IRIS_MGMT_PASSWORD" \
 M_SEED="$seed_summary" \
@@ -565,6 +566,16 @@ rec = {
     },
     "packageSource": env["M_PACKAGE_SOURCE"],
     "mode": env["M_MODE"],
+    # Run-behaviour settings given on the command line rather than read from the
+    # configuration file, as "NAME=value" pairs, or null when there were none.
+    # Recorded because otherwise this record and the file would disagree with no
+    # way to tell which one the container actually got: re-running one level of a
+    # finished round with more heap (TESTSUITE_HEAP_MAX=32g make test-stufe5
+    # RUN_ID=<round>) is the documented response to the out-of-memory stall, and
+    # the resulting archive has to say that is what happened. Only knobs that
+    # describe how a level is run can appear here - never a version or an
+    # endpoint, which would let a round test one thing and record another.
+    "overrides": env["M_OVERRIDES"] or None,
     # Top level rather than inside "sut", so nothing that already reads "sut"
     # changes shape. Recorded in full on purpose: this is a single-round lab
     # instance, and a verdict in the results analysis has to be reproducible by

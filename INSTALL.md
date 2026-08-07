@@ -291,6 +291,21 @@ It is delivered to the container as `MAVEN_ARGS=-DargLine=-Xmx…`, not `MAVEN_O
 because the scenarios run in Failsafe's forked JVM — `MAVEN_OPTS` would size the
 wrong process. That detail is load-bearing and is recorded in `.env.example`.
 
+If a level did stall, re-run just that level with more heap, against the same
+round:
+
+```sh
+TESTSUITE_HEAP_MAX=32g make test-stufe5 RUN_ID=run-20260807T084713Z
+make report RUN_ID=run-20260807T084713Z
+```
+
+Heap is one of the few settings a command line may override (`TESTSUITE_TIMEOUT`,
+`IRIS_BOOTSTRAP_TIMEOUT` and `MANUAL_STUFE` are the others). The override is logged
+when it takes effect and recorded in that level's `run.json` as `overrides`, so the
+archive says the level was re-run with a different heap. Versions and endpoints are
+deliberately *not* overridable: `.env.resolved` is the provenance record, and a
+round must not be able to test one thing and record another.
+
 ## 8. Run it
 
 ```sh
@@ -388,7 +403,7 @@ hypothetical list.
 | Symptom | Cause and fix |
 |---|---|
 | Everything installs, then every FHIR request fails with `#5915: Unable to allocate a license` | The licence key was not readable by uid 51773. Do not tighten its mode by hand; `make up` sets it. [Details](docs/en/02-setup.md#the-licence-files-permissions-matter-more-than-they-look) |
-| A Stufe 5 run looks healthy, crawls, and produces no archive | Scenario JVM out of heap. `grep OutOfMemoryError reports/<run-id>/stufe5/run.log`, raise `TESTSUITE_HEAP_MAX`, re-run the level. [Details](docs/en/06-execution.md#stufe-5-needs-heap-and-running-short-of-it-costs-the-whole-level) |
+| A Stufe 5 run looks healthy, crawls, and produces no archive | Scenario JVM out of heap. `grep OutOfMemoryError reports/<run-id>/stufe5/run.log`, then `TESTSUITE_HEAP_MAX=32g make test-stufe5 RUN_ID=<round>`. [Details](docs/en/06-execution.md#re-running-one-level-with-more-heap) |
 | An endpoint answers 404 | Two causes the status code cannot distinguish: the path is absent, **or** the credential never arrived — these endpoints refuse an unauthenticated request with 404, not 401. Check the credential first with `make credentials` and `make status`. [Details](docs/en/03-sut-iris.md#it-is-refused-with-404-not-401) |
 | `make up` says the endpoints do not serve `/metadata`, but `curl` gets 200 | Stale bootstrap markers in `run/iris-state/`. Believe `curl`; continue with `make seed`. [Details](docs/en/03-sut-iris.md#the-host-side-markers-belong-to-the-container-and-clearing-them-cost-a-round) |
 | `make up` times out with nothing in `bootstrap.log` | `run/iris-state/` is not writable by uid 51773, so the real error was never recorded. `make up` fixes the ownership itself; if it cannot, the directory needs to be writable by that uid. [Details](docs/en/02-setup.md#uid-51773-is-not-only-about-the-licence-file) |

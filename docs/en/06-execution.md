@@ -224,6 +224,39 @@ Detection now exists at all three layers:
 fact. The value is `null` when the JVM default was used — which is itself the
 explanation for a round that timed out.
 
+### Re-running one level with more heap
+
+The remedy is to re-run the affected level alone, against the same round:
+
+```sh
+TESTSUITE_HEAP_MAX=32g make test-stufe5 RUN_ID=run-20260807T084713Z
+make report RUN_ID=run-20260807T084713Z
+```
+
+`TESTSUITE_HEAP_MAX` is one of four settings a command line may override —
+`TESTSUITE_TIMEOUT`, `IRIS_BOOTSTRAP_TIMEOUT` and `MANUAL_STUFE` are the others,
+listed as `RUN_OVERRIDABLE` in [scripts/lib.sh](../../scripts/lib.sh). They share
+one property: each describes *how* a level is run, and none of them changes what is
+being tested.
+
+That distinction is the reason the mechanism exists at all. `load_env` sources the
+configuration file with `set -a`, so the file's value overwrites anything the caller
+exported — which means that before this list existed, `TESTSUITE_HEAP_MAX=32g make
+test-stufe5` was **silently discarded**: the container started with the file's old
+heap, the run reported success, and nothing anywhere said the override had been
+ignored. Found by walking [INSTALL.md](../../INSTALL.md) on a fresh host, where a
+32g round turned out to be a second 16g round.
+
+`load_env` now reinstates these four after sourcing, logs each one that takes
+effect (`override: TESTSUITE_HEAP_MAX=32g (.env.resolved says 16g)`), and records
+them in that level's `run.json` as `overrides`, which the results document states as
+*Command-line overrides*. An override that takes effect invisibly is only
+marginally better than one that is ignored.
+
+Everything else stays file-only deliberately. `.env.resolved` is the provenance
+record for the round, and a version or an endpoint that could be changed per
+invocation would let a round test one thing and record another.
+
 ## The timeout path, and why it usually yields nothing
 
 Maven assembles both archives in `post-integration-test`, i.e. at the very end.

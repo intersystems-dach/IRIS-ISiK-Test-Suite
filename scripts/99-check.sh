@@ -779,6 +779,11 @@ internal |= {"R_IRIS_VERSION", "R_IRIS_DIGEST", "R_IRIS_ZV", "R_IRIS_SOURCE",
              # the `resolved` set below.
              "R_IRIS_VERSION_SOURCE", "R_TESTSUITE_VERSION_SOURCE",
              "R_TESTSUITE_LATEST"}
+# Computed by load_env in lib.sh: the run-behaviour settings this invocation was
+# given on the command line, as "NAME=value" pairs. An output of the configuration
+# load, not an input to it - setting it in .env would claim an override that never
+# happened. RUN_OVERRIDABLE is the list load_env honours, likewise code.
+internal |= {"ENV_OVERRIDES", "RUN_OVERRIDABLE"}
 # Recorded into .env.resolved by 10-resolve-versions.sh rather than authored.
 # *_IMAGE_SOURCE says whether the digest beside it is a registry digest or the
 # local ID of a side-loaded image; it is measured at pull time, never authored.

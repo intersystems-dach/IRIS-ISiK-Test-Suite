@@ -86,8 +86,31 @@ need_cmd() {
 #
 #   load_env            prefer .env.resolved, fall back to .env
 #   load_env raw        force .env (used by 10-resolve-versions.sh itself)
+#
+# Command-line overrides. Sourcing the file with `set -a` overwrites anything the
+# caller exported, so a `FOO=bar make target` for a variable the file also defines
+# is silently discarded. Two of those - MODE and PACKAGE_SOURCE - are documented as
+# overridable and are handled by the resolver, which rewrites their lines when it
+# writes .env.resolved. The RUN_OVERRIDABLE list below extends that to the knobs
+# that describe how a level is *run* rather than what is being tested, so that
+#
+#   TESTSUITE_HEAP_MAX=32g make test-stufe5 RUN_ID=<existing round>
+#
+# does what it says. Re-running one level of a finished round with more heap is the
+# natural response to the out-of-memory stall documented in
+# docs/en/06-execution.md, and before this it changed nothing while reporting
+# success - the container started with the file's old value and the operator had no
+# way to see it. Anything NOT on this list stays file-only on purpose: a round must
+# not be able to test one thing and record another, so version and endpoint settings
+# are changed by editing .env and re-resolving, which updates the provenance too.
+RUN_OVERRIDABLE=(TESTSUITE_HEAP_MAX TESTSUITE_TIMEOUT IRIS_BOOTSTRAP_TIMEOUT MANUAL_STUFE)
+
 load_env() {
-  local which="${1:-resolved}" file=''
+  local which="${1:-resolved}" file='' v
+  # Captured BEFORE the file is sourced; empty means "no override given", which must
+  # not clobber the file's value. Held in a global so the report can state it.
+  local -a saved=()
+  for v in "${RUN_OVERRIDABLE[@]}"; do saved+=("${!v:-}"); done
 
   if [[ "$which" == raw ]]; then
     file="$ENV_FILE"
@@ -106,6 +129,21 @@ load_env() {
   # shellcheck disable=SC1090  # path is computed, by design
   . "$file"
   set +a
+
+  # Reinstate the overrides the file just overwrote, and say so: an override that
+  # takes effect invisibly is only marginally better than one that is ignored.
+  ENV_OVERRIDES=''
+  local i=0
+  for v in "${RUN_OVERRIDABLE[@]}"; do
+    if [[ -n "${saved[$i]}" && "${saved[$i]}" != "${!v:-}" ]]; then
+      log "override: ${v}=${saved[$i]} (${file#$REPO_ROOT/} says ${!v:-unset})"
+      ENV_OVERRIDES="${ENV_OVERRIDES}${ENV_OVERRIDES:+ }${v}=${saved[$i]}"
+      printf -v "$v" '%s' "${saved[$i]}"
+      export "${v?}"
+    fi
+    i=$(( i + 1 ))
+  done
+  export ENV_OVERRIDES
 
   ENV_LOADED_FROM="$file"
   export ENV_LOADED_FROM
