@@ -708,6 +708,11 @@ internal = {
     "VENDOR_DIR", "PACKAGES_DIR", "RUN_DIR", "REPORTS_DIR", "SECRETS_DIR",
     "ENV_LOADED_FROM", "TESTSUITE_REF", "PLUGINS_DIR", "TGZ_DIR", "UPSTREAM_DIR",
     "MANIFEST", "PARITY", "BUNDLED_DIR", "PROMOTED_FETCHED",
+    # 20-fetch-packages.sh's parity bookkeeping. SUBSTITUTED holds the payloads the
+    # simplifier route could not download and filled from the image; the rest are
+    # the classified rows and their tallies.
+    "SUBSTITUTED", "PARITY_ROWS", "N_BUNDLED_TOTAL",
+    "n_match", "n_differ", "n_bundled", "n_absent", "substituted", "status",
     "REPORT_DIR", "DOCKER_CONFIG", "HOME",
     "LC_ALL", "BASH_SOURCE", "SUBST", "TIGER_TMPL_DIR", "TESTDATA_SRC",
     "OUT_TIGER", "OUT_TIGER_MANUAL", "OUT_TESTDATA", "WORKFLOW_UI_PORT",

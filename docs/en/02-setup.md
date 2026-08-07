@@ -269,6 +269,29 @@ decides where the *payloads* come from:
 packages are the published ones. Either is a valid conformance round; the choice
 is recorded in `run.json` and in the results document.
 
+### Not every package is on Simplifier, and a partial download used to void the table
+
+`PARITY.txt` classifies each payload `MATCH`, `DIFFER`, `BUNDLED` (download failed,
+bundled copy used, **nothing corroborated**) or `REGISTRY`, and ends in a summary
+line. Read the summary before citing the table, because a `BUNDLED` row proves
+nothing while looking exactly like a row that does.
+
+For suite 2.7.0 at least one package —
+`de.gematik.isik3-dokumentenaustausch-terminology#1.0.0` — is **not published on
+Simplifier at all** (404 on both the tarball and the package metadata). So this
+route never comes back fully clean for that version, and the partial-download path
+is the normal case rather than an outage. That is not a defect: the bundled copy is
+the authoritative one either way, and the round is unaffected.
+
+What *was* a defect, found on the official 2026.2 round and fixed in
+[`20-fetch-packages.sh`](../../scripts/20-fetch-packages.sh): a single failed
+download used to re-run the whole bundled extraction, whose `unzip -o` overwrote
+the pool wholesale. All 34 successful downloads were replaced by bundled copies, so
+the table compared the bundled set against itself and reported `MATCH` for every
+row. Every row was true and the table as a whole was worthless — the most expensive
+kind of wrong, since it reads as corroboration. Gaps are now filled one package at a
+time and marked `BUNDLED`.
+
 ## Interactive testing
 
 ```sh

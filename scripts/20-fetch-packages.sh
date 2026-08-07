@@ -241,12 +241,62 @@ for pkg in plan["allPackages"]:
     # Falling back rather than failing: the bundled copies are the authoritative
     # ones anyway, and a Simplifier outage should not block a test round. The
     # substitution is recorded in PARITY.txt so it cannot pass unnoticed.
-    warn "${failed}/${total} packages could not be downloaded; filling the gaps from the bundled copies"
-    collect_from_refv
+    #
+    # The gaps are filled PER PACKAGE, not by re-running collect_from_refv, and the
+    # difference is the whole value of the parity table. collect_from_refv unpacks
+    # every bundled payload with `unzip -o`, which overwrites the pool wholesale -
+    # so a single failed download replaced all 34 successful ones with bundled
+    # copies, and PARITY.txt then compared the bundled set against itself and
+    # reported MATCH for all of them. Every row was true and the table as a whole
+    # was worthless, which is the most expensive kind of wrong: it reads as
+    # independent corroboration that the published packages are the validated ones.
+    #
+    # Observed on the official 2026.2 round with suite 2.7.0, where
+    # de.gematik.isik3-dokumentenaustausch-terminology#1.0.0 is not published on
+    # Simplifier at all (404 on both the tarball and the package metadata), so the
+    # simplifier route can never come back clean for this suite version and the
+    # fallback is the normal path rather than an outage.
+    warn "${failed}/${total} packages could not be downloaded; filling those gaps from the bundled copies"
+    local filled=0 name version out
+    while IFS='#' read -r name version; do
+      [[ -n "$name" ]] || continue
+      out="${TGZ_DIR}/${name}-${version}.tgz"
+      [[ -f "$out" ]] && continue
+      # Extract just this one payload from whichever plugin zip carries it. The
+      # bundled filenames follow <name>-<version>.tgz, which is what the pool is
+      # keyed by, so a targeted `unzip -j` cannot touch a downloaded neighbour.
+      local zip
+      shopt -s nullglob
+      for zip in "${PLUGINS_DIR}/_zips"/*.zip; do
+        unzip -o -q -j "$zip" "package/${name}-${version}.tgz" -d "$TGZ_DIR" 2>/dev/null && break
+      done
+      shopt -u nullglob
+      [[ -f "$out" ]] \
+        || die "${name}#${version} could not be downloaded from ${registry} and no bundled copy exists in the image either.
+  The package plan requires it, so there is nothing to load it from. Re-run with
+  PACKAGE_SOURCE=refv if the registry is unreachable, or check the package plan."
+      filled=$((filled+1))
+      # Recorded so PARITY.txt can mark this row BUNDLED. Without it the row would
+      # read MATCH - the bytes really are identical to the bundled copy, because
+      # they ARE the bundled copy - and a substitution would be indistinguishable
+      # from independent corroboration.
+      SUBSTITUTED+=("${name}-${version}.tgz")
+      log "filled from the image: ${name}#${version}"
+    done < <(python3 -c '
+import json, sys
+plan = json.load(open(sys.argv[1]))
+for pkg in plan["allPackages"]:
+    print(pkg["id"])
+' "${VENDOR_DIR}/package-plan.json")
+    ok "downloaded $(( total - failed ))/${total} from ${registry}, filled ${filled} from the image"
   else
     ok "downloaded ${total} packages from ${registry}"
   fi
 }
+
+# Filenames the simplifier route could not download and filled from the image
+# instead. Declared before the dispatch so PARITY.txt can read it either way.
+SUBSTITUTED=()
 
 case "$PACKAGE_SOURCE" in
   refv)       collect_from_refv ;;
@@ -428,6 +478,33 @@ if [[ "$PACKAGE_SOURCE" == simplifier ]]; then
   done
   shopt -u nullglob
 
+  # Classify first, write second. The row loop must not live inside a `| sort`
+  # pipeline: that runs it in a subshell, where the counters increment and are then
+  # discarded, so the summary line would report zeros while the rows above it were
+  # correct - a footer that contradicts its own table.
+  PARITY_ROWS=''
+  n_match=0; n_differ=0; n_bundled=0; n_absent=0
+  for tgz in "$BUNDLED_DIR"/*.tgz; do
+    [[ -e "$tgz" ]] || continue
+    name="$(basename "$tgz")"
+    used="${TGZ_DIR}/${name}"
+    substituted=0
+    for s in ${SUBSTITUTED[@]+"${SUBSTITUTED[@]}"}; do
+      [[ "$s" == "$name" ]] && { substituted=1; break; }
+    done
+    if [[ ! -f "$used" ]]; then
+      status=ABSENT;  n_absent=$((n_absent+1))
+    elif (( substituted )); then
+      status=BUNDLED; n_bundled=$((n_bundled+1))
+    elif [[ "$(sha256_of "$tgz")" == "$(sha256_of "$used")" ]]; then
+      status=MATCH;   n_match=$((n_match+1))
+    else
+      status=DIFFER;  n_differ=$((n_differ+1))
+    fi
+    PARITY_ROWS+="$(printf '  %-8s %s' "$status" "$name")"$'\n'
+  done
+  N_BUNDLED_TOTAL="$(find "$BUNDLED_DIR" -name '*.tgz' | wc -l | tr -d ' ')"
+
   PARITY="${PACKAGES_DIR}/PARITY.txt"
   {
     printf '# Bundled (test suite image) vs published (Simplifier) package parity\n'
@@ -436,25 +513,25 @@ if [[ "$PACKAGE_SOURCE" == simplifier ]]; then
     printf '# DIFFER   same name@version, different bytes. Not necessarily wrong:\n'
     printf '#          FHIR tarballs embed timestamps, so a repack differs while the\n'
     printf '#          content is equal. Investigate before relying on it.\n'
-    printf '# BUNDLED  download failed; the bundled copy was used instead\n'
+    printf '# BUNDLED  NOT independent evidence: the download failed and the bundled\n'
+    printf '#          copy was used, so there is nothing to compare against. Such a\n'
+    printf '#          row would otherwise read MATCH, because the bytes ARE the\n'
+    printf '#          bundled bytes.\n'
     printf '# REGISTRY no bundled copy exists to compare against - the image does not\n'
     printf '#          ship this package (see the MANIFEST.txt header)\n#\n'
+    if (( n_bundled )); then
+      printf '# %d of %d package(s) below are BUNDLED, so this table corroborates parity\n' \
+        "$n_bundled" "$N_BUNDLED_TOTAL"
+      printf '# for the %d MATCH row(s) only. Read the summary at the end before citing it.\n#\n' \
+        "$n_match"
+    fi
     printf '# %-8s %-56s %s\n' 'STATUS' 'PACKAGE' 'VERSION'
     for id in "${PROMOTED_FETCHED[@]}"; do
       printf '  %-8s %s\n' 'REGISTRY' "$id"
     done
-    for tgz in "$BUNDLED_DIR"/*.tgz; do
-      [[ -e "$tgz" ]] || continue
-      name="$(basename "$tgz")"
-      used="${TGZ_DIR}/${name}"
-      if [[ ! -f "$used" ]]; then
-        printf '  %-8s %s\n' 'ABSENT' "$name"
-      elif [[ "$(sha256_of "$tgz")" == "$(sha256_of "$used")" ]]; then
-        printf '  %-8s %s\n' 'MATCH' "$name"
-      else
-        printf '  %-8s %s\n' 'DIFFER' "$name"
-      fi
-    done | sort -k2
+    printf '%s' "$PARITY_ROWS" | sort -k2
+    printf '#\n# summary: %d MATCH, %d DIFFER, %d BUNDLED, %d ABSENT, %d REGISTRY\n' \
+      "$n_match" "$n_differ" "$n_bundled" "$n_absent" "${#PROMOTED_FETCHED[@]}"
   } >"$PARITY"
   rm -rf "$BUNDLED_DIR"
   ok "wrote vendor/packages/PARITY.txt"
