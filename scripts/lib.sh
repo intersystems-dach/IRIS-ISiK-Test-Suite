@@ -105,12 +105,35 @@ need_cmd() {
 # are changed by editing .env and re-resolving, which updates the provenance too.
 RUN_OVERRIDABLE=(TESTSUITE_HEAP_MAX TESTSUITE_TIMEOUT IRIS_BOOTSTRAP_TIMEOUT MANUAL_STUFE)
 
+# MODE and PACKAGE_SOURCE, the two the paragraph above calls "documented as
+# overridable", get the same treatment - and did not, which is the same defect over
+# again. The resolver rewrites their lines when it writes .env.resolved, so an
+# override handed to `make resolve` works; handed to any LATER phase it was silently
+# discarded, because that phase loads .env.resolved and `set -a` overwrote the
+# exported value with the file's.
+#
+#   PACKAGE_SOURCE=simplifier make packages
+#
+# ran the refv route and said PACKAGE_SOURCE=refv while doing it. Found on the
+# official 2026.2 round when regenerating the parity table after the round, which is
+# exactly when it is needed: PARITY.txt is evidence ABOUT the packages, and
+# producing it must not require editing .env.resolved and thereby rewriting the
+# finished round's own provenance record.
+#
+# These are kept in a separate list from RUN_OVERRIDABLE because they are not
+# run-behaviour knobs: PACKAGE_SOURCE changes which payload bytes are loaded. An
+# override is therefore logged, recorded in ENV_OVERRIDES (hence in run.json), and
+# stamped into the MANIFEST.txt header of the pass that used it - so the round can
+# still not test one thing and record another, which is the property the file-only
+# rule was protecting.
+CONFIG_OVERRIDABLE=(MODE PACKAGE_SOURCE)
+
 load_env() {
   local which="${1:-resolved}" file='' v
   # Captured BEFORE the file is sourced; empty means "no override given", which must
   # not clobber the file's value. Held in a global so the report can state it.
   local -a saved=()
-  for v in "${RUN_OVERRIDABLE[@]}"; do saved+=("${!v:-}"); done
+  for v in "${RUN_OVERRIDABLE[@]}" "${CONFIG_OVERRIDABLE[@]}"; do saved+=("${!v:-}"); done
 
   if [[ "$which" == raw ]]; then
     file="$ENV_FILE"
@@ -134,7 +157,7 @@ load_env() {
   # takes effect invisibly is only marginally better than one that is ignored.
   ENV_OVERRIDES=''
   local i=0
-  for v in "${RUN_OVERRIDABLE[@]}"; do
+  for v in "${RUN_OVERRIDABLE[@]}" "${CONFIG_OVERRIDABLE[@]}"; do
     if [[ -n "${saved[$i]}" && "${saved[$i]}" != "${!v:-}" ]]; then
       log "override: ${v}=${saved[$i]} (${file#$REPO_ROOT/} says ${!v:-unset})"
       ENV_OVERRIDES="${ENV_OVERRIDES}${ENV_OVERRIDES:+ }${v}=${saved[$i]}"

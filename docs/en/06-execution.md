@@ -271,7 +271,21 @@ heap, the run reported success, and nothing anywhere said the override had been
 ignored. Found by walking [INSTALL.md](../../INSTALL.md) on a fresh host, where a
 32g round turned out to be a second 16g round.
 
-`load_env` now reinstates these four after sourcing, logs each one that takes
+The same defect had a second half, and it survived that fix: **`MODE` and
+`PACKAGE_SOURCE` were documented as overridable and were not.** The resolver
+rewrites their lines when it writes `.env.resolved`, so an override handed to `make
+resolve` works — but handed to any later phase it was discarded exactly as the heap
+setting had been. `PACKAGE_SOURCE=simplifier make packages` ran the `refv` route and
+logged `PACKAGE_SOURCE=refv` while doing it. Found on the official 2026.2 round when
+regenerating `PARITY.txt` *after* the round, which is precisely when it is needed:
+the parity table is evidence about the packages, and producing it must not require
+editing the finished round's own provenance record. They now live in
+`CONFIG_OVERRIDABLE`, are reinstated the same way, and — because `PACKAGE_SOURCE`
+changes which bytes are loaded rather than merely how a level runs — an overridden
+pass stamps the fact into the header of the `MANIFEST.txt` and `PARITY.txt` it
+writes, so no artefact can claim a payload source its pass did not use.
+
+`load_env` now reinstates these settings after sourcing, logs each one that takes
 effect (`override: TESTSUITE_HEAP_MAX=32g (.env.resolved says 16g)`), and records
 them in that level's `run.json` as `overrides`, which the results document states as
 *Command-line overrides*. An override that takes effect invisibly is only

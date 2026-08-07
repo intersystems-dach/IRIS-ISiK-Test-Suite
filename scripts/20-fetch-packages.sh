@@ -462,6 +462,14 @@ MANIFEST="${PACKAGES_DIR}/MANIFEST.txt"
   printf '# Package list source: %s refv-plugins (authoritative - these are the\n' "$TESTSUITE_REF"
   printf '#   packages the Gematik reference validator validates against)\n'
   printf '# Payload source:      %s\n' "$PACKAGE_SOURCE"
+  # An override reached this pass on the command line rather than from the
+  # configuration file. Stamped here because the manifest is where the payload
+  # claim is made: without it, a manifest produced by an overridden pass would be
+  # indistinguishable from one the round's own .env.resolved describes.
+  if [[ -n "${ENV_OVERRIDES:-}" ]]; then
+    printf '# Overridden:          %s (command line, not %s)\n' \
+      "$ENV_OVERRIDES" "$(basename "${ENV_LOADED_FROM:-.env}")"
+  fi
   # Named in the manifest and not only in the plan, because the manifest is the
   # document an inspector reads to establish where the bytes came from. Under
   # PACKAGE_SOURCE=refv every other line here comes from the pinned image; these
@@ -555,7 +563,11 @@ if [[ "$PACKAGE_SOURCE" == simplifier ]]; then
   PARITY="${PACKAGES_DIR}/PARITY.txt"
   {
     printf '# Bundled (test suite image) vs published (Simplifier) package parity\n'
-    printf '# generated %s\n#\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf '# generated %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    if [[ -n "${ENV_OVERRIDES:-}" ]]; then
+      printf '# by a pass overridden on the command line: %s\n' "$ENV_OVERRIDES"
+    fi
+    printf '#\n'
     printf '# MATCH    identical bytes - the published package is the validated one\n'
     printf '# EQUIV    different bytes, SAME DEFINITIONS. Expect this to be the normal\n'
     printf '#          answer: tarballs embed timestamps, the two producers serialise\n'
