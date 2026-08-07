@@ -86,7 +86,8 @@ the one this project generated. The configuration is deliberately not copied int
 | `iris-bootstrap.log` | The SUT's install log, verbatim |
 | `tiger-RENDERED.txt` | Checksums of the rendered configuration, and the values substituted into it |
 | `tiger-TESTDATA-PARITY.txt` | File-by-file parity of the staged test-data contract against the suite's own |
-| `packages/MANIFEST.txt`, `packages/PARITY.txt` | Every FHIR package with its tarball sha256; bundled-vs-published parity if `PACKAGE_SOURCE=simplifier` |
+| `packages/MANIFEST.txt` | Every FHIR package loaded into the SUT, with its tarball sha256 |
+| `packages/PARITY.txt`, `packages/PARITY-DETAIL.txt` | Bundled-vs-published package parity, and the fields behind every non-`MATCH` verdict. Present if any pass used `PACKAGE_SOURCE=simplifier`; a carried-over table is stamped as such and describes the comparison, not this round's payloads |
 | `package-plan.json` | Which package version went to which endpoint, and why |
 | `env.resolved.txt` | The deployment's whole resolved configuration — image digests, versions pulled, generated credentials. The single file from which the round can be reconstructed |
 | `requirements.json` | Every scenario, precondition block and assertion extracted from the suite's own feature files — what makes the scope figures checkable without the suite image |

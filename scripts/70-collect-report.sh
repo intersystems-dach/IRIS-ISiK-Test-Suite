@@ -232,6 +232,12 @@ copy_prov "${PACKAGES_DIR}/MANIFEST.txt" "packages/MANIFEST.txt" \
 copy_prov "${PACKAGES_DIR}/PARITY.txt" "packages/PARITY.txt" \
   "the downloaded packages compared against the versions the suite pins" \
   "scripts/20-fetch-packages.sh"
+# The table above says EQUIV or DIFFER; this says on what grounds. Without it a
+# DIFFER row is a claim the bundle cannot substantiate, and an EQUIV row is a
+# judgement the reader has to take on trust.
+copy_prov "${PACKAGES_DIR}/PARITY-DETAIL.txt" "packages/PARITY-DETAIL.txt" \
+  "field-level account of every package whose bytes differ from the published one" \
+  "scripts/lib/package_parity.py"
 copy_prov "${VENDOR_DIR}/package-plan.json" "package-plan.json" \
   "which package version is assigned to which endpoint, and why" \
   "scripts/lib/plan_packages.py"

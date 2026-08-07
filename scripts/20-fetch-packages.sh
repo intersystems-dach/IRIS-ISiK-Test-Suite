@@ -395,7 +395,33 @@ fetch_promoted_packages
 # by the refv config.yaml files and by the FHIR package registry, so the directory
 # listing is directly comparable to the plan and to the documentation.
 log "unpacking tarballs into package directories"
+# The parity artefacts survive the wipe. They are evidence ABOUT the packages, not
+# about which payloads this round loaded, and the documented remedy for a content
+# difference is exactly to re-run with PACKAGE_SOURCE=refv while keeping the
+# simplifier table as separate evidence (docs/en/02-setup.md). Wiping it here would
+# destroy the very finding that motivated the re-run. Carried over with a stamp
+# saying so, so nobody reads it as a statement about this round's payloads.
+PARITY_CARRIED=''
+if [[ "$PACKAGE_SOURCE" != simplifier && -f "${PACKAGES_DIR}/PARITY.txt" ]]; then
+  PARITY_CARRIED="$(mktemp -d)"
+  for f in PARITY.txt PARITY-DETAIL.txt parity-content.json; do
+    [[ -f "${PACKAGES_DIR}/${f}" ]] && cp "${PACKAGES_DIR}/${f}" "${PARITY_CARRIED}/"
+  done
+fi
 rm -rf "$PACKAGES_DIR"; mkdir -p "$PACKAGES_DIR"
+if [[ -n "$PARITY_CARRIED" ]]; then
+  cp "$PARITY_CARRIED"/* "$PACKAGES_DIR"/
+  {
+    printf '\n# ---------------------------------------------------------------------------\n'
+    printf '# CARRIED OVER from an earlier PACKAGE_SOURCE=simplifier pass, and re-stamped\n'
+    printf '# %s by a PACKAGE_SOURCE=%s run.\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$PACKAGE_SOURCE"
+    printf '# The rows above compare the bundled payloads against the published ones and\n'
+    printf '# remain true. They do NOT describe what this round loaded: this round used\n'
+    printf '# the %s payloads. MANIFEST.txt is the record of what was loaded.\n' "$PACKAGE_SOURCE"
+  } >>"${PACKAGES_DIR}/PARITY.txt"
+  rm -rf "$PARITY_CARRIED"
+  ok "carried the bundled-vs-published parity table over from the previous pass"
+fi
 
 unpacked=0
 for tgz in "$TGZ_DIR"/*.tgz; do
@@ -478,12 +504,29 @@ if [[ "$PACKAGE_SOURCE" == simplifier ]]; then
   done
   shopt -u nullglob
 
+  # Content comparison, for every package present on both sides. Byte equality is
+  # the wrong test on its own and the 2026.2 round proved it: 33 of 34 packages
+  # came back DIFFER, and not one of them was a discrepancy. FHIR tarballs embed
+  # timestamps, the two producers serialise JSON differently, and - the big one -
+  # the IG publisher ships SNAPSHOT-generated StructureDefinitions while Simplifier
+  # serves the DIFFERENTIAL-only form, 342 KB against 20 KB for the same profile.
+  # A table where "differs" is the normal answer cannot be used as a gate, so the
+  # classification asks what actually matters: do the definitions agree?
+  PARITY_JSON="${PACKAGES_DIR}/parity-content.json"
+  declare -A CONTENT_VERDICT=()
+  PARITY_DETAIL="${PACKAGES_DIR}/PARITY-DETAIL.txt"
+  while IFS=$'\t' read -r verdict fname; do
+    [[ -n "$fname" ]] && CONTENT_VERDICT["$fname"]="$verdict"
+  done < <(python3 "${SCRIPTS_DIR}/lib/package_parity.py" \
+             --bundled "$BUNDLED_DIR" --published "$TGZ_DIR" \
+             --json "$PARITY_JSON" 2>"$PARITY_DETAIL")
+
   # Classify first, write second. The row loop must not live inside a `| sort`
   # pipeline: that runs it in a subshell, where the counters increment and are then
   # discarded, so the summary line would report zeros while the rows above it were
   # correct - a footer that contradicts its own table.
   PARITY_ROWS=''
-  n_match=0; n_differ=0; n_bundled=0; n_absent=0
+  n_match=0; n_equiv=0; n_differ=0; n_bundled=0; n_absent=0
   for tgz in "$BUNDLED_DIR"/*.tgz; do
     [[ -e "$tgz" ]] || continue
     name="$(basename "$tgz")"
@@ -499,7 +542,11 @@ if [[ "$PACKAGE_SOURCE" == simplifier ]]; then
     elif [[ "$(sha256_of "$tgz")" == "$(sha256_of "$used")" ]]; then
       status=MATCH;   n_match=$((n_match+1))
     else
-      status=DIFFER;  n_differ=$((n_differ+1))
+      # Bytes differ. The content verdict decides whether that means anything.
+      case "${CONTENT_VERDICT[$name]:-differ}" in
+        equal|snapshot) status=EQUIV;  n_equiv=$((n_equiv+1)) ;;
+        *)              status=DIFFER; n_differ=$((n_differ+1)) ;;
+      esac
     fi
     PARITY_ROWS+="$(printf '  %-8s %s' "$status" "$name")"$'\n'
   done
@@ -510,9 +557,16 @@ if [[ "$PACKAGE_SOURCE" == simplifier ]]; then
     printf '# Bundled (test suite image) vs published (Simplifier) package parity\n'
     printf '# generated %s\n#\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     printf '# MATCH    identical bytes - the published package is the validated one\n'
-    printf '# DIFFER   same name@version, different bytes. Not necessarily wrong:\n'
-    printf '#          FHIR tarballs embed timestamps, so a repack differs while the\n'
-    printf '#          content is equal. Investigate before relying on it.\n'
+    printf '# EQUIV    different bytes, SAME DEFINITIONS. Expect this to be the normal\n'
+    printf '#          answer: tarballs embed timestamps, the two producers serialise\n'
+    printf '#          JSON differently, and the image ships snapshot-generated\n'
+    printf '#          StructureDefinitions where Simplifier serves differential-only\n'
+    printf '#          ones. A snapshot is derived from the differential, so a profile\n'
+    printf '#          that agrees except for its presence is the same profile.\n'
+    printf '#          Equally good evidence as MATCH. See PARITY-DETAIL.txt.\n'
+    printf '# DIFFER   same name@version, and the definitions themselves disagree.\n'
+    printf '#          This is the only status that needs a decision. The exact fields\n'
+    printf '#          are listed in PARITY-DETAIL.txt.\n'
     printf '# BUNDLED  NOT independent evidence: the download failed and the bundled\n'
     printf '#          copy was used, so there is nothing to compare against. Such a\n'
     printf '#          row would otherwise read MATCH, because the bytes ARE the\n'
@@ -522,19 +576,30 @@ if [[ "$PACKAGE_SOURCE" == simplifier ]]; then
     if (( n_bundled )); then
       printf '# %d of %d package(s) below are BUNDLED, so this table corroborates parity\n' \
         "$n_bundled" "$N_BUNDLED_TOTAL"
-      printf '# for the %d MATCH row(s) only. Read the summary at the end before citing it.\n#\n' \
-        "$n_match"
+      printf '# for the %d MATCH + %d EQUIV row(s) only. Read the summary at the end.\n#\n' \
+        "$n_match" "$n_equiv"
+    fi
+    if (( n_differ )); then
+      printf '# %d package(s) below are DIFFER: the definitions disagree, not just the\n' "$n_differ"
+      printf '# bytes. PARITY-DETAIL.txt names the fields. The SUT is loaded with the\n'
+      printf '# PUBLISHED copies under PACKAGE_SOURCE=simplifier - re-run with\n'
+      printf '# PACKAGE_SOURCE=refv if the round must use what the validator ships.\n#\n'
     fi
     printf '# %-8s %-56s %s\n' 'STATUS' 'PACKAGE' 'VERSION'
     for id in "${PROMOTED_FETCHED[@]}"; do
       printf '  %-8s %s\n' 'REGISTRY' "$id"
     done
     printf '%s' "$PARITY_ROWS" | sort -k2
-    printf '#\n# summary: %d MATCH, %d DIFFER, %d BUNDLED, %d ABSENT, %d REGISTRY\n' \
-      "$n_match" "$n_differ" "$n_bundled" "$n_absent" "${#PROMOTED_FETCHED[@]}"
+    printf '#\n# summary: %d MATCH, %d EQUIV, %d DIFFER, %d BUNDLED, %d ABSENT, %d REGISTRY\n' \
+      "$n_match" "$n_equiv" "$n_differ" "$n_bundled" "$n_absent" "${#PROMOTED_FETCHED[@]}"
+    printf '# corroborated (MATCH + EQUIV): %d of %d comparable package(s)\n' \
+      "$(( n_match + n_equiv ))" "$(( n_match + n_equiv + n_differ ))"
   } >"$PARITY"
   rm -rf "$BUNDLED_DIR"
-  ok "wrote vendor/packages/PARITY.txt"
+  if (( n_differ )); then
+    warn "${n_differ} package(s) differ in content, not just in bytes - see vendor/packages/PARITY-DETAIL.txt"
+  fi
+  ok "wrote vendor/packages/PARITY.txt ($(( n_match + n_equiv )) corroborated, ${n_differ} differing, ${n_bundled} not compared)"
 fi
 
 # -----------------------------------------------------------------------------

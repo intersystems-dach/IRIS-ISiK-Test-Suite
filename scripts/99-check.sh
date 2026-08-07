@@ -712,7 +712,9 @@ internal = {
     # simplifier route could not download and filled from the image; the rest are
     # the classified rows and their tallies.
     "SUBSTITUTED", "PARITY_ROWS", "N_BUNDLED_TOTAL",
-    "n_match", "n_differ", "n_bundled", "n_absent", "substituted", "status",
+    "PARITY_JSON", "PARITY_DETAIL", "CONTENT_VERDICT", "verdict", "fname",
+    "PARITY_CARRIED",
+    "n_match", "n_equiv", "n_differ", "n_bundled", "n_absent", "substituted", "status",
     "REPORT_DIR", "DOCKER_CONFIG", "HOME",
     "LC_ALL", "BASH_SOURCE", "SUBST", "TIGER_TMPL_DIR", "TESTDATA_SRC",
     "OUT_TIGER", "OUT_TIGER_MANUAL", "OUT_TESTDATA", "WORKFLOW_UI_PORT",

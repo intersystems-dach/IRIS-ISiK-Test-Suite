@@ -256,6 +256,30 @@ defect leaves a workaround that is now itself a deviation. The step-shape drift
 table in `index.json` and the version-pinned counts in the extractor are what make
 a bump visible rather than silent.
 
+### A fifth, in the ISiK packages rather than in the suite: same version, two definitions
+
+Found by the parity gate on the official 2026.2 round, and **not worked around** —
+it needs no workaround, only a decision about which copy to load. Three packages are
+published on `packages.simplifier.net` in content that differs from the copy bundled
+inside `gematik1/isik-testsuite:2.7.0`, under the same `name@version`:
+
+| Package | Difference | Effect on a verdict |
+|---|---|---|
+| `de.gematik.isik-terminplanung#3.1.1` | `ISiKKalender` is modelled differently — the `Schedule.extension:KalenderName` slice above all — and the bundled copy is internally stamped `version: 3.0.9`, `date: 2025-07-31` against the published `3.1.1` / `2025-12-01` | **Would change verdicts** if the published copy were loaded: the SUT would enforce a different profile than the one asserted against it |
+| `de.gematik.isik#5.1.2` | The published `ISiKOrganisationFachabteilung` lacks the `Organization.type:Fachbereich.coding` element the bundled copy constrains to `min: 1, mustSupport: true`; stamped eight days later | Same |
+| `de.medizininformatikinitiative.kerndatensatz.medikation#1.0.11` | The published copy's implementation-guide file is named `…-1.x..json`, with a doubled dot | Cosmetic |
+
+The bundled copy is authoritative, because the reference validator validates against
+the files in its own image. So `PACKAGE_SOURCE=refv` — the default — is the correct
+setting for any round whose verdict is to be attributed to the SUT, and the official
+2026.2 round used it. **This is a defect in the ISiK publication, not in the SUT and
+not in this rig**, and it is the second of its kind after the `3.1.x` wildcard: a
+same-version divergence between what is published and what is validated against is
+exactly the class of problem a `name@version` pin is supposed to make impossible.
+
+`PARITY.txt` names the rows, `PARITY-DETAIL.txt` the fields, and both are carried
+into `provenance/packages/` of the delivered bundle.
+
 ## Limitations of the harness itself
 
 | Limitation | Detail |

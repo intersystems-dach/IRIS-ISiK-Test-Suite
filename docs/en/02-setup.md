@@ -263,18 +263,21 @@ decides where the *payloads* come from:
 | Value | Behaviour |
 |---|---|
 | `refv` | Use the `.tgz` files bundled inside the image. No internet access needed. **Default.** |
-| `simplifier` | Additionally download the same `name@version` tarballs from `packages.simplifier.net`, use those, and record a sha256 parity table bundled-vs-published in `vendor/packages/PARITY.txt` |
+| `simplifier` | Additionally download the same `name@version` tarballs from `packages.simplifier.net`, use those, and record a parity table bundled-vs-published in `vendor/packages/PARITY.txt` |
 
-`simplifier` is slower but produces independent evidence that the bundled
-packages are the published ones. Either is a valid conformance round; the choice
-is recorded in `run.json` and in the results document.
+`simplifier` is slower but produces independent evidence about the bundled
+packages. Either is a valid conformance round; the choice is recorded in
+`run.json` and in the results document. **Prefer `refv` for a submitted round**,
+for the reason the next-but-one subsection gives: the validator validates against
+the bundled copies, and on suite 2.7.0 three published packages are not the same
+definitions.
 
 ### Not every package is on Simplifier, and a partial download used to void the table
 
-`PARITY.txt` classifies each payload `MATCH`, `DIFFER`, `BUNDLED` (download failed,
-bundled copy used, **nothing corroborated**) or `REGISTRY`, and ends in a summary
-line. Read the summary before citing the table, because a `BUNDLED` row proves
-nothing while looking exactly like a row that does.
+`PARITY.txt` classifies each payload `MATCH`, `EQUIV`, `DIFFER`, `BUNDLED`
+(download failed, bundled copy used, **nothing corroborated**) or `REGISTRY`, and
+ends in a summary line. Read the summary before citing the table, because a
+`BUNDLED` row proves nothing while looking exactly like a row that does.
 
 For suite 2.7.0 at least one package —
 `de.gematik.isik3-dokumentenaustausch-terminology#1.0.0` — is **not published on
@@ -291,6 +294,56 @@ the table compared the bundled set against itself and reported `MATCH` for every
 row. Every row was true and the table as a whole was worthless — the most expensive
 kind of wrong, since it reads as corroboration. Gaps are now filled one package at a
 time and marked `BUNDLED`.
+
+### Comparing bytes was the wrong question, and it answered "differs" 33 times out of 34
+
+With the fallback repaired, the same gate produced the opposite failure: **0 `MATCH`
+and 33 `DIFFER`**. Not one of the 33 was a discrepancy. Three causes, all benign,
+none of which a `sha256` can distinguish from a real one:
+
+* gzip and tar embed timestamps, so a repack of identical content differs;
+* the two producers serialise JSON differently — `"a" : 1` against `"a": 1`, and a
+  different key order — which accounted for 2767 files;
+* the decisive one: **the image ships snapshot-generated `StructureDefinition`s
+  where Simplifier serves the differential-only form.** 342 KB against 20 KB for
+  the same `ISiKPatient`, every value identical, the bundled copy additionally
+  carrying `snapshot.element`. A snapshot is *derived* from the differential plus
+  the base definition and is regenerated on load, so a profile that agrees
+  everywhere except for its presence is the same profile. 265 files.
+
+A table whose normal answer is "differs" cannot be used as a gate, so
+[`package_parity.py`](../../scripts/lib/package_parity.py) now compares what the
+question is actually about — parsed JSON, with `differential.element` and
+`snapshot.element` keyed by element `id` so that a mere ordering difference between
+the two producers is not reported as one. Byte-identical packages still read
+`MATCH`; packages whose *definitions* agree read **`EQUIV`**, which is evidence of
+exactly the same strength; only genuine disagreement reads `DIFFER`, and
+`PARITY-DETAIL.txt` then names the fields. On suite 2.7.0 that turns 0/33 into
+**31 corroborated, 3 differing**.
+
+### Three ISiK packages published on Simplifier are not the ones the validator uses
+
+This is the finding the reworked gate was built to surface, and it is a defect in
+ISiK's publication rather than in the SUT or in this rig. For suite 2.7.0:
+
+| Package | What differs |
+|---|---|
+| `de.gematik.isik-terminplanung#3.1.1` | The bundled `ISiKKalender` carries `version: 3.0.9` and `date: 2025-07-31`; the published one says `3.1.1` / `2025-12-01`. The `Schedule.extension:KalenderName` slice is defined differently, and three `mustSupport` rationale comments differ in wording. **Same package version, two different profiles.** |
+| `de.gematik.isik#5.1.2` | The published `ISiKOrganisationFachabteilung` is missing the `Organization.type:Fachbereich.coding` element the bundled one constrains to `min: 1, mustSupport: true`, and is stamped eight days later (`2026-04-30` vs `2026-04-22`). |
+| `de.medizininformatikinitiative.kerndatensatz.medikation#1.0.11` | A filename typo: the published copy ships `…implementationguide-1.x..json`, with two dots. Cosmetic, but it means the two archives are not interchangeable file-for-file. |
+
+**Consequence for a conformance round: load the bundled copies, i.e. use
+`PACKAGE_SOURCE=refv`.** The verdict a round produces is the Gematik reference
+validator's, and the validator validates against the packages inside its own image.
+Configuring the SUT from the published copies would have it enforce a *different*
+`ISiKKalender` than the one it is judged against — a difference that would surface
+as SUT non-conformance and be attributed to the product.
+
+The official 2026.2 round therefore ran `PACKAGE_SOURCE=refv` and kept the
+simplifier table as separate evidence. `20-fetch-packages.sh` carries `PARITY.txt`,
+`PARITY-DETAIL.txt` and `parity-content.json` across that switch and appends a
+stamp saying they describe the comparison and not this round's payloads;
+`MANIFEST.txt` remains the record of what was loaded.
 
 ## Interactive testing
 

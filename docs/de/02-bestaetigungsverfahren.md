@@ -85,6 +85,28 @@ Drei Teilschritte:
    deshalb aus der Paketregistrierung bezogen werden. Der Kopf von `MANIFEST.txt`
    weist es aus; Begründung im Abschnitt
    [Am Paketsatz](#am-paketsatz-vom-ladevorgang-von-iris-erzwungen).
+
+   **Für einen einzureichenden Durchgang ist `refv` zu wählen.** Der offizielle
+   Durchgang gegen IRIS for Health 2026.2 hat mit `PACKAGE_SOURCE=simplifier`
+   festgestellt, dass drei Pakete in der Paketregistrierung in einer *inhaltlich
+   anderen* Fassung veröffentlicht sind als im Image der Testsuite enthalten - bei
+   gleicher `name@version`-Angabe:
+
+   | Paket | Abweichung |
+   |---|---|
+   | `de.gematik.isik-terminplanung#3.1.1` | Das Profil `ISiKKalender` ist unterschiedlich definiert; die Fassung im Image trägt intern `version: 3.0.9` und `date: 2025-07-31`, die veröffentlichte `3.1.1` / `2025-12-01`. Der Slice `Schedule.extension:KalenderName` ist abweichend modelliert |
+   | `de.gematik.isik#5.1.2` | In der veröffentlichten Fassung von `ISiKOrganisationFachabteilung` fehlt das Element `Organization.type:Fachbereich.coding`, das die Fassung im Image auf `min: 1, mustSupport: true` einschränkt |
+   | `de.medizininformatikinitiative.kerndatensatz.medikation#1.0.11` | Tippfehler im Dateinamen (`…-1.x..json` mit zwei Punkten) |
+
+   Maßgeblich ist die Fassung im Image, denn der Referenzvalidator prüft gegen genau
+   diese Dateien. Würde der Prüfgegenstand aus der Paketregistrierung konfiguriert,
+   setzte er ein anderes `ISiKKalender`-Profil durch als das, gegen das er bewertet
+   wird; die Abweichung erschiene als Nichtkonformität des Produkts. Es handelt sich
+   um einen Mangel der ISiK-Veröffentlichung, nicht des Prüfgegenstands.
+
+   Die Vergleichstabelle `PARITY.txt` wird beim Wechsel auf `refv` erhalten und mit
+   einem Vermerk versehen, dass sie den Vergleich dokumentiert und nicht die in
+   diesem Durchgang geladenen Dateien; letztere weist `MANIFEST.txt` aus.
 2. **Anforderungen aus den Feature-Dateien ableiten.** Aus den Feature-Dateien des
    festgelegten Images werden alle Szenarien, alle `@vorbedingung`-Blöcke und alle
    Zusicherungen extrahiert.
@@ -98,7 +120,7 @@ Drei Teilschritte:
 | Datei | Inhalt |
 |---|---|
 | `provenance/packages/MANIFEST.txt` | jedes geladene Paket mit SHA-256 seines Archivs |
-| `provenance/packages/PARITY.txt` | Vergleich der bezogenen Pakete gegen die von der Suite festgelegten Versionen |
+| `provenance/packages/PARITY.txt`, `PARITY-DETAIL.txt` | Vergleich der im Image enthaltenen Pakete gegen die veröffentlichten, mit feldgenauer Begründung jeder Abweichung |
 | `provenance/package-plan.json` | welche Paketversion welchem Endpunkt zugeordnet ist, mit Begründung |
 | `provenance/requirements.json` | jedes Szenario, jeder Vorbedingungsblock, jede Zusicherung, aus den Feature-Dateien der Suite |
 | `docs/en/generated/REQUIREMENTS-Stufe3.md`, `-Stufe5.md` | die Anforderungstexte **wörtlich und unübersetzt**, je Modul, mit Zitat `Datei:Zeile` |
