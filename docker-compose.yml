@@ -1,0 +1,193 @@
+# =============================================================================
+# ISiK conformance test environment - base stack
+# =============================================================================
+# Declares the isolated network and the unit under test (IRIS for Health).
+# The test suite lives in compose/testsuite.yml and is activated by profile;
+# the Makefile always passes both files.
+#
+# Everything is parameterised from .env / .env.resolved. Do not hardcode
+# versions or addresses here - `make resolve` records them, and the generated
+# documentation cites that record.
+# =============================================================================
+
+name: ${COMPOSE_PROJECT_NAME:-isik}
+
+networks:
+  isik-net:
+    name: ${COMPOSE_PROJECT_NAME:-isik}-net
+    driver: bridge
+    driver_opts:
+      # Fixed host-side interface name so firewall rules can target it by name
+      # instead of a generated br-<hash>. This is the single choke point for
+      # isolating the whole test round.
+      com.docker.network.bridge.name: ${ISIK_BRIDGE_NAME:-br-isik}
+    ipam:
+      driver: default
+      config:
+        - subnet: ${ISIK_SUBNET:?ISIK_SUBNET must be set - see .env.example}
+          gateway: ${ISIK_GATEWAY:?ISIK_GATEWAY must be set}
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # Unit under test: InterSystems IRIS for Health FHIR repository
+  # ---------------------------------------------------------------------------
+  iris:
+    image: ${IRIS_IMAGE:?IRIS_IMAGE must be set}:${IRIS_VERSION:?IRIS_VERSION must be set}
+    container_name: ${COMPOSE_PROJECT_NAME:-isik}-iris
+    hostname: iris
+    restart: "no"
+
+    # `-a <cmd>` is run by the container's iris-main entrypoint after IRIS has
+    # started, which is where the FHIR bootstrap belongs: it must run against a
+    # live instance, and running it at container start (not image build) lets
+    # one image serve all three deploy modes.
+    #
+    # --check-caps false suppresses the capability warnings that appear when the
+    # container is not granted IPC_LOCK etc.; harmless for a test rig.
+    command:
+      - --check-caps
+      - "false"
+      - -a
+      - /opt/isik/bootstrap/bootstrap.sh
+
+    environment:
+      # Consumed by bootstrap.sh -> ISiK.Setup. Kept as environment rather than
+      # baked into the ObjectScript so that the same source serves every
+      # deployment and every mode.
+      ISIK_NS_STUFE3: ${IRIS_NS_STUFE3:-ISIK3}
+      ISIK_NS_STUFE5: ${IRIS_NS_STUFE5:-ISIK5}
+      ISIK_FHIR_BASE_STUFE3: ${FHIR_BASE_STUFE3:-/isik3/fhir/r4}
+      ISIK_FHIR_BASE_STUFE5: ${FHIR_BASE_STUFE5:-/isik5/fhir/r4}
+      ISIK_SUT_USER: ${SUT_USER:-isikapi}
+      ISIK_SUT_PASSWORD: ${SUT_PASSWORD:?SUT_PASSWORD must be set - run make up, which generates one}
+      # The tester's Management Portal account. The bootstrap sets this password on
+      # the predefined accounts and marks them non-expiring - the official image
+      # ships them expired, which makes the portal unusable until it is done.
+      ISIK_MGMT_USER: ${IRIS_MGMT_USER:-_SYSTEM}
+      ISIK_MGMT_PASSWORD: ${IRIS_MGMT_PASSWORD:?IRIS_MGMT_PASSWORD must be set - run make up, which generates one}
+      ISIK_DEFAULT_PAGE_SIZE: ${FHIR_DEFAULT_PAGE_SIZE:-100}
+      ISIK_MAX_PAGE_SIZE: ${FHIR_MAX_PAGE_SIZE:-500}
+      ISIK_MAX_SEARCH_RESULTS: ${FHIR_MAX_SEARCH_RESULTS:-10000}
+      ISIK_PREFER_HANDLING: ${FHIR_PREFER_HANDLING:-lenient}
+      # Unpacked FHIR package directories, and the plan that says which of them
+      # each endpoint gets. Both produced by `make packages`.
+      ISIK_PACKAGE_ROOT: /opt/isik/vendor/packages
+      ISIK_PACKAGE_PLAN: /opt/isik/vendor/package-plan.json
+      ISIK_STATE_DIR: /opt/isik/state
+      # Where this container's own healthcheck has to look to see the SUT's HTTP
+      # surface, because that surface is not in this container: it is the Web
+      # Gateway. See healthcheck.sh section 2.
+      ISIK_WEBGATEWAY_HOST: ${WEBGATEWAY_IP:?WEBGATEWAY_IP must be set - see .env.example}
+      ISIK_WEBGATEWAY_PORT: ${WEBGATEWAY_PORT_INTERNAL:-80}
+
+    volumes:
+      # Licence key. Operator-supplied, read-only, never in git. The path comes
+      # from preflight, which resolves the operator's file case-insensitively
+      # (IRIS.key and Iris.Key are the same file) and makes sure the container's
+      # uid can read it - a key IRIS cannot read is not an error IRIS reports as
+      # one; it silently runs unlicensed. Default keeps `docker compose config`
+      # working before preflight has run.
+      - ${IRIS_KEY_PATH:-./secrets/iris.key}:/usr/irissys/mgr/iris.key:ro
+      # Bootstrap driver + ObjectScript source.
+      - ./iris/bootstrap:/opt/isik/bootstrap:ro
+      - ./iris/src:/opt/isik/src:ro
+      # Unpacked FHIR packages + the package plan, produced by `make packages`.
+      # NpmLoader takes directories (each containing package.json), not .tgz
+      # archives, which is why vendor/packages holds unpacked trees.
+      - ./vendor:/opt/isik/vendor:ro
+      # Bootstrap log + provenance JSON, readable from the host without exec.
+      - ./run/iris-state:/opt/isik/state
+
+    # Only the superserver port. IRIS itself serves no HTTP - see the webgateway
+    # service below - so there is nothing to publish on 52773 here.
+    ports:
+      - "${IRIS_PORT_SUPER:-51972}:1972"
+
+    networks:
+      isik-net:
+        ipv4_address: ${IRIS_IP:?IRIS_IP must be set}
+
+    # Healthy means: bootstrap finished AND both FHIR endpoints answer a
+    # CapabilityStatement request - over HTTP, through the Web Gateway - as the API
+    # user the test suite will use. Anything less would let `make seed` start
+    # against a half-built server.
+    #
+    # The check therefore spans two containers, deliberately. IRIS serves no HTTP of
+    # its own, so "the SUT answers" is only answerable through the gateway, and a
+    # green iris service with a broken gateway would be a lie the whole round is
+    # gated on. No cycle: webgateway waits on this service's *start*, not its health.
+    healthcheck:
+      test: ["CMD", "/opt/isik/bootstrap/healthcheck.sh"]
+      interval: 15s
+      timeout: 30s
+      # Package import is the slow part: the ISiK 5 dependency closure is
+      # ~15 packages including hl7.fhir.r4.core, and profile validator
+      # initialisation adds several minutes on a cold instance.
+      start_period: 45m
+      retries: 5
+
+    # Package import and the Java-based profile validator are memory hungry.
+    shm_size: 1gb
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+
+  # ---------------------------------------------------------------------------
+  # HTTP front end for the unit under test: InterSystems Web Gateway
+  # ---------------------------------------------------------------------------
+  # This container is not an addition to the SUT, it is part of it. The official
+  # IRIS for Health images contain no web server whatsoever - verified on 2026.2
+  # and 2025.3: only 1972 and 2188 listen, there is no httpd/apache2/nginx binary
+  # in the image, iris.cpf carries WebServer=0/WebServerPort=0 (setting them to
+  # 1/52773 and restarting changes nothing), and parameters.isc records
+  # `csp_gateway.configure_apache: N`. The images do declare 52773/tcp in
+  # ExposedPorts and label it `com.intersystems.ports.default.webserver`, which is
+  # why the absence is easy to miss until every FHIR request returns nothing.
+  #
+  # Putting the Web Gateway in front is the supported InterSystems deployment for
+  # this, and the same one a production ISiK deployment would use, so the SUT stays
+  # representative of the product as shipped. The Apache-based image is the default
+  # (WEBGATEWAY_IMAGE / WEBGATEWAY_VERSION in .env), version-matched to IRIS;
+  # webgateway-nginx and webgateway-lockeddown are drop-in overrides at deploy time.
+  webgateway:
+    image: ${WEBGATEWAY_IMAGE:-containers.intersystems.com/intersystems/webgateway}:${WEBGATEWAY_VERSION:?WEBGATEWAY_VERSION must be set - run make resolve}
+    container_name: ${COMPOSE_PROJECT_NAME:-isik}-webgateway
+    hostname: webgateway
+    restart: "no"
+
+    # The gateway is useless before IRIS answers on 1972, and its own service
+    # connection would fail validation and log an authorisation error that reads
+    # like a misconfiguration. service_started, not service_healthy: IRIS's health
+    # check probes the FHIR endpoint *through this container*, so waiting for it
+    # here would deadlock the two services against each other.
+    depends_on:
+      iris:
+        condition: service_started
+
+    volumes:
+      # Both rendered by `make render` from webgateway/*.tmpl. CSP.ini carries the
+      # gateway's IRIS credential, hence 0600 on the host side.
+      - ./run/webgateway/CSP.ini:/opt/webgateway/bin/CSP.ini
+      - ./run/webgateway/isik-vhost.conf:/etc/apache2/sites-enabled/000-default.conf:ro
+
+    # The published port keeps the name and the default value operators, documents
+    # and firewall rules already use for the FHIR server (52773), but it now maps to
+    # the gateway's :80. Nothing outside this file needs to know the difference.
+    ports:
+      - "${IRIS_PORT_WEB:-52773}:80"
+
+    networks:
+      isik-net:
+        ipv4_address: ${WEBGATEWAY_IP:?WEBGATEWAY_IP must be set - see .env.example}
+
+    # Healthy means Apache is serving and mod_csp is loaded. It deliberately does
+    # NOT probe a FHIR endpoint: that would be red for the ~30 minutes IRIS spends
+    # installing, and it is the iris service's health check that owns that question.
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost/csp/bin/RunTime/ || wget -q -O /dev/null --server-response http://localhost/ 2>&1 | grep -qE 'HTTP/1.1 (200|403|404)'"]
+      interval: 15s
+      timeout: 10s
+      start_period: 2m
+      retries: 5

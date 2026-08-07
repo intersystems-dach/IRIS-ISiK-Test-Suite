@@ -1,0 +1,66 @@
+# =============================================================================
+# Apache virtual host for the ISiK FHIR endpoints - rendered by 30-render-config.sh
+# =============================================================================
+# Replaces the webgateway image's sites-enabled/000-default.conf. Everything about
+# this file was established empirically against
+# containers.intersystems.com/intersystems/webgateway:2026.2 (Apache 2.4.58,
+# mod_csp from /opt/webgateway/bin/CSPa24.so); each directive below has a comment
+# saying which failure it fixes, because none of them is guessable from the
+# outside and all four were needed before a FHIR request got through.
+#
+# Rendered to run/webgateway/isik-vhost.conf and bind-mounted over
+# /etc/apache2/sites-enabled/000-default.conf.
+# =============================================================================
+
+<VirtualHost *:80>
+    ServerAdmin webmaster@localhost
+    DocumentRoot /var/www/html
+
+    ErrorLog ${APACHE_LOG_DIR}/error.log
+    CustomLog ${APACHE_LOG_DIR}/access.log combined
+
+    # Each routed path gets its own Location block, and the blocks have to live
+    # HERE rather than in conf-available/CSP.conf. apache2.conf includes
+    # conf-enabled/*.conf at main-server level, while the request is served by
+    # this virtual host, and a <Location> in the main server config does not apply
+    # inside a VirtualHost. With the mapping only in CSP.conf, /csp/*.csp still
+    # worked - mod_csp claims those by file extension - while an extensionless
+    # FHIR path fell through to the default handler and produced
+    # "AH00128: File does not exist: /var/www/html/isik3/fhir/r4/metadata".
+
+    <Location "@@FHIR_BASE_STUFE3@@">
+        # CSP On makes mod_csp claim every request under this path regardless of
+        # file extension. Without it the module declines extensionless paths - it
+        # matches on CSPFileTypes, which defaults to csp/cls/zen/cxw - and Apache
+        # 404s looking for a file on disk. This is the single directive that turned
+        # the FHIR paths from 404 into a routed request.
+        CSP On
+
+        # Apache 2.4 withholds the Authorization header from handlers unless this
+        # is on. mod_csp hands IRIS a CGI-style environment, so without it the
+        # request arrives at the right namespace *unauthenticated*, IRIS tries to
+        # render a login page for an application that has none, and the gateway
+        # turns that into a 503. In the IRIS messages.log it shows up as
+        # "CSPServer Error displaying login page ns=ISIK3".
+        CGIPassAuth On
+
+        SetHandler csp-handler-sa
+        Require all granted
+    </Location>
+
+    <Location "@@FHIR_BASE_STUFE5@@">
+        CSP On
+        CGIPassAuth On
+        SetHandler csp-handler-sa
+        Require all granted
+    </Location>
+
+    # The Management Portal, so a human tester can inspect the SUT while verifying
+    # a result. Pointed at by `make manual` and run/CREDENTIALS.md.
+    <Location "/csp">
+        CSP On
+        CGIPassAuth On
+        SetHandler csp-handler-sa
+        Require all granted
+    </Location>
+</VirtualHost>

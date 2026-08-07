@@ -1,0 +1,27 @@
+{
+  "resourceType": "Observation",
+  "status": "final",
+  "code": {
+    "coding": [
+      {
+        "system": "http://loinc.org",
+        "version": "{{data.loinc-version}}",
+        "code": "11779-6",
+        "display": "Delivery date Estimated from last menstrual period"
+      }
+    ]
+  },
+  "subject": {
+    "reference": "Patient/{{data.patient-read-extended-id}}"
+  },
+  "encounter": {
+    "reference": "Encounter/{{data.encounter-read-in-progress-id}}"
+  },
+  "effectiveDateTime": "2026-01-06T08:00:00+01:00",
+  "performer": [
+    {
+      "reference": "Practitioner/{{data.practitioner-read-id}}"
+    }
+  ],
+  "valueDateTime": "2026-01-06"
+}

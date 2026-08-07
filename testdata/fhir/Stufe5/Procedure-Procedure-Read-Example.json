@@ -1,0 +1,49 @@
+{
+  "resourceType": "Procedure",
+  "id": "Procedure-Read-Example",
+  "extension": [
+    {
+      "url": "http://fhir.de/StructureDefinition/ProzedurDokumentationsdatum",
+      "valueDateTime": "2026-01-05"
+    }
+  ],
+  "status": "completed",
+  "category": {
+    "coding": [
+      {
+        "system": "http://snomed.info/sct",
+        "version": "http://snomed.info/sct/11000274103/version/20251115",
+        "code": "387713003",
+        "display": "Surgical procedure"
+      }
+    ]
+  },
+  "code": {
+    "coding": [
+      {
+        "system": "http://fhir.de/CodeSystem/bfarm/ops",
+        "version": "2021",
+        "code": "5-470.11",
+        "display": "Appendektomie: Laparoskopisch"
+      },
+      {
+        "system": "http://snomed.info/sct",
+        "version": "http://snomed.info/sct/11000274103/version/20251115",
+        "code": "6025007",
+        "display": "Laparoscopic appendectomy"
+      }
+    ]
+  },
+  "subject": {
+    "reference": "Patient/{{data.patient-read-id}}"
+  },
+  "encounter": {
+    "reference": "Encounter/{{data.encounter-read-in-progress-id}}"
+  },
+  "performedDateTime": "2026-01-05",
+  "note": [
+    {
+      "text": "Test note"
+    }
+  ]
+}

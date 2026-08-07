@@ -1,0 +1,93 @@
+{
+  "resourceType": "AllergyIntolerance",
+  "id": "AllergyIntolerance-Read-Example",
+  "clinicalStatus": {
+    "coding": [
+      {
+        "system": "http://terminology.hl7.org/CodeSystem/allergyintolerance-clinical",
+        "code": "active",
+        "display": "Active"
+      }
+    ]
+  },
+  "verificationStatus": {
+    "coding": [
+      {
+        "system": "http://terminology.hl7.org/CodeSystem/allergyintolerance-verification",
+        "code": "confirmed",
+        "display": "Confirmed"
+      }
+    ]
+  },
+  "type": "allergy",
+  "category": [
+    "environment"
+  ],
+  "criticality": "low",
+  "code": {
+    "coding": [
+      {
+        "system": "http://snomed.info/sct",
+        "code": "256262001",
+        "display": "Betula pendula pollen",
+        "version": "http://snomed.info/sct/11000274103/version/20251115"
+      }
+    ],
+    "text": "Birch pollen allergy"
+  },
+  "patient": {
+    "reference": "Patient/{{data.allergyintolerance-read-patient-id}}"
+  },
+  "encounter": {
+    "reference": "Encounter/{{data.medication-encounter-id}}"
+  },
+  "onsetDateTime": "2015-04-10",
+  "recordedDate": "2026-02-03T11:00:00+01:00",
+  "recorder": {
+    "reference": "Practitioner/{{data.medication-practitioner-id}}",
+    "display": "Dr. Anna Beispiel"
+  },
+  "asserter": {
+    "reference": "Patient/{{data.allergyintolerance-read-patient-id}}",
+    "display": "Graf von und zu Mustermann"
+  },
+  "note": [
+    {
+      "authorReference": {
+        "reference": "Practitioner/{{data.medication-practitioner-id}}",
+        "display": "Dr. Anna Beispiel"
+      },
+      "time": "2026-02-03T11:05:00+01:00",
+      "text": "Seasonal symptoms every spring, confirmed by skin prick test."
+    }
+  ],
+  "reaction": [
+    {
+      "manifestation": [
+        {
+          "coding": [
+            {
+              "system": "http://snomed.info/sct",
+              "code": "76067001",
+              "display": "Sneezing (finding)",
+              "version": "http://snomed.info/sct/11000274103/version/20251115"
+            }
+          ],
+          "text": "Sneezing"
+        }
+      ],
+      "severity": "mild",
+      "exposureRoute": {
+        "coding": [
+          {
+            "system": "http://snomed.info/sct",
+            "code": "14910006",
+            "display": "Inspiration",
+            "version": "http://snomed.info/sct/11000274103/version/20251115"
+          }
+        ],
+        "text": "Inhalation"
+      }
+    }
+  ]
+}

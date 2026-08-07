@@ -1,0 +1,14 @@
+{
+  "resourceType": "Device",
+  "status": "active",
+  "manufacturer": "Musterhersteller GmbH",
+  "type": {
+    "coding": [
+      {
+        "system": "http://snomed.info/sct",
+        "code": "469801002",
+        "display": "Electrocardiographic monitor and recorder"
+      }
+    ]
+  }
+}

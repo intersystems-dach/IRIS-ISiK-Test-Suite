@@ -1,0 +1,79 @@
+# --- Secrets: never commit ------------------------------------------------
+# The IRIS licence key is supplied by the operator, not by this repository.
+secrets/*
+!secrets/.gitkeep
+!secrets/README.md
+
+# --- IRIS licence keys ------------------------------------------------------
+# A licence key is InterSystems property, is tied to a customer, and is not ours
+# to publish. secrets/* below already covers the mounted copy at
+# secrets/iris.key; these patterns cover an operator-supplied original dropped
+# anywhere in the tree, whatever it is named.
+*.ISCkey
+*.isckey
+iris.key
+YKE44*
+
+# --- SSH keys for the deployment host --------------------------------------
+# Operator-supplied private keys for reaching the lab machine. Same rule as
+# every other credential in this project: documented in the reports where a
+# tester needs it, never in source control.
+*.pem
+*_key
+id_rsa
+id_ed25519
+
+# --- Resolved configuration (per-deployment, machine specific) -------------
+.env
+.env.resolved
+
+# --- Downloaded / extracted third-party artefacts --------------------------
+# FHIR packages are fetched at deploy time (make packages). They are large,
+# licensed by their respective publishers, and fully reproducible from
+# .env.resolved, so they are not tracked.
+vendor/
+
+# --- Rendered configuration -----------------------------------------------
+# Generated from tiger/*.tmpl by scripts/30-render-config.sh
+run/
+
+# --- Rendered test data ----------------------------------------------------
+# build/fhir/<level>/ is what scripts/lib/build_testdata.py renders from the
+# authored sources in testdata/fhir/. It is derived twice over - from those
+# sources and from vendor/requirements.json, which belongs to whichever test
+# suite version this deployment pinned - so committing it would freeze one
+# version's profile canonicals and resource IDs into the repository, where they
+# would silently disagree with a run that pinned a different TESTSUITE_VERSION.
+# The authored sources under testdata/fhir/ are tracked; this is not.
+build/
+
+# --- Test results ----------------------------------------------------------
+# Reports are evidence, not source. Archive them out-of-band if you need to
+# keep them; `make clean` deliberately does not touch this directory.
+reports/
+
+# --- Build-time index ------------------------------------------------------
+gap-analysis/index.json
+
+# --- Generated documentation ------------------------------------------------
+# docs/en/generated/ is derived from the feature files of whichever test suite
+# version this deployment pinned (scripts/25-extract-requirements.sh, run by
+# `make packages`). Committing it would freeze one version's requirement tables
+# into the repository, where they would silently disagree with a run that pinned
+# a different TESTSUITE_VERSION - and the test-data specification is the one
+# document that must not be stale. Everything else under docs/ is authored and
+# tracked.
+docs/en/generated/*
+!docs/en/generated/README.md
+
+# --- Editor / OS noise -----------------------------------------------------
+*.swp
+*~
+.DS_Store
+__pycache__/
+*.pyc
+
+# --- Local tooling state ---------------------------------------------------
+# settings.local.json holds one operator's own tool permissions, which are a
+# property of that workstation and not of this project.
+.claude/settings.local.json

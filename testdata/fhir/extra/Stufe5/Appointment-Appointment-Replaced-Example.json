@@ -1,0 +1,17 @@
+{
+  "_provenance": "Stufe5/Terminplanung/Appointment-Read.feature: '* Replaced appointment: any' - the assertion extension.where(url = '...extension-Appointment.replaces' and value.reference.exists()).exists() requires Appointment-Read-Example to reference a replaced Appointment. The prose leaves its identity free ('any') and no data key names it, so it is absent from the inventory. Seeded anyway so the reference resolves; the suite never reads it, and no meta.profile is claimed because no assertion covers it.",
+  "resourceType": "Appointment",
+  "id": "Appointment-Replaced-Example",
+  "status": "cancelled",
+  "start": "2026-12-01T11:00:00Z",
+  "end": "2026-12-01T12:00:00Z",
+  "participant": [
+    {
+      "actor": {
+        "reference": "Patient/{{data.appointment-patient-id}}",
+        "display": "Prof. Dr. Max Graf von und zu Mustermann"
+      },
+      "status": "accepted"
+    }
+  ]
+}

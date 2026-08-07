@@ -1,0 +1,16 @@
+{
+  "_provenance": "Stufe5/Terminplanung/Appointment-Book-By-Schedule.feature: the scenario searches Slot/?schedule=${data.appointment-book-by-schedule-schedule-id}&start=${data.appointment-book-by-schedule-date} and requires at least one free Slot in that schedule covering ${data.appointment-book-by-schedule-datetime-start}..-end. No data key names that Slot, so it is absent from the inventory; without it the mandatory booking scenario fails on missing test data.",
+  "resourceType": "Slot",
+  "id": "Slot-Book-By-Schedule-Free-Example",
+  "meta": {
+    "profile": [
+      "{{profile.ISiKTerminblock}}"
+    ]
+  },
+  "schedule": {
+    "reference": "Schedule/{{data.appointment-book-by-schedule-schedule-id}}"
+  },
+  "status": "free",
+  "start": "2027-03-31T10:00:00Z",
+  "end": "2027-03-31T11:00:00Z"
+}

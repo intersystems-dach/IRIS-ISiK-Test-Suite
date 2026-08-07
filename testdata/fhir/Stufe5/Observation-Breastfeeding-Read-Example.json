@@ -1,0 +1,42 @@
+{
+  "resourceType": "Observation",
+  "status": "final",
+  "code": {
+    "coding": [
+      {
+        "system": "http://snomed.info/sct",
+        "version": "http://snomed.info/sct/11000274103/version/{{data.snomed-ct-version}}",
+        "code": "413712001",
+        "display": "Breastfeeding (mother)"
+      },
+      {
+        "system": "http://loinc.org",
+        "version": "{{data.loinc-version}}",
+        "code": "63895-7",
+        "display": "Are you currently breastfeeding your infant"
+      }
+    ]
+  },
+  "subject": {
+    "reference": "Patient/{{data.patient-read-extended-id}}"
+  },
+  "encounter": {
+    "reference": "Encounter/{{data.encounter-read-in-progress-id}}"
+  },
+  "effectiveDateTime": "2026-01-06T08:00:00+01:00",
+  "performer": [
+    {
+      "reference": "Practitioner/{{data.practitioner-read-id}}"
+    }
+  ],
+  "valueCodeableConcept": {
+    "coding": [
+      {
+        "system": "http://loinc.org",
+        "version": "{{data.loinc-version}}",
+        "code": "LA29252-6",
+        "display": "Currently breastfeeding"
+      }
+    ]
+  }
+}

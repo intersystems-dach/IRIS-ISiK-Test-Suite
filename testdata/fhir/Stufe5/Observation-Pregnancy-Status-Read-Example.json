@@ -1,0 +1,41 @@
+{
+  "resourceType": "Observation",
+  "status": "final",
+  "code": {
+    "coding": [
+      {
+        "system": "http://loinc.org",
+        "version": "{{data.loinc-version}}",
+        "code": "82810-3",
+        "display": "Pregnancy status"
+      }
+    ]
+  },
+  "subject": {
+    "reference": "Patient/{{data.patient-read-extended-id}}"
+  },
+  "encounter": {
+    "reference": "Encounter/{{data.encounter-read-in-progress-id}}"
+  },
+  "effectiveDateTime": "2026-01-06T08:00:00+01:00",
+  "performer": [
+    {
+      "reference": "Practitioner/{{data.practitioner-read-id}}"
+    }
+  ],
+  "valueCodeableConcept": {
+    "coding": [
+      {
+        "system": "http://loinc.org",
+        "version": "{{data.loinc-version}}",
+        "code": "LA15173-0",
+        "display": "Pregnant"
+      }
+    ]
+  },
+  "hasMember": [
+    {
+      "reference": "Observation/{{data.observation-expected-pregnancy-delivery-date-read-id}}"
+    }
+  ]
+}

@@ -1,0 +1,77 @@
+# =============================================================================
+# Web Gateway configuration - rendered by scripts/30-render-config.sh
+# =============================================================================
+# The gateway's own configuration file, normally edited through its web UI. Here
+# it is generated, because every value in it is already recorded elsewhere in this
+# rig (the IRIS address, the endpoint paths) and a hand-edited copy would be one
+# more thing that can silently disagree with the deployment.
+#
+# Every doubled-at placeholder below is substituted by 30-render-config.sh, which
+# fails hard on any name it does not recognise. Do not add one without adding it
+# there too. (Written that way round on purpose: the renderer scans this file for
+# placeholder syntax and does not exempt comments, so naming the form literally
+# here would make the file fail its own validation.)
+#
+# The rendered file lands at run/webgateway/CSP.ini, mode 0600 - it carries the
+# gateway's IRIS credential - and is bind-mounted to /opt/webgateway/bin/CSP.ini.
+# =============================================================================
+
+[SYSTEM]
+IRISCONNECT_LIBRARY_PATH=/opt/webgateway/bin
+# The gateway's own management UI is reachable from anywhere in the isolated
+# subnet. This is a single-round lab environment behind a firewalled bridge; the
+# alternative is a value nobody can predict at render time.
+System_Manager=*.*.*.*
+# Generous timeouts: a FHIR search over the seeded corpus, and especially a
+# $validate against a freshly initialised profile validator, can take far longer
+# than an interactive page. A gateway timeout would surface as a 504 that looks
+# like an SUT defect.
+Server_Response_Timeout=300
+Queued_Request_Timeout=300
+No_Activity_Timeout=86400
+
+[SYSTEM_INDEX]
+IRIS=Enabled
+
+# --- The IRIS instance -------------------------------------------------------
+# Ip_Address is the container's fixed subnet address, not a hostname: the whole
+# point of the fixed IPAM assignment is that every address in this environment is
+# known and stable, and it keeps the gateway working if DNS in the bridge network
+# is slow to answer during startup.
+#
+# Username/Password are load-bearing and easy to miss. Without them the gateway
+# cannot open its own service connection to IRIS and logs
+#   "Connection Validation Failed ... 403 Forbidden ... Access Denied"
+# while Apache returns a bare 500 for every request - a failure that reads as a
+# broken gateway rather than a missing credential. CSPSystem is the account the
+# product provides for exactly this; the bootstrap sets its password to the
+# generated management password and marks it non-expiring, because the official
+# image ships it expired.
+[IRIS]
+Ip_Address=@@IRIS_IP@@
+TCP_Port=@@IRIS_SUPERSERVER_PORT@@
+Username=@@GATEWAY_IRIS_USER@@
+Password=@@GATEWAY_IRIS_PASSWORD@@
+Minimum_Server_Connections=5
+Maximum_Session_Connections=100
+
+# --- Application paths -------------------------------------------------------
+# One entry per path the gateway will route, each pointing at the IRIS server
+# defined above. A request whose path has no entry here is not routed at all.
+#
+# /csp is included so the Management Portal works through the same gateway: the
+# tester is pointed at it by `make manual` and by run/CREDENTIALS.md, and it is
+# the only way to inspect the SUT interactively when a result needs verifying.
+[APP_PATH_INDEX]
+@@FHIR_BASE_STUFE3@@=Enabled
+@@FHIR_BASE_STUFE5@@=Enabled
+/csp=Enabled
+
+[APP_PATH:@@FHIR_BASE_STUFE3@@]
+Default_Server=IRIS
+
+[APP_PATH:@@FHIR_BASE_STUFE5@@]
+Default_Server=IRIS
+
+[APP_PATH:/csp]
+Default_Server=IRIS

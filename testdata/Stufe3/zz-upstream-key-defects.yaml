@@ -1,0 +1,40 @@
+# =============================================================================
+# Aliases working around undefined ${data.*} keys in the upstream feature files
+# =============================================================================
+# NOT an upstream file. The six files beside this one are byte-identical copies
+# of gematik/isik-testsuite 2.7.0 testdata/Stufe3/ (verify with
+# `sha256sum` against the release tarball; the checksums are in
+# run/tiger/RENDERED.txt). This file is ours, and it exists because the upstream
+# feature files reference keys that upstream's own testdata does not define.
+#
+# Loaded LAST in additionalConfigurationFiles, under the same `baseKey: data`, so
+# these entries are additive: they define keys that would otherwise be absent and
+# never override an upstream value. The `zz-` prefix keeps that ordering visible
+# in a directory listing.
+#
+# Why work around it at all rather than let the scenarios fail: an undefined key
+# resolves to the literal string "${data.practitioner-id}" in the rendered step.
+# That produces a failure whose cause is a defect in the test suite, but whose
+# appearance is indistinguishable from a defect in the SUT - exactly the confusion
+# the gap analysis exists to prevent. Each entry below is recorded in
+# docs/en/05-testdata.md as an upstream test-suite defect, and none of them is
+# counted as an IRIS gap.
+#
+# Every alias points at the value of an existing upstream key. Nothing here
+# invents a resource: the referenced instances are the ones the upstream keys
+# already require, so no additional test data is needed.
+# =============================================================================
+
+# Stufe3/Basis/Practitioner-Search.feature:53
+#   Scenario "Suche der Practitioner-Ressource anhand des Vornamens (Negativtest)"
+#   Feature tags: @Stufe3 @Basismodul @Mandatory  -> IN the default run scope.
+#
+#   The FHIRPath expression on that line correctly uses
+#   ${data.practitioner-read-id}; only the accompanying error message text uses
+#   ${data.practitioner-id}. The assertion therefore evaluates correctly either
+#   way and the scenario's PASS/FAIL verdict is unaffected - the sole consequence
+#   of leaving this undefined is an unresolved placeholder in the message shown
+#   when the negative test fails. Defined anyway so that no failure message in the
+#   official report contains a literal "${data....}" string, which an inspector
+#   would reasonably read as a broken harness.
+practitioner-id: Practitioner-Read-Example

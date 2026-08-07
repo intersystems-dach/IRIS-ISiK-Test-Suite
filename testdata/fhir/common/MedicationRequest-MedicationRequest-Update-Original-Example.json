@@ -1,0 +1,41 @@
+{
+  "resourceType": "MedicationRequest",
+  "id": "MedicationRequest-Update-Original-Example",
+  "meta": {
+    "profile": [
+      "{{profile.ISiKMedikationsVerordnung}}"
+    ]
+  },
+  "status": "completed",
+  "intent": "order",
+  "medicationReference": {
+    "reference": "Medication/{{data.medication-read-id}}"
+  },
+  "subject": {
+    "reference": "Patient/{{data.medication-patient-id}}"
+  },
+  "authoredOn": "2021-07-01",
+  "requester": {
+    "reference": "Practitioner/{{data.medication-practitioner-id}}"
+  },
+  "note": [
+    {
+      "text": "Testnotiz"
+    }
+  ],
+  "dosageInstruction": [
+    {
+      "text": "1 Brausetablette morgens",
+      "doseAndRate": [
+        {
+          "doseQuantity": {
+            "value": 1,
+            "unit": "Brausetablette",
+            "system": "http://unitsofmeasure.org",
+            "code": "1"
+          }
+        }
+      ]
+    }
+  ]
+}

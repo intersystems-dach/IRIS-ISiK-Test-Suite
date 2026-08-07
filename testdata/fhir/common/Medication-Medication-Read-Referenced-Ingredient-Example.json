@@ -1,0 +1,67 @@
+{
+  "resourceType": "Medication",
+  "id": "Medication-Read-Referenced-Ingredient-Example",
+  "meta": {
+    "profile": [
+      "{{profile.ISiKMedikament}}"
+    ]
+  },
+  "code": {
+    "coding": [
+      {
+        "system": "http://fhir.de/CodeSystem/bfarm/atc",
+        "code": "V03AB23",
+        "display": "Acetylcystein"
+      }
+    ],
+    "text": "Acetylcystein 200 mg"
+  },
+  "status": "active",
+  "form": {
+    "coding": [
+      {
+        "system": "http://standardterms.edqm.eu",
+        "code": "10219000",
+        "display": "Granules for oral solution"
+      }
+    ]
+  },
+  "ingredient": [
+    {
+      "extension": [
+        {
+          "url": "https://www.medizininformatik-initiative.de/fhir/core/modul-medikation/StructureDefinition/wirkstofftyp",
+          "valueCoding": {
+            "system": "https://www.medizininformatik-initiative.de/fhir/core/modul-medikation/CodeSystem/wirkstofftyp",
+            "code": "IN",
+            "display": "Ingredient"
+          }
+        }
+      ],
+      "itemCodeableConcept": {
+        "coding": [
+          {
+            "system": "http://fhir.de/CodeSystem/bfarm/atc",
+            "code": "V03AB23",
+            "display": "Acetylcystein"
+          }
+        ]
+      },
+      "isActive": true,
+      "strength": {
+        "numerator": {
+          "value": 200,
+          "unit": "mg",
+          "system": "http://unitsofmeasure.org",
+          "code": "mg"
+        },
+        "denominator": {
+          "value": 1,
+          "unit": "Beutel",
+          "system": "http://unitsofmeasure.org",
+          "code": "1"
+        }
+      }
+    }
+  ]
+}

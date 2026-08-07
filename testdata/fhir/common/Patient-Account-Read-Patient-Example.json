@@ -1,0 +1,43 @@
+{
+  "resourceType": "Patient",
+  "id": "Account-Read-Patient-Example",
+  "meta": {
+    "profile": [
+      "{{profile.ISiKPatient}}"
+    ]
+  },
+  "identifier": [
+    {
+      "type": {
+        "coding": [
+          {
+            "system": "http://terminology.hl7.org/CodeSystem/v2-0203",
+            "code": "MR"
+          }
+        ]
+      },
+      "system": "https://test.krankenhaus.de/fhir/sid/patientennummer",
+      "value": "P-0003"
+    }
+  ],
+  "active": true,
+  "name": [
+    {
+      "use": "official",
+      "family": "Abrechnungspatient",
+      "_family": {
+        "extension": [
+          {
+            "url": "http://hl7.org/fhir/StructureDefinition/humanname-own-name",
+            "valueString": "Abrechnungspatient"
+          }
+        ]
+      },
+      "given": [
+        "Anton"
+      ]
+    }
+  ],
+  "gender": "male",
+  "birthDate": "1970-03-04"
+}

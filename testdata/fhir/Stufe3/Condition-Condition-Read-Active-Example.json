@@ -1,0 +1,36 @@
+{
+  "resourceType": "Condition",
+  "id": "Condition-Read-Active-Example",
+  "clinicalStatus": {
+    "coding": [
+      {
+        "system": "http://terminology.hl7.org/CodeSystem/condition-clinical",
+        "code": "active",
+        "display": "Active"
+      }
+    ]
+  },
+  "code": {
+    "coding": [
+      {
+        "system": "http://fhir.de/CodeSystem/bfarm/icd-10-gm",
+        "version": "2021",
+        "code": "J06.9",
+        "display": "Akute Infektion der oberen Atemwege, nicht näher bezeichnet"
+      }
+    ],
+    "text": "Akute Infektion der oberen Atemwege"
+  },
+  "subject": {
+    "reference": "Patient/{{data.patient-read-id}}"
+  },
+  "encounter": {
+    "reference": "Encounter/{{data.encounter-read-in-progress-id}}"
+  },
+  "recordedDate": "2021-02-12",
+  "note": [
+    {
+      "text": "Testnotiz"
+    }
+  ]
+}

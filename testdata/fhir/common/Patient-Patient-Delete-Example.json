@@ -1,0 +1,43 @@
+{
+  "resourceType": "Patient",
+  "id": "Patient-Delete-Example",
+  "meta": {
+    "profile": [
+      "{{profile.ISiKPatient}}"
+    ]
+  },
+  "identifier": [
+    {
+      "type": {
+        "coding": [
+          {
+            "system": "http://terminology.hl7.org/CodeSystem/v2-0203",
+            "code": "MR"
+          }
+        ]
+      },
+      "system": "https://test.krankenhaus.de/fhir/sid/patientennummer",
+      "value": "P-0004"
+    }
+  ],
+  "active": true,
+  "name": [
+    {
+      "use": "official",
+      "family": "Loeschkandidat",
+      "_family": {
+        "extension": [
+          {
+            "url": "http://hl7.org/fhir/StructureDefinition/humanname-own-name",
+            "valueString": "Loeschkandidat"
+          }
+        ]
+      },
+      "given": [
+        "Lars"
+      ]
+    }
+  ],
+  "gender": "male",
+  "birthDate": "1980-11-30"
+}

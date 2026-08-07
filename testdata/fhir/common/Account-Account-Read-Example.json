@@ -1,0 +1,51 @@
+{
+  "resourceType": "Account",
+  "id": "Account-Read-Example",
+  "identifier": [
+    {
+      "type": {
+        "coding": [
+          {
+            "system": "http://terminology.hl7.org/CodeSystem/v2-0203",
+            "code": "AN"
+          }
+        ]
+      },
+      "system": "https://test.krankenhaus.de/fhir/sid/abrechnungsnummer",
+      "value": "0123456789"
+    }
+  ],
+  "status": "active",
+  "type": {
+    "coding": [
+      {
+        "system": "http://terminology.hl7.org/CodeSystem/v3-ActCode",
+        "code": "IMP",
+        "display": "inpatient encounter"
+      }
+    ]
+  },
+  "subject": [
+    {
+      "reference": "Patient/{{data.account-read-patient-id}}"
+    }
+  ],
+  "coverage": [
+    {
+      "extension": [
+        {
+          "url": "http://fhir.de/StructureDefinition/ExtensionAbrechnungsart",
+          "valueCoding": {
+            "system": "http://fhir.de/CodeSystem/dkgev/Abrechnungsart",
+            "code": "DRG",
+            "display": "DRG-Abrechnung"
+          }
+        }
+      ],
+      "coverage": {
+        "reference": "Coverage/{{data.coverage-read-statutory-id}}"
+      },
+      "priority": 1
+    }
+  ]
+}

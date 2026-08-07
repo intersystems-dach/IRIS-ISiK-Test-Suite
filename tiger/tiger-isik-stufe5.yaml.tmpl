@@ -1,0 +1,85 @@
+# =============================================================================
+# Tiger test environment configuration - ISiK Stufe 5
+# =============================================================================
+# TEMPLATE. Rendered to run/tiger/tiger-isik-stufe5.yaml by
+# scripts/30-render-config.sh, which substitutes every doubled-at placeholder
+# below and fails if any is left unresolved. Do not edit the rendered file: it is
+# regenerated on every `make up`. (Written without a literal example, because the
+# renderer rejects any placeholder name it does not know - including one that only
+# appears in a comment.)
+#
+# Derived from the official tiger-isik-stufe5.yaml of gematik/isik-testsuite 2.7.0
+# (in the source repository, not in the container image - see the Stufe 3 template
+# for why). Every change from upstream is annotated [DEVIATION] so the two can be
+# diffed. The rationale for each is identical to the Stufe 3 template's; see
+# tiger/tiger-isik-stufe3.yaml.tmpl for the long form.
+#
+# The ONLY substantive difference between the two levels here is the SUT base URL
+# (a different IRIS namespace and endpoint, because Stufe 3 and Stufe 5 pin
+# incompatible de.basisprofil.r4 versions) and the testdata file list - upstream
+# Stufe 5 has no shared.yaml.
+# =============================================================================
+
+servers:
+  fhirserver:
+    type: externalUrl
+    source:
+      # The ISiK Stufe 5 endpoint on the same IRIS instance, in its own namespace.
+      - @@SUT_BASE_URL@@
+
+    # [DEVIATION] Not present upstream. Fails fast if IRIS is unreachable instead
+    # of letting all 895 of this level's test cases fail one by one.
+    healthcheckUrl: @@SUT_BASE_URL@@/metadata
+    startupTimeoutSec: 60
+
+tigerProxy: # https://gematik.github.io/app-Tiger/Tiger-User-Manual.html#_configuring_the_local_test_suite_tiger_proxy
+  adminPort: @@PROXY_ADMIN_PORT@@
+
+  # Active because the SUT endpoint has a URL path (/isik5/fhir/r4); upstream
+  # ships this block commented out with exactly that instruction.
+  proxyRoutes:
+    - from: "http://fhirserver"
+      to: "@@SUT_BASE_URL@@"
+      # [DEVIATION] Basic auth on the route, so the official feature files are
+      # used byte-identically.
+      authentication:
+        username: "@@SUT_USER@@"
+        password: "@@SUT_PASSWORD@@"
+
+lib:
+  # [DEVIATION] Upstream ships `true`. False for an unattended run, true for
+  # MODE=manual: with the UI active TigerDirector waits 120 s for a browser to
+  # attach and aborts the entire run if none does, which is exactly what happens in
+  # a detached container. See the same block in tiger-isik-stufe3.yaml.tmpl for the
+  # full account, and upstream's README, which prescribes false for CI.
+  activateWorkflowUi: @@ACTIVATE_WORKFLOW_UI@@
+  # [DEVIATION] 9010 rather than upstream's 9012, matching the published port.
+  workflowUiPort: @@WORKFLOW_UI_PORT@@
+  trafficVisualization: true
+  runTestsOnStart: @@RUN_TESTS_ON_START@@
+
+logging:
+  level:
+    de.gematik.rbellogger.converter: WARN
+
+# The five upstream entries are unchanged and in upstream order. Note there is no
+# Stufe5/shared.yaml: the shared keys exist only for Stufe 3.
+additionalConfigurationFiles:
+  - filename: testdata/Stufe5/basis.yaml
+    baseKey: data
+  - filename: testdata/Stufe5/dokumentenaustausch.yaml
+    baseKey: data
+  - filename: testdata/Stufe5/terminplanung.yaml
+    baseKey: data
+  - filename: testdata/Stufe5/medikation.yaml
+    baseKey: data
+  - filename: testdata/Stufe5/vitalparameter.yaml
+    baseKey: data
+  # [DEVIATION] Not present upstream. Defines the ${data.*} keys the upstream
+  # feature files reference but do not define. One of them,
+  # RiskAssessment-read-id, is used in a request URL inside a @Mandatory scenario,
+  # so without this file that scenario fails for a reason that has nothing to do
+  # with IRIS. Listed LAST: additive only. See that file's header and
+  # docs/en/05-testdata.md.
+  - filename: testdata/Stufe5/zz-upstream-key-defects.yaml
+    baseKey: data

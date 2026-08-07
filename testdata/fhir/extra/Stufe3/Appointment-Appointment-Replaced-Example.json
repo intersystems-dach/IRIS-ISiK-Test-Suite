@@ -1,0 +1,17 @@
+{
+  "_provenance": "Stufe3/Terminplanung/Appointment-Read.feature: 'Legen Sie den folgenden Termin als Ersatz fuer einen beliebigen Termin in Ihrem System an' - the assertion extension.where(url = '...extension-Appointment.replaces' and value.reference.exists()).exists() requires Appointment-Read-Example to reference a replaced Appointment. The prose leaves that appointment's identity free ('Beliebig') and no data key names it, so it is absent from the inventory. Seeded anyway so the reference resolves: the suite never reads it, but leaving it dangling would make the seed set internally inconsistent and would fail on any endpoint that enforces referential integrity on write. No meta.profile is claimed - the suite asserts nothing about this instance, so the only honest claim is base Appointment.",
+  "resourceType": "Appointment",
+  "id": "Appointment-Replaced-Example",
+  "status": "cancelled",
+  "start": "2026-12-01T11:00:00Z",
+  "end": "2026-12-01T12:00:00Z",
+  "participant": [
+    {
+      "actor": {
+        "reference": "Patient/{{data.terminplanung-patient-id}}",
+        "display": "Prof. Dr. Max Graf von und zu Mustermann"
+      },
+      "status": "accepted"
+    }
+  ]
+}

@@ -1,0 +1,46 @@
+{
+  "resourceType": "RiskAssessment",
+  "id": "RiskAssessment-Read-Example",
+  "meta": {
+    "profile": [
+      "{{profile.ISiKAMTSBewertung}}"
+    ]
+  },
+  "text": {
+    "status": "additional",
+    "div": "<div xmlns=\"http://www.w3.org/1999/xhtml\"><p>Increased bleeding risk under the current medication; monitor INR and reduce the dose if necessary.</p></div>"
+  },
+  "status": "final",
+  "code": {
+    "coding": [
+      {
+        "system": "http://snomed.info/sct",
+        "code": "281694009",
+        "display": "Finding of at risk",
+        "version": "http://snomed.info/sct/11000274103/version/20251115"
+      }
+    ],
+    "text": "Medication safety assessment"
+  },
+  "subject": {
+    "reference": "Patient/{{data.riskassessment-patient-id}}"
+  },
+  "encounter": {
+    "reference": "Encounter/{{data.riskassessment-encounter-id}}"
+  },
+  "occurrenceDateTime": "2026-01-06T09:30:00+01:00",
+  "condition": {
+    "reference": "Condition/{{data.riskassessment-condition-id}}"
+  },
+  "basis": [
+    {
+      "reference": "Observation/{{data.riskassessment-observation-id}}"
+    }
+  ],
+  "mitigation": "Monitor INR weekly and adjust the dose accordingly.",
+  "note": [
+    {
+      "text": "Assessment carried out by the ward pharmacist."
+    }
+  ]
+}

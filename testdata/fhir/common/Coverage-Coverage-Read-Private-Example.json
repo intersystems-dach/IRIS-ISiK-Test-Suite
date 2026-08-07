@@ -1,0 +1,27 @@
+{
+  "resourceType": "Coverage",
+  "id": "Coverage-Read-Private-Example",
+  "status": "active",
+  "type": {
+    "coding": [
+      {
+        "system": "http://fhir.de/CodeSystem/versicherungsart-de-basis",
+        "code": "SEL",
+        "display": "Selbstzahler"
+      }
+    ]
+  },
+  "subscriber": {
+    "reference": "Patient/{{data.patient-read-id}}",
+    "display": "Graf von und zu Mustermann"
+  },
+  "beneficiary": {
+    "reference": "Patient/{{data.patient-read-id}}"
+  },
+  "payor": [
+    {
+      "reference": "Patient/{{data.patient-read-id}}",
+      "display": "Graf von und zu Mustermann"
+    }
+  ]
+}

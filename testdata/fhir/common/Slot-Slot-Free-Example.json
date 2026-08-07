@@ -1,0 +1,15 @@
+{
+  "resourceType": "Slot",
+  "id": "Slot-Free-Example",
+  "meta": {
+    "profile": [
+      "{{profile.ISiKTerminblock}}"
+    ]
+  },
+  "schedule": {
+    "reference": "Schedule/{{data.schedule-read-id}}"
+  },
+  "status": "free",
+  "start": "2027-01-01T09:00:00Z",
+  "end": "2027-01-01T20:00:00Z"
+}

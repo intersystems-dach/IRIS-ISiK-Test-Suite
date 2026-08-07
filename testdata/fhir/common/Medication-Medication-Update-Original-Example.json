@@ -1,0 +1,37 @@
+{
+  "resourceType": "Medication",
+  "id": "Medication-Update-Original-Example",
+  "meta": {
+    "profile": [
+      "{{profile.ISiKMedikament}}"
+    ]
+  },
+  "code": {
+    "coding": [
+      {
+        "system": "http://fhir.de/CodeSystem/bfarm/atc",
+        "code": "V03AB23",
+        "display": "Acetylcystein"
+      }
+    ],
+    "text": "Acetylcystein 200 mg"
+  },
+  "status": "active",
+  "amount": {
+    "numerator": {
+      "value": 20,
+      "unit": "Stück",
+      "system": "http://unitsofmeasure.org",
+      "code": "1"
+    },
+    "denominator": {
+      "value": 1,
+      "unit": "Packung",
+      "system": "http://unitsofmeasure.org",
+      "code": "1"
+    }
+  },
+  "batch": {
+    "lotNumber": "123"
+  }
+}

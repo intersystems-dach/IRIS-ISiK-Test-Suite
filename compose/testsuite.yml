@@ -1,0 +1,148 @@
+# =============================================================================
+# ISiK conformance test environment - test tool overlay
+# =============================================================================
+# The official Gematik ISiK test suite (gematik1/isik-testsuite).
+#
+# The upstream image runs exactly ONE specification level per container start
+# (MAVEN_PROFILE=stufe3|stufe5) and its entrypoint wipes $REPORT_DIR at the
+# beginning of every run. Three separate services are therefore declared rather
+# than one parameterised service:
+#
+#   profile: stufe3   run ISiK Stufe 3, auto-start, exit when done
+#   profile: stufe5   run ISiK Stufe 5, auto-start, exit when done
+#   profile: manual   stay up with the Tiger WorkflowUI, do NOT auto-run
+#
+# All three are `docker compose --profile <name>` gated, so `make up` brings up
+# IRIS alone. They share the same static IP because they are never run
+# concurrently - the Makefile serialises them and archives each report before
+# starting the next.
+#
+# This file is always passed together with the root docker-compose.yml; it
+# relies on the `isik-net` network and the `iris` service declared there.
+#
+# NOTE ON PATHS: Compose resolves relative bind-mount paths against the PROJECT
+# directory - the directory of the first `-f` file - not against the directory of
+# the file they appear in. The Makefile always invokes
+# `docker compose -f docker-compose.yml -f compose/testsuite.yml` from the
+# repository root, so the paths below are repository-root relative.
+# =============================================================================
+
+x-testsuite-common: &testsuite-common
+  image: ${TESTSUITE_IMAGE:?TESTSUITE_IMAGE must be set}:${TESTSUITE_VERSION:?TESTSUITE_VERSION must be set}
+  restart: "no"
+  # Long-running JVM + Maven; give it room to shut down cleanly so the report
+  # assembly in post-integration-test is not truncated.
+  stop_grace_period: 120s
+  networks:
+    isik-net:
+      ipv4_address: ${TESTSUITE_IP:?TESTSUITE_IP must be set}
+  ports:
+    # Tiger WorkflowUI. Upstream ships `lib.workflowUiPort: 9012` in
+    # tiger-isik-*.yaml but its README and dc-testsuite.yml both use 9010; our
+    # rendered configuration pins workflowUiPort to 9010 so the published port
+    # and the bound port cannot disagree.
+    - "${TESTSUITE_PORT_WORKFLOW_UI:-9010}:9010"
+    # Tiger proxy admin / traffic log (tigerProxy.adminPort).
+    - "${TESTSUITE_PORT_PROXY_LOG:-9011}:9011"
+  depends_on:
+    iris:
+      # Never start a run against a half-installed endpoint: the healthcheck
+      # only passes once both FHIR endpoints answer /metadata.
+      condition: service_healthy
+  environment: &testsuite-env
+    # Pinned explicitly rather than inherited from the base image, because the
+    # upstream ENTRYPOINT interpolates it (`rm -rf $REPORT_DIR/*` and
+    # `mv $APP_HOME/target/*report.zip $REPORT_DIR/`) and the report volume is
+    # mounted at this exact path below.
+    REPORT_DIR: /app/report
+    # Heap for the JVM that runs the scenarios. See TESTSUITE_HEAP_MAX in
+    # .env.example for the measured failure this prevents - in short, Tiger's
+    # RbelLogger keeps a parsed tree of every message of the run, Stufe 5
+    # exhausted the JVM's default heap at ~600 of 895 cases, and the symptom was
+    # not an error but a 100-second stall per scenario that would have run the
+    # level into TESTSUITE_TIMEOUT and produced no archive.
+    #
+    # `-DargLine=` and not MAVEN_OPTS: MAVEN_OPTS would size the Maven JVM, but
+    # the scenarios run in the JVM maven-failsafe-plugin forks, and argLine is
+    # that fork's command line. The upstream pom sets no argLine of its own
+    # (verified in 2.7.0), so nothing is being overridden here.
+    #
+    # Expands to the empty string when TESTSUITE_HEAP_MAX is unset, which leaves
+    # the JVM's own default in place rather than passing a malformed flag.
+    MAVEN_ARGS: ${TESTSUITE_HEAP_MAX:+-DargLine=-Xmx${TESTSUITE_HEAP_MAX}}
+
+x-testsuite-volumes: &testsuite-volumes
+  # Rendered Tiger configuration. scripts/30-render-config.sh substitutes the
+  # SUT base URL (both servers.fhirserver.source and tigerProxy.proxyRoutes[].to
+  # - required because our endpoint has a URL path) and the API credentials.
+  # Both levels' files are mounted unconditionally; MAVEN_PROFILE selects which
+  # one Maven actually reads via TIGER_TESTENV_CFGFILE.
+  - ./run/tiger/tiger-isik-stufe3.yaml:/app/tiger-isik-stufe3.yaml:ro
+  - ./run/tiger/tiger-isik-stufe5.yaml:/app/tiger-isik-stufe5.yaml:ro
+  # The suite's test-data contract: logical key -> resource ID, 11 YAML files
+  # referenced from additionalConfigurationFiles. Rendered (not the repo's
+  # testdata/ directory directly) so that the container sees only the files the
+  # suite expects, without our fabricated FHIR instances under testdata/fhir/.
+  - ./run/testdata:/app/testdata:ro
+  # Report drop. A named volume, not a bind mount: the container runs as the
+  # unprivileged `tiger-testsuite` user and wipes + rewrites this directory, so
+  # a host-owned bind mount would risk EACCES. scripts/60-run-tests.sh lifts the
+  # zips out with `docker cp`, which runs with daemon privileges.
+  - tiger-report:/app/report
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # ISiK Stufe 3 conformance run
+  # ---------------------------------------------------------------------------
+  testsuite-stufe3:
+    <<: *testsuite-common
+    profiles: ["stufe3"]
+    container_name: ${COMPOSE_PROJECT_NAME:-isik}-testsuite-stufe3
+    volumes: *testsuite-volumes
+    environment:
+      <<: *testsuite-env
+      MAVEN_PROFILE: stufe3
+      # Default reproduces the official certification scope (all mandatory
+      # scenarios, no @Optional). Narrowing this makes the run non-conformant.
+      TESTS_TO_RUN: ${TESTS_TO_RUN_STUFE3:-@Stufe3 and (not @Optional)}
+
+  # ---------------------------------------------------------------------------
+  # ISiK Stufe 5 conformance run
+  # ---------------------------------------------------------------------------
+  testsuite-stufe5:
+    <<: *testsuite-common
+    profiles: ["stufe5"]
+    container_name: ${COMPOSE_PROJECT_NAME:-isik}-testsuite-stufe5
+    volumes: *testsuite-volumes
+    environment:
+      <<: *testsuite-env
+      MAVEN_PROFILE: stufe5
+      TESTS_TO_RUN: ${TESTS_TO_RUN_STUFE5:-@Stufe5 and (not @Optional)}
+
+  # ---------------------------------------------------------------------------
+  # Interactive / manual testing (MODE=manual)
+  # ---------------------------------------------------------------------------
+  # Same image and same mounts, but the rendered configuration sets
+  # `lib.runTestsOnStart: false`, so the container comes up, exposes the
+  # WorkflowUI and waits for the operator to start scenarios by hand.
+  testsuite-manual:
+    <<: *testsuite-common
+    profiles: ["manual"]
+    container_name: ${COMPOSE_PROJECT_NAME:-isik}-testsuite-manual
+    volumes:
+      # Manual variants differ only in runTestsOnStart; rendered separately so
+      # an unattended run can never pick them up by accident.
+      - ./run/tiger/manual/tiger-isik-stufe3.yaml:/app/tiger-isik-stufe3.yaml:ro
+      - ./run/tiger/manual/tiger-isik-stufe5.yaml:/app/tiger-isik-stufe5.yaml:ro
+      - ./run/testdata:/app/testdata:ro
+      - tiger-report:/app/report
+    environment:
+      <<: *testsuite-env
+      # Which level the WorkflowUI offers. Override in .env to switch.
+      MAVEN_PROFILE: ${MANUAL_STUFE:-stufe5}
+      TESTS_TO_RUN: ${TESTS_TO_RUN_MANUAL:-@Stufe5 and (not @Optional)}
+
+volumes:
+  tiger-report:
+    name: ${COMPOSE_PROJECT_NAME:-isik}-tiger-report

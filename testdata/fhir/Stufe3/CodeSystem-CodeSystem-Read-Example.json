@@ -1,0 +1,18 @@
+{
+  "resourceType": "CodeSystem",
+  "id": "CodeSystem-Read-Example",
+  "url": "http://example.org/fhir/CodeSystem/TestKatalog",
+  "version": "1.0.0",
+  "name": "testkatalog",
+  "status": "active",
+  "experimental": false,
+  "content": "complete",
+  "caseSensitive": true,
+  "concept": [
+    {
+      "code": "test",
+      "display": "Test",
+      "definition": "Dies ist ein Test-Code"
+    }
+  ]
+}

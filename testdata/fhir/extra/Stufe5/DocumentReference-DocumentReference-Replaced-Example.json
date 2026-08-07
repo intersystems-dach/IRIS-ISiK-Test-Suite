@@ -1,0 +1,108 @@
+{
+  "_provenance": "Stufe5/Dokumentenaustausch/DocumentReference-Read.feature: 'A valid DocumentReference resource that is referenced as \"replaces\" must exist in the system under test, and its ID must be stored in the configuration variable documentreference-read-replaces-id.' That variable is defined in no testdata file in 2.7.0 and is referenced by no step, so the inventory - which is keyed off the contract - cannot list this resource; only the prose asks for it. The assertion that does run, relatesTo.where(code = 'replaces' and target.reference.exists()).exists(), needs the reference but not the target, so a missing target would still pass the read scenario while leaving the seed set referentially broken. Authored to ISiKDokumentenMetadaten because the precondition says 'valid', which for a DocumentReference in this module means profile-conformant, and IRIS $validate then checks that claim before the round starts.",
+  "resourceType": "DocumentReference",
+  "id": "DocumentReference-Replaced-Example",
+  "meta": {
+    "profile": [
+      "{{profile.ISiKDokumentenMetadaten}}"
+    ]
+  },
+  "masterIdentifier": {
+    "system": "urn:ietf:rfc:3986",
+    "value": "urn:oid:1.2.840.113556.1.8000.2554.58783.21864.3474.19410.44358.58254.41281.46339"
+  },
+  "identifier": [
+    {
+      "system": "urn:uuid:96fdda7c-d067-4183-912e-bf5ee74998a8",
+      "value": "129.6.58.42.33725"
+    }
+  ],
+  "status": "superseded",
+  "docStatus": "final",
+  "type": {
+    "coding": [
+      {
+        "system": "http://dvmd.de/fhir/CodeSystem/kdl",
+        "code": "VL160105",
+        "display": "Pflegebericht"
+      },
+      {
+        "system": "http://ihe-d.de/CodeSystems/IHEXDStypeCode",
+        "code": "PFLG",
+        "display": "Pflegedokumentation"
+      }
+    ]
+  },
+  "category": [
+    {
+      "coding": [
+        {
+          "system": "http://ihe-d.de/CodeSystems/IHEXDSclassCode",
+          "code": "DUR",
+          "display": "Dokumente ohne besondere Form (Notizen)"
+        }
+      ]
+    }
+  ],
+  "subject": {
+    "reference": "Patient/{{data.documentreference-read-patient-id}}"
+  },
+  "author": [
+    {
+      "display": "Maxine Mustermann"
+    }
+  ],
+  "description": "Pflegebericht vom 30.01.26 (superseded version)",
+  "securityLabel": [
+    {
+      "coding": [
+        {
+          "system": "http://terminology.hl7.org/CodeSystem/v3-Confidentiality",
+          "code": "N",
+          "display": "normal"
+        }
+      ]
+    }
+  ],
+  "content": [
+    {
+      "attachment": {
+        "contentType": "application/pdf",
+        "language": "de",
+        "url": "Binary/{{data.documentreference-read-binary-id}}",
+        "title": "Pflegebericht vom 30.01.26",
+        "creation": "2026-01-30T14:50:50+01:00"
+      },
+      "format": {
+        "system": "http://ihe.net/fhir/ihe.formatcode.fhir/CodeSystem/formatcode",
+        "code": "urn:ihe:iti:xds:2017:mimeTypeSufficient",
+        "display": "Format aus MIME Type ableitbar"
+      }
+    }
+  ],
+  "context": {
+    "encounter": [
+      {
+        "reference": "Encounter/{{data.documentreference-read-encounter-id}}"
+      }
+    ],
+    "facilityType": {
+      "coding": [
+        {
+          "system": "http://ihe-d.de/CodeSystems/PatientBezogenenGesundheitsversorgung",
+          "code": "KHS",
+          "display": "Krankenhaus"
+        }
+      ]
+    },
+    "practiceSetting": {
+      "coding": [
+        {
+          "system": "http://ihe-d.de/CodeSystems/AerztlicheFachrichtungen",
+          "code": "ALLG",
+          "display": "Allgemeinmedizin"
+        }
+      ]
+    }
+  }
+}

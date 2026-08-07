@@ -1,0 +1,129 @@
+# =============================================================================
+# Tiger test environment configuration - ISiK Stufe 3
+# =============================================================================
+# TEMPLATE. Rendered to run/tiger/tiger-isik-stufe3.yaml by
+# scripts/30-render-config.sh, which substitutes every doubled-at placeholder
+# below and fails if any is left unresolved. Do not edit the rendered file: it is
+# regenerated on every `make up`. (Written without a literal example, because the
+# renderer rejects any placeholder name it does not know - including one that only
+# appears in a comment.)
+#
+# Derived from the official tiger-isik-stufe3.yaml of gematik/isik-testsuite 2.7.0.
+# Keeping the derivation visible is deliberate - an inspector must be able to diff
+# this against the upstream file and see exactly what was changed and why. Every
+# change is annotated [DEVIATION].
+#
+# Upstream ships that file in the source repository, NOT in the container image:
+# the image has no /app/tiger-isik-stufe3.yaml, because the file is meant to be
+# supplied by whoever runs the suite - the SUT address is the operator's to fill
+# in. That is why this rig renders it and mounts it, rather than patching a copy
+# out of the image. 20-fetch-packages.sh puts the upstream file in
+# vendor/upstream/ as the diff baseline.
+#
+# Read by Maven through TIGER_TESTENV_CFGFILE, which the suite's pom.xml sets to
+# tiger-isik-${specification.level}.yaml for the active profile.
+# =============================================================================
+
+servers:
+  fhirserver:
+    type: externalUrl
+    source:
+      # The unit under test: the IRIS for Health FHIR repository endpoint for
+      # ISiK Stufe 3, addressed by its static address inside the isolated subnet.
+      # A literal IP rather than the container name so that the same string
+      # appears here, in the seed log and in the documentation.
+      - @@SUT_BASE_URL@@
+
+    # [DEVIATION] Not present upstream.
+    # For type `externalUrl` Tiger starts nothing; without a healthcheckUrl it
+    # simply waits out startupTimeoutSec and then proceeds. That would turn "IRIS
+    # is unreachable" into 506 failing test cases indistinguishable from a total
+    # conformance collapse. Any HTTP answer counts as healthy, and Tiger issues
+    # this probe without the route's credential, so what comes back is the
+    # endpoint's unauthenticated answer: verified to be 404, not 401, because the
+    # IRIS CSP dispatcher declines an anonymous request by reporting no such path.
+    # That is still a sufficient - and sufficiently cheap - proof of reachability,
+    # since it can only be produced by something answering HTTP at that address.
+    # See iris/bootstrap/http_probe.sh for the same behaviour and what it costs
+    # there (wget needs --auth-no-challenge, as no challenge ever arrives).
+    healthcheckUrl: @@SUT_BASE_URL@@/metadata
+    startupTimeoutSec: 60
+
+tigerProxy: # https://gematik.github.io/app-Tiger/Tiger-User-Manual.html#_configuring_the_local_test_suite_tiger_proxy
+  adminPort: @@PROXY_ADMIN_PORT@@
+
+  # Upstream ships this block commented out, with the instruction to activate it
+  # "if the SUT endpoint contains a URL path". Ours does (/isik3/fhir/r4), so it
+  # is active: the feature files address http://fhirserver/<Resource>/<id>, and
+  # without the route the path prefix would be lost and every request would 404.
+  proxyRoutes:
+    - from: "http://fhirserver"
+      to: "@@SUT_BASE_URL@@"
+      # [DEVIATION] Not present upstream (shipped commented out).
+      # The IRIS endpoint requires authentication - see docs/en/03-sut-iris.md
+      # for why the SUT is not left open. Basic credentials are attached here, on
+      # the route, rather than in each step, so the feature files stay byte-identical
+      # to the official ones: a modified feature file would invalidate the run.
+      authentication:
+        username: "@@SUT_USER@@"
+        password: "@@SUT_PASSWORD@@"
+
+lib:
+  # [DEVIATION] Upstream ships `true` unconditionally. Rendered per variant here:
+  # false for an unattended conformance run, true for MODE=manual.
+  #
+  # This is not a preference. With the UI active, TigerDirector blocks on
+  #
+  #   Waiting 120 seconds for workflow Ui to fetch status...
+  #
+  # and if no browser attaches within those two minutes it aborts the whole run
+  # with `[ERROR] No feedback from workflow Ui, aborting!` - before a single
+  # scenario executes. In a detached container on a remote lab host nothing ever
+  # attaches, so the level ends after ~2 minutes with `Tests run: 0` and a
+  # test-report.zip containing only pom.xml. That cost a round here; upstream's own
+  # README states the remedy ("To run the test suite without the GUI, e.g. within a
+  # CI/CD pipeline, set the configuration element lib.activateWorkflowUi to false").
+  #
+  # The UI is not evidence and nothing is lost by disabling it: the request and
+  # response bodies the gap analysis quotes come from the Serenity report inside
+  # debug-report.zip, which Maven assembles either way.
+  activateWorkflowUi: @@ACTIVATE_WORKFLOW_UI@@
+  # [DEVIATION] Upstream sets 9012 here while its own README and dc-testsuite.yml
+  # publish 9010. Pinned to the published port so the bound port and the
+  # forwarded port cannot disagree; see compose/testsuite.yml. Kept even when the
+  # UI is off - an unused port setting is harmless, and MODE=manual renders from
+  # this same template.
+  workflowUiPort: @@WORKFLOW_UI_PORT@@
+  trafficVisualization: true
+  # true for an unattended conformance run; false for MODE=manual, where the
+  # operator drives scenarios from the WorkflowUI.
+  runTestsOnStart: @@RUN_TESTS_ON_START@@
+
+logging:
+  level:
+    de.gematik.rbellogger.converter: WARN
+
+# The test-data contract: logical key -> resource id, resolved into the feature
+# files as ${data.<key>}. Paths are relative to /app inside the container, where
+# compose mounts run/testdata read-only. The six upstream entries are unchanged
+# and in upstream order; the seventh is ours.
+additionalConfigurationFiles:
+  - filename: testdata/Stufe3/basis.yaml
+    baseKey: data
+  - filename: testdata/Stufe3/dokumentenaustausch.yaml
+    baseKey: data
+  - filename: testdata/Stufe3/medikation.yaml
+    baseKey: data
+  - filename: testdata/Stufe3/terminplanung.yaml
+    baseKey: data
+  - filename: testdata/Stufe3/vitalparameter.yaml
+    baseKey: data
+  - filename: testdata/Stufe3/shared.yaml
+    baseKey: data
+  # [DEVIATION] Not present upstream. Defines the ${data.*} keys that the upstream
+  # feature files reference but the six files above do not define - see that file's
+  # header and docs/en/05-testdata.md. Listed LAST so it can only add keys, never
+  # override an upstream value; the six upstream files stay byte-identical to the
+  # 2.7.0 release, which is what an inspector diffs.
+  - filename: testdata/Stufe3/zz-upstream-key-defects.yaml
+    baseKey: data

@@ -1,0 +1,48 @@
+{
+  "resourceType": "MedicationStatement",
+  "id": "MedicationStatement-Read-Example",
+  "status": "active",
+  "medicationReference": {
+    "reference": "Medication/{{data.medication-read-id}}"
+  },
+  "subject": {
+    "reference": "Patient/{{data.medication-patient-id}}"
+  },
+  "context": {
+    "reference": "Encounter/{{data.medication-encounter-id}}"
+  },
+  "effectivePeriod": {
+    "start": "2026-02-03"
+  },
+  "dateAsserted": "2026-02-27",
+  "note": [
+    {
+      "text": "Testnotiz"
+    }
+  ],
+  "dosage": [
+    {
+      "text": "1 Brausetablette morgens, mittags und abends",
+      "patientInstruction": "Instruktionstest",
+      "timing": {
+        "repeat": {
+          "when": [
+            "MORN",
+            "NOON",
+            "EVE"
+          ]
+        }
+      },
+      "doseAndRate": [
+        {
+          "doseQuantity": {
+            "value": 1,
+            "unit": "Brausetablette",
+            "system": "http://unitsofmeasure.org",
+            "code": "1"
+          }
+        }
+      ]
+    }
+  ]
+}

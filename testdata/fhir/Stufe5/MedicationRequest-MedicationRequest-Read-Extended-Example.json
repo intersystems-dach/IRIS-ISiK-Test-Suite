@@ -1,0 +1,74 @@
+{
+  "resourceType": "MedicationRequest",
+  "id": "MedicationRequest-Read-Extended-Example",
+  "extension": [
+    {
+      "url": "https://gematik.de/fhir/isik/StructureDefinition/ExtensionISiKAcceptedRisk",
+      "valueString": "Risk of hypertension accepted by the prescribing physician"
+    },
+    {
+      "url": "https://gematik.de/fhir/isik/StructureDefinition/ExtensionISiKMedikationsart",
+      "valueCoding": {
+        "system": "https://gematik.de/fhir/isik/CodeSystem/ISiKMedikationsartCS",
+        "code": "akut",
+        "display": "Akutmedikation"
+      }
+    },
+    {
+      "url": "https://gematik.de/fhir/isik/StructureDefinition/ExtensionISiKBehandlungsziel",
+      "valueString": "Relief of nasal congestion"
+    }
+  ],
+  "status": "completed",
+  "intent": "order",
+  "medicationCodeableConcept": {
+    "coding": [
+      {
+        "system": "http://fhir.de/CodeSystem/bfarm/atc",
+        "version": "{{data.atc-code-version}}",
+        "code": "R01AA04",
+        "display": "Phenylephrine"
+      }
+    ]
+  },
+  "subject": {
+    "reference": "Patient/{{data.medication-patient-id}}"
+  },
+  "authoredOn": "2026-02-03",
+  "requester": {
+    "reference": "Practitioner/{{data.medication-practitioner-id}}"
+  },
+  "reasonReference": [
+    {
+      "reference": "Condition/{{data.medication-condition-active-id}}"
+    }
+  ],
+  "dosageInstruction": [
+    {
+      "text": "1 spray into each nostril once daily for 8 days",
+      "timing": {
+        "event": [
+          "2026-02-03T08:00:00+01:00"
+        ],
+        "repeat": {
+          "count": 8,
+          "frequency": 1,
+          "period": 1,
+          "periodUnit": "d",
+          "duration": 8,
+          "durationUnit": "d"
+        }
+      },
+      "doseAndRate": [
+        {
+          "doseQuantity": {
+            "value": 1,
+            "unit": "Spray",
+            "system": "http://unitsofmeasure.org",
+            "code": "1"
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,78 @@
+# =============================================================================
+# Aliases working around undefined ${data.*} keys in the upstream feature files
+# =============================================================================
+# NOT an upstream file. The five files beside this one are byte-identical copies
+# of gematik/isik-testsuite 2.7.0 testdata/Stufe5/ (verify with `sha256sum`
+# against the release tarball; the checksums are in run/tiger/RENDERED.txt). This
+# file is ours. See testdata/Stufe3/zz-upstream-key-defects.yaml for the full
+# rationale; in short: an undefined key renders as the literal string
+# "${data.<key>}" inside the request URL, which yields a 404 that looks exactly
+# like a missing resource in the SUT.
+#
+# Loaded LAST under `baseKey: data`, so every entry is additive.
+#
+# Both entries below are pure spelling variants of keys upstream already defines
+# and require no additional test data.
+# =============================================================================
+
+# Stufe5/Basis/Location-Search.feature:43, 65, 76
+#   Scenarios "Search for the Location by ID", "... by Address and ID",
+#   "... by Type 'LOCHFID' and ID".
+#   Feature tags: @Stufe5 @Basismodul @Optional  -> NOT in the default run scope
+#   (@Stufe5 and (not @Optional)), so this affects only an explicitly widened run.
+#
+#   All three uses are inside the error-message argument of
+#   `response bundle contains resource with ID "${data.location-read-id}" with
+#   error message "The requested Location ${data.Location-read-active-id} ..."`.
+#   The asserted ID itself is spelled correctly, so the verdict is unaffected and
+#   only the message text would carry an unresolved placeholder.
+#
+#   Note the value: the referenced key is location-read-id, NOT some separate
+#   "active" Location. There is no location-read-active-id anywhere in the upstream
+#   testdata, and the surrounding steps all assert against location-read-id, so
+#   the capitalised name is a stale leftover rather than a missing resource.
+Location-read-active-id: Location-Read-Example
+
+# Stufe5/Medikation/RiskAssessment-Search.feature:38, 39
+#   Scenario "Search for the RiskAssessment by ID"
+#   Feature tags: @Stufe5 @Medikation @Mandatory  -> IN the default run scope.
+#
+#   Careful reading of the tags: line 32 of that feature carries an @Optional tag,
+#   but it belongs to the SECOND `Examples:` block of the preceding Scenario
+#   Outline (the _tag search parameter), not to the Scenario on line 37. The
+#   scenario using this key is therefore mandatory and does run by default.
+#
+#   Unlike the two cases above, this key is used in the REQUEST URL
+#   (`/RiskAssessment/?_id=${data.RiskAssessment-read-id}`) and in the asserted
+#   bundle ID. Left undefined it produces a search for the literal string
+#   "${data.RiskAssessment-read-id}", an empty bundle, and a mandatory-scenario
+#   failure attributable to the suite rather than to IRIS. This is the one alias
+#   here that changes a verdict.
+#
+#   The difference from the upstream key is capitalisation only:
+#   Stufe5/medikation.yaml defines `riskassessment-read-id` (lower case). Tiger's
+#   configuration keys are case-sensitive, so the two do not resolve to each other.
+#   Value kept identical to the upstream key deliberately - both names must denote
+#   the same seeded instance.
+RiskAssessment-read-id: RiskAssessment-Read-Example
+
+# --- Deliberately NOT defined here -------------------------------------------
+# Two further keys appear in the Stufe 5 features without a testdata definition.
+# Neither is a defect that needs an alias, and both are listed here so a future
+# audit does not "fix" them:
+#
+#   documentreference-update-stored-id
+#     Not a static test-datum at all. It is written at runtime by
+#     Stufe5/Dokumentenaustausch/DocumentReference-UpdateMetadata.feature:33,
+#       `FHIR evaluate FHIRPath "id" on current response body and store first
+#        element as primitive value in variable "data.documentreference-update-stored-id"`
+#     and read on the next line. Predefining it would be harmless but pointless;
+#     it is correct upstream behaviour. (That feature is @Disabled @Optional in any
+#     case.)
+#
+#   medicationadministration-read-request-id
+#     Used by Stufe5/Medikation/MedicationAdministration-Read-Request.feature:18-19,
+#     which is tagged @Disabled and @Optional, has its @Medikation tag commented
+#     out, and whose @Precondition scenario reads literally "TODO". It is an
+#     unfinished upstream stub that never executes - there is no defined resource
+#     for it to point at and nothing to seed.

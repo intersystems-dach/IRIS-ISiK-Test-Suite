@@ -1,0 +1,94 @@
+{
+  "resourceType": "MedicationStatement",
+  "id": "MedicationStatement-Read-Extended-Example",
+  "status": "active",
+  "medicationCodeableConcept": {
+    "coding": [
+      {
+        "system": "http://fhir.de/CodeSystem/bfarm/atc",
+        "code": "V03AB23",
+        "display": "Acetylcystein"
+      }
+    ]
+  },
+  "subject": {
+    "reference": "Patient/{{data.medication-patient-id}}"
+  },
+  "effectiveDateTime": "2022-07-01",
+  "reasonCode": [
+    {
+      "coding": [
+        {
+          "system": "http://snomed.info/sct",
+          "code": "195662009",
+          "display": "Acute viral pharyngitis"
+        }
+      ]
+    }
+  ],
+  "dosage": [
+    {
+      "text": "200 mg zweimal bis dreimal täglich nach dem Essen",
+      "asNeededBoolean": false,
+      "timing": {
+        "repeat": {
+          "when": [
+            "PC"
+          ],
+          "frequency": 2,
+          "frequencyMax": 3,
+          "period": 1,
+          "periodUnit": "d"
+        }
+      },
+      "site": {
+        "coding": [
+          {
+            "system": "http://snomed.info/sct",
+            "code": "738956005",
+            "display": "Oral"
+          }
+        ]
+      },
+      "route": {
+        "coding": [
+          {
+            "system": "http://snomed.info/sct",
+            "code": "26643006",
+            "display": "Oral route"
+          }
+        ]
+      },
+      "doseAndRate": [
+        {
+          "doseQuantity": {
+            "value": 200,
+            "unit": "mg",
+            "system": "http://unitsofmeasure.org",
+            "code": "mg"
+          }
+        }
+      ],
+      "maxDosePerAdministration": {
+        "value": 200,
+        "unit": "mg",
+        "system": "http://unitsofmeasure.org",
+        "code": "mg"
+      },
+      "maxDosePerPeriod": {
+        "numerator": {
+          "value": 600,
+          "unit": "mg",
+          "system": "http://unitsofmeasure.org",
+          "code": "mg"
+        },
+        "denominator": {
+          "value": 1,
+          "unit": "Tag",
+          "system": "http://unitsofmeasure.org",
+          "code": "d"
+        }
+      }
+    }
+  ]
+}

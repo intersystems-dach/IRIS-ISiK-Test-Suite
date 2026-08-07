@@ -1,0 +1,10 @@
+{
+  "resourceType": "Slot",
+  "id": "Slot-Read-Example",
+  "schedule": {
+    "reference": "Schedule/{{data.schedule-read-id}}"
+  },
+  "status": "busy",
+  "start": "2027-01-01T11:00:00Z",
+  "end": "2027-01-01T12:00:00Z"
+}

@@ -1,0 +1,38 @@
+{
+  "resourceType": "MedicationStatement",
+  "id": "MedicationStatement-Update-Original-Example",
+  "meta": {
+    "profile": [
+      "{{profile.ISiKMedikationsInformation}}"
+    ]
+  },
+  "status": "active",
+  "medicationReference": {
+    "reference": "Medication/{{data.medication-read-id}}"
+  },
+  "subject": {
+    "reference": "Patient/{{data.medication-patient-id}}"
+  },
+  "dateAsserted": "2021-07-01",
+  "note": [
+    {
+      "text": "Testnotiz"
+    }
+  ],
+  "dosage": [
+    {
+      "text": "1 Brausetablette morgens",
+      "patientInstruction": "Instruktionstest",
+      "doseAndRate": [
+        {
+          "doseQuantity": {
+            "value": 1,
+            "unit": "Brausetablette",
+            "system": "http://unitsofmeasure.org",
+            "code": "1"
+          }
+        }
+      ]
+    }
+  ]
+}

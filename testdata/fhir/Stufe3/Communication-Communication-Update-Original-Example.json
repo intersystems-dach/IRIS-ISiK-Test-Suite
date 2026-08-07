@@ -1,0 +1,28 @@
+{
+  "resourceType": "Communication",
+  "id": "Communication-Update-Original-Example",
+  "meta": {
+    "profile": [
+      "{{profile.ISiKNachricht}}"
+    ]
+  },
+  "status": "in-progress",
+  "subject": {
+    "reference": "Patient/{{data.terminplanung-patient-id}}"
+  },
+  "sent": "2023-03-01T09:00:00Z",
+  "recipient": [
+    {
+      "reference": "Practitioner/{{data.terminplanung-practitioner-id}}",
+      "display": "Dr. Walter Musterarzt"
+    }
+  ],
+  "sender": {
+    "reference": "Patient/{{data.terminplanung-patient-id}}"
+  },
+  "payload": [
+    {
+      "contentString": "Dies ist die Nachricht aus dem Bestätigungssystem!"
+    }
+  ]
+}

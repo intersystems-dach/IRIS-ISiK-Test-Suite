@@ -1,0 +1,35 @@
+{
+  "resourceType": "Communication",
+  "id": "Communication-Read-Example",
+  "inResponseTo": [
+    {
+      "reference": "Communication/Communication-Update-Original-Example"
+    }
+  ],
+  "status": "completed",
+  "subject": {
+    "reference": "Patient/{{data.terminplanung-patient-id}}"
+  },
+  "sent": "2023-10-01T13:00:00Z",
+  "recipient": [
+    {
+      "reference": "Practitioner/{{data.terminplanung-practitioner-id}}",
+      "display": "Dr. Walter Musterarzt"
+    }
+  ],
+  "sender": {
+    "reference": "Patient/{{data.terminplanung-patient-id}}"
+  },
+  "payload": [
+    {
+      "contentString": "Dies ist eine Testnachricht!"
+    },
+    {
+      "contentAttachment": {
+        "contentType": "text/plain",
+        "url": "https://test",
+        "creation": "2023-10-01T13:00:00Z"
+      }
+    }
+  ]
+}

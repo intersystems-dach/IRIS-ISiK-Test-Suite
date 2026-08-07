@@ -1,0 +1,25 @@
+{
+  "resourceType": "RiskAssessment",
+  "id": "RiskAssessment-Update-Original-Example",
+  "meta": {
+    "profile": [
+      "{{profile.ISiKAMTSBewertung}}"
+    ]
+  },
+  "status": "final",
+  "code": {
+    "coding": [
+      {
+        "system": "http://snomed.info/sct",
+        "code": "281694009",
+        "display": "Finding of at risk",
+        "version": "http://snomed.info/sct/11000274103/version/20251115"
+      }
+    ],
+    "text": "Medication safety assessment"
+  },
+  "subject": {
+    "reference": "Patient/{{data.riskassessment-patient-id}}"
+  },
+  "occurrenceDateTime": "2026-01-06T09:30:00+01:00"
+}
