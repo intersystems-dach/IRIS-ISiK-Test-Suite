@@ -41,7 +41,8 @@ appendix.
 | **Recommended** | **16** | **64 GiB** | **256 GB** |
 | Minimum | 8 | 32 GiB | 128 GB |
 
-About an hour and a quarter of wall-clock for a full round on a cold host. Size
+A full round from a cold start takes **54 minutes** on the recommended host and
+roughly an hour and five on the minimum one, and leaves 26 GB of disk in use. Size
 upward rather than downward: a Stufe 5 run short of scenario heap does not slow
 down, it silently loses the level after hours. [INSTALL.md](INSTALL.md#2-hardware)
 traces every figure to a measurement.

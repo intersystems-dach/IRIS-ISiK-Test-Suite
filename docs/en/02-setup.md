@@ -149,9 +149,10 @@ That makes three uids to keep straight, none of them chosen by this project:
 | **1000** | the host operator running `make` | Everything as created before the two fixes above |
 
 `make all` is `preflight → resolve → packages → up → seed → test → report`, and the
-two conformance runs dominate it. Everything before them is quick: bring-up was
-measured at 4m40s cold and 7s on the reuse path, and `seed` at under a minute; the
-two levels measured 1250 s and 2050 s. See
+two conformance runs dominate it. Everything before them is quick: on the 8 vCPU
+lab host, bring-up measured 4m40s cold and 7s on the reuse path and `seed` under a
+minute, while the two levels took 1250 s and 2050 s — a full round is 54 minutes on
+the recommended 16 vCPU host and about an hour and five on that one. See
 [06-execution.md](06-execution.md#what-one-round-is) for the measured breakdown and
 for why the bootstrap timeout is nevertheless generous.
 

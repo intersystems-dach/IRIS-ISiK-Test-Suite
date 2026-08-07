@@ -10,21 +10,45 @@ make preflight  →  resolve  →  packages  →  up  →  seed  →  test  → 
 ```
 
 `make all` runs the chain end to end, and the two conformance runs dominate it —
-bring-up is a rounding error by comparison. Measured on the lab host (8 vCPU,
-31 GiB, `PACKAGE_SOURCE=refv`):
+bring-up is a rounding error by comparison. Measured on two hosts, both
+`PACKAGE_SOURCE=refv`:
 
-| Phase | Measured | Note |
-|---|---|---|
-| `up` — cold bootstrap, both namespaces | **4m40s** | The FHIR package import is most of it |
-| `up` — reuse path, namespaces already present | **7s** | What a re-run of an existing instance costs |
-| `seed` | under a minute | 131 resources across both endpoints |
-| `test-stufe3` | **1250 s** (20m50s) | 506 cases. Completes inside the JVM's default heap |
-| `test-stufe5` | **2050 s** (34m10s) | 895 cases, **with `TESTSUITE_HEAP_MAX=16g`**. Without it the level does not finish at all — see below |
+| Phase | 8 vCPU / 31 GiB | 16 vCPU / 62 GiB | Note |
+|---|---|---|---|
+| `up` — cold bootstrap, both namespaces | **4m40s** | **3m31s** | The FHIR package import is most of it, and it is I/O bound rather than CPU bound |
+| `up` — reuse path, namespaces already present | **7s** | **0s** | What a re-run of an existing instance costs |
+| `seed` | under a minute | **22s** | 131 resources across both endpoints, each read back and `$validate`d |
+| `test-stufe3` | **1250 s** (20m50s) | **1084 s** (18m4s) | 506 cases. Completes inside the JVM's default heap |
+| `test-stufe5` | **2050 s** (34m10s) | **1803 s** (30m3s) | 895 cases, **with `TESTSUITE_HEAP_MAX=16g`**. Without it the level does not finish at all — see below |
+| `report` + `gap-report` | under a minute | **23s** | Pure functions of the archives |
+| Full `make all`, cold | ~1h05m, summed | **54m**, timed | Only the 16 vCPU round was driven as one `make all`, 08:47:13 to 09:41:44 UTC, image pulls included |
 
-Both level figures are `run.durationSeconds` from the round's own `run.json`, so any
+Both level figures are `run.durationSeconds` from each round's own `run.json`, so any
 round can be compared against them directly. The wall-clock ceiling is
-`TESTSUITE_TIMEOUT`, 3 h per level, which the measured Stufe 5 uses about a fifth
+`TESTSUITE_TIMEOUT`, 3 h per level, which the measured Stufe 5 uses about a sixth
 of — the margin exists for the heap-starved case, not for the healthy one.
+
+**Doubling the host bought 12%.** Compare the two levels rather than the totals,
+since those are the phases measured the same way on both hosts: 3300 s together on
+8 vCPU, 2890 s on 16. Neither level parallelises across scenarios — the suite drives
+one scenario at a time and spends most of it waiting on the SUT — so twice the
+machine does not buy anything like twice the speed. The larger host is worth having
+for the heap headroom described below, not for the throughput. Sizing guidance is in
+[INSTALL.md](../../INSTALL.md#2-hardware).
+
+**More heap bought nothing either — and that is the point.** Stufe 5 re-run on the
+16 vCPU host at `TESTSUITE_HEAP_MAX=32g` took **1838 s** (30m38s) against **1803 s**
+(30m03s) at 16g — the same within noise — and produced *identical* verdicts: 839 of
+895 passed both times, the same 86 failing cases, the same 33 distinct defects. So
+16g is not a performance setting that more of improves; it is a threshold. Below it
+the level is lost, above it nothing changes.
+
+One consequence of re-running a level into an existing round: it **overwrites** that
+level's archives and `run.json` rather than adding to them, because the round
+directory holds one result per level. The bundle therefore documents the 32g run
+(`durationSeconds: 1840`, `testTool.scenarioHeapMax: 32g`,
+`overrides: TESTSUITE_HEAP_MAX=32g`) and not the 16g one it replaced. Copy the
+directory aside first if both need to be kept.
 
 Bring-up figures are measurements, not guarantees: the package import is I/O bound,
 so a slower disk or a cold package cache moves it a long way, and

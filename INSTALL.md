@@ -46,8 +46,8 @@ repository's tracked files, and `make check` verifies that mechanically.
 
 |  | vCPU | RAM | Disk | Verdict |
 |---|---|---|---|---|
-| **Recommended** | **16** | **64 GiB** | **256 GB** | What these instructions were validated on |
-| Minimum | 8 | 32 GiB | 128 GB | Completes both levels, with no headroom |
+| **Recommended** | **16** | **64 GiB** | **256 GB** | Validated end to end: full round in **54 minutes**, 26 GB of disk used |
+| Minimum | 8 | 32 GiB | 128 GB | Completes both levels, roughly an hour and five minutes, no headroom |
 | Measured floor | 8 | 31 GiB | 128 GB | Completed both levels *only* at `TESTSUITE_HEAP_MAX=16g` |
 
 **Bias upward deliberately.** A Stufe 5 run that is short of scenario heap does not
@@ -73,15 +73,17 @@ A larger VM for a few hours is cheaper than discovering that after four of them.
   ([`scripts/00-preflight.sh`](scripts/00-preflight.sh)). 32 GiB is enough; 64 GiB
   is what lets you raise the heap to 32g without arithmetic, and removes the one
   failure mode that costs a whole level.
-* **vCPU.** 8 completed both levels; the measured wall-clock in section 8 is from
-  that host. The two conformance runs are the bulk of a round and neither
-  parallelises across scenarios, so 16 buys less than doubling — but the FHIR
-  package import during bring-up and the report extraction do benefit, and 16 vCPU
-  is normally the same size class as 64 GiB of RAM anyway.
-* **Disk.** Measured with `docker system df` after a complete round: images
-  14.68 GB, containers 8.6 GB, volumes 146 MB, plus the unpacked FHIR packages
-  (~1.5 GB) and the evidence bundles (tens of MB each). About 25 GB is the real
-  floor, which is what `make preflight` checks. 128 GB is comfortable; 256 GB is
+* **vCPU.** Both sizes completed both levels, and doubling the host took the two
+  conformance levels together from 3300 s to 2890 s — **12%**. Neither level
+  parallelises across scenarios, so the suite drives one at a time and spends most
+  of it waiting on the SUT. 16 vCPU is recommended because it is normally the same
+  size class as 64 GiB of RAM, not because a round needs the cores.
+* **Disk.** Measured with `docker system df` after a complete round: **26 GB in
+  total** on the 16 vCPU host — 8.5 GB of images, 9.4 GB of containers, 146 MB of
+  volumes, the unpacked FHIR packages (~1.5 GB) and a **2.8 GB** evidence bundle
+  (most of it `debug-report.zip`, which is not submitted but is what the gap
+  analysis reads). About 25 GB is the real floor, which is what `make preflight`
+  checks. 128 GB is comfortable; 256 GB is
   usually the same price bracket and leaves room to keep several rounds' bundles on
   the host.
 * **No swap needed.** Both measured hosts ran with swap disabled. Swap does not
@@ -316,20 +318,31 @@ make all          # preflight → resolve → packages → up → seed → test 
 Nothing prompts. The two passwords the environment needs are generated at
 `make resolve`; see section 12.
 
-Measured on the 8 vCPU / 31 GiB host with `PACKAGE_SOURCE=refv`:
+Measured on the recommended host — 16 vCPU / 62 GiB, `PACKAGE_SOURCE=refv`, from a
+completely cold start (no images, no packages), with the 8 vCPU / 31 GiB figures
+beside them:
 
-| Phase | Measured | |
+| Phase | 16 vCPU / 62 GiB | 8 vCPU / 31 GiB |
 |---|---|---|
-| `resolve` + `packages` | a few minutes | Dominated by the two image pulls on a cold host (~7 GB) |
-| `up` — cold bootstrap | **4m40s** | Both namespaces, 35 FHIR packages. Reuse path: **7s** |
-| `seed` | under a minute | 131 resources across both endpoints, each `$validate`d |
-| `test-stufe3` | **1250 s** (20m50s) | 506 cases |
-| `test-stufe5` | **2050 s** (34m10s) | 895 cases, at `TESTSUITE_HEAP_MAX=16g` |
-| `report` + `gap-report` | under a minute | Pure functions of the archives |
+| `resolve` + `packages` | **2m05s** | a few minutes |
+| `up` — cold bootstrap | **3m31s** | 4m40s |
+| `seed` | **22s** | under a minute |
+| `test-stufe3` | **18m04s** (506 cases) | 20m50s |
+| `test-stufe5` | **30m03s** (895 cases) | 34m10s |
+| `report` + `gap-report` | **23s** | under a minute |
+| **Full `make all`** | **54m**, timed | ~1h05m, summed from the phases |
 
-So about **an hour and a quarter** of wall-clock for a full round on a cold host,
-most of it the two conformance runs. `TESTSUITE_TIMEOUT` allows three hours per
-level; that margin exists for the heap-starved case, not for the healthy one.
+The 16 vCPU total is one wall-clock measurement of a single `make all`, 08:47:13 to
+09:41:44 UTC. The 8 vCPU total is the sum of its phases, since that host's round was
+driven a phase at a time; treat it as an estimate. The two conformance levels are
+the part measured identically on both, and they went from 3300 s to 2890 s — 12% for
+twice the machine. Neither level parallelises across scenarios, so the suite drives
+one at a time and spends most of it waiting on the SUT. Size for the heap headroom,
+not the throughput. `TESTSUITE_TIMEOUT` allows three hours per level, and the margin
+exists for the heap-starved case rather than the healthy one.
+
+Disk after a complete round on that host: 26 GB used in total — 8.5 GB of images,
+9.4 GB of containers, 146 MB of volumes, and a 2.8 GB evidence bundle.
 
 While it runs, in another shell:
 
@@ -368,11 +381,24 @@ is uploaded to TITUS. Nothing in this repository modifies them. Everything under
 `analysis/` and both gap-analysis files are *derived*, and re-derivable from the
 archives alone on any machine ([docs/en/07-reports.md](docs/en/07-reports.md)).
 
-Verify and take the bundle off the host:
+Verify and take the bundle off the host. The manifest covered 8582 files and
+verified in two seconds on the measured round:
 
 ```sh
 cd reports/<run-id> && sha256sum -c analysis/MANIFEST.txt && cd -
-tar czf isik-<run-id>.tar.gz -C reports <run-id>
+tar czf isik-<run-id>.tar.gz -C reports <run-id>          # 2.8 GB uncompressed
+```
+
+Most of that size is the two `debug-report.zip` archives, which are not submitted.
+For a submission or a review, `analysis/`, `GAP-ANALYSIS.md`, `provenance/` and both
+`test-report.zip` files come to well under 100 MB:
+
+```sh
+tar czf isik-<run-id>-slim.tar.gz -C reports \
+  <run-id>/README.md <run-id>/analysis <run-id>/GAP-ANALYSIS.md \
+  <run-id>/gap-analysis.json <run-id>/provenance \
+  <run-id>/stufe3/official/test-report.zip <run-id>/stufe3/run.json \
+  <run-id>/stufe5/official/test-report.zip <run-id>/stufe5/run.json
 ```
 
 The derived documents can be regenerated at any time, including from an archived
