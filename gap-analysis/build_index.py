@@ -168,6 +168,28 @@ CATEGORIES: dict[str, dict[str, str]] = {
                      "ResourceValidation setting, not the profile validator, "
                      "which answers $validate correctly.",
     },
+    "AUTHORIZATION_SCOPE": {
+        "signal": "a request carrying a SMART-on-FHIR access token was answered "
+                  "with resources outside the scope that token grants, or the "
+                  "SMART discovery document is absent or incomplete - the Connect "
+                  "module, added by test suite release 3.0.0",
+        "irisLocus": "the endpoint's OAuth 2.0 configuration and the authorization "
+                     "it delegates to. An IRIS FHIR endpoint answers "
+                     "/.well-known/smart-configuration with "
+                     "<HSFHIRErr>NoOAuth2Handling until an OAuth 2.0 client is "
+                     "configured on it, so scope enforcement is a deployment "
+                     "property of the endpoint and not of the FHIR layer alone.",
+    },
+    "ENVIRONMENT_PREREQUISITE": {
+        "signal": "the scenario's own precondition was not met by this test "
+                  "environment, so the case states nothing about the SUT. "
+                  "Established from positive evidence in the official report "
+                  "only - see index['prerequisiteRules']",
+        "irisLocus": "none. This is a property of the deployment this round used, "
+                     "not of the product. Excluded from the gap count for the "
+                     "same reason TEST_DATA_DEFECT is: a count that mixes in "
+                     "cases whose precondition failed overstates the work.",
+    },
     "TEST_DATA_DEFECT": {
         "signal": "the seeded resource was absent, unreadable or already flagged "
                   "by $validate before the run - so the failure is ours, not the "
@@ -338,10 +360,32 @@ STEP_KINDS: list[dict] = [
      "args": ("attribute", "matches"),
      "what": "a regex assertion on one attribute of the raw exchange - the status "
              "code, a header, or an element value"},
+    # The negation of `tgr-attribute`, written with Gherkin's `But`. Absent from
+    # 2.7.0 (hence expected 0); release 3.0.0 introduced it in the Connect module,
+    # which asserts that the SMART discovery document does *not* offer the `plain`
+    # PKCE method. Classified so a failure on it reports its shape rather than
+    # falling through to UNCLASSIFIED.
+    {"kind": "tgr-attribute-not", "role": "assert", "category": None, "expected": 0,
+     "re": re.compile(r'^TGR current response with attribute "([^"]*)" does not '
+                      r'match "([^"]*)"'),
+     "args": ("attribute", "matches"),
+     "what": "a regex assertion that one attribute of the raw exchange does NOT "
+             "match - the suite forbidding a value rather than requiring one"},
     {"kind": "tgr-node", "role": "assert", "category": None, "expected": 3,
      "re": re.compile(r'^TGR current response contains node "([^"]*)"'),
      "args": ("node",),
      "what": "the response must contain this node"},
+
+    # --- SMART-on-FHIR authorization (Connect, added at release 3.0.0) -------
+    # Also absent from 2.7.0. The step passes on either of two answers - a refusal
+    # or an empty result set - so what it asserts is that the token's scope was
+    # enforced, whichever way the SUT chooses to enforce it.
+    {"kind": "search-forbidden-or-empty", "role": "assert",
+     "category": "AUTHORIZATION_SCOPE", "expected": 0,
+     "re": re.compile(r"^FHIR search response is forbidden or contains no "
+                      r"resources"),
+     "what": "a search outside the granted scope must be refused or return "
+             "nothing - it must not disclose resources, included ones included"},
     {"kind": "resource-has-id", "role": "assert", "category": "RESPONSE_FORMAT",
      "expected": 108,
      "re": re.compile(r'^resource has ID "([^"]*)"'),
@@ -463,6 +507,46 @@ RESPONSE_CODE_RULES = [
 # resource (158 bytes). So the body is withheld by default, and the six affected
 # scenarios - all *-Create in Stufe5/Medikation - send no Prefer header and assert
 # `($this is X) or ($this is Parameters)` on the response.
+# When a failing case states nothing about the SUT because its own precondition
+# was not met by this deployment. Applied by gap_report.py on positive evidence
+# from the official report only, never from a module or feature name: a Connect
+# scenario that fails with a token in hand is a conformance finding and must stay
+# one.
+#
+# The evidence is the suite's own. `testdata/Stufe5/connect.yaml` *inside the
+# suite image* ships six access tokens as the literal SET-YOUR-TOKEN-HERE, which
+# is the suite telling the system owner to supply them from their authorization
+# server. Where that literal reaches the SUT in an Authorization header - and the
+# official report records the resolved header verbatim, in each step's
+# `reportData` - the scope under test was never issued, so the SUT cannot have
+# enforced it and the case measures the channel instead.
+#
+# What the channel is, and why it answers at all, is this rig's own documented
+# deviation: the Tiger proxy route carries the API user's Basic credential so that
+# the official feature files can be used byte-identically against an endpoint that
+# requires authentication (see docs/en/04-testtool.md). Measured on the pinned SUT
+# at the endpoint itself: an unauthenticated request and one carrying
+# `Bearer SET-YOUR-TOKEN-HERE` are both answered 404, the API user's Basic
+# credential is answered 200. So the 200 the suite observed is the proxy's
+# credential, not the placeholder token.
+PREREQUISITE_RULES = [
+    {"when": "the request the failing assertion was made about carries an "
+             "Authorization header whose value is still the suite's own "
+             "SET-YOUR-TOKEN-HERE placeholder",
+     "category": "ENVIRONMENT_PREREQUISITE",
+     "why": "the scenario's stated precondition is a valid Bearer token for a "
+            "named scope. No token was issued, so no scope was presented, so "
+            "nothing was asserted about the SUT's scope enforcement"},
+    {"when": "the request is for /.well-known/smart-configuration AND the same "
+             "run shows unresolved token placeholders elsewhere",
+     "category": "ENVIRONMENT_PREREQUISITE",
+     "why": "that path is the SMART-on-FHIR authorization discovery document, "
+            "which describes an authorization server. The placeholders are this "
+            "run's own evidence that none was configured. The second condition is "
+            "what keeps the rule from excusing a genuine discovery defect in a "
+            "round that did supply tokens"},
+]
+
 RESPONSE_BODY_RULES = [
     {"when": "the failure is scenario-scope and its message is the suite's own "
              "\"CapabilityStatement-Definition for search parameter 'p' of "
@@ -1251,6 +1335,7 @@ def main() -> int:
         "statusRules": STATUS_RULES,
         "responseCodeRules": RESPONSE_CODE_RULES,
         "responseBodyRules": RESPONSE_BODY_RULES,
+        "prerequisiteRules": PREREQUISITE_RULES,
         "stepKinds": [
             {"kind": s["kind"], "role": s["role"], "category": s["category"],
              "what": s["what"], "expectedOccurrences": s["expected"],

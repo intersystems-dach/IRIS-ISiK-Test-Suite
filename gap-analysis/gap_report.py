@@ -42,12 +42,24 @@ entry carries the full list of affected scenarios. Without this the report would
 run to hundreds of near-identical entries and be useless as a work list, which is
 the one thing it has to be.
 
-Test data defects are segregated
---------------------------------
-A failure caused by this project's own seeded data is not an IRIS gap. Those are
-proven from `provenance/seed/<Level>.json` (the pre-run `$validate` and read-back
-records), moved into a clearly marked appendix, and excluded from the IRIS gap
-count - so the headline number cannot be inflated by harness defects.
+What is not the product's is segregated
+---------------------------------------
+Two classes of failure are not IRIS gaps, and both are moved into a clearly
+marked appendix and excluded from the gap count - so the headline number cannot
+be inflated by anything the product did not do:
+
+  * a failure caused by this project's own seeded data, proven from
+    `provenance/seed/<Level>.json` (the pre-run `$validate` and read-back
+    records);
+  * a failure whose scenario states a precondition this deployment did not meet,
+    proven from the request the official report records (see PREREQUISITE_RULES
+    in build_index.py). Test suite release 3.0.0 added a module - Connect - whose
+    scenarios require SMART-on-FHIR access tokens that the suite itself ships as
+    placeholders for the system owner to fill in.
+
+Both exclusions require positive evidence, and both are reported in full. The
+error to avoid is in either direction: charging the product for a condition the
+environment never created, and quietly excusing a failure that is real.
 
 One appendix is not about the test run at all
 --------------------------------------------
@@ -84,11 +96,19 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "gap-analysis"))
 
-from build_index import (CATEGORIES, classify_step, classify_substep,   # noqa: E402
+from build_index import (CATEGORIES, PREREQUISITE_RULES,               # noqa: E402
+                         classify_step, classify_substep,
                          context_of_request, shape_of)
 
 MAX_BODY = 700          # characters of a response body quoted in an entry
 MAX_SCENARIOS = 12      # affected scenarios listed before "... and N more"
+
+# The two categories that are not the product's: a defect in this project's own
+# test data, and a case whose stated precondition this deployment did not meet.
+# Both are reported in full, in their own appendix, and both are kept out of the
+# gap count - a count that mixes them in overstates the work and, worse, attributes
+# to the product something it did not do.
+NOT_SUT_CATEGORIES = ("TEST_DATA_DEFECT", "ENVIRONMENT_PREREQUISITE")
 
 
 # =============================================================================
@@ -936,6 +956,86 @@ def load_bodies(run_dir: Path, case: dict) -> dict:
     return last
 
 
+# The suite's own placeholder for an access token the system owner must supply,
+# shipped as the value of all six token keys in the Connect module's
+# testdata/Stufe5/connect.yaml inside the suite image. Matched as a literal
+# because that is what it is; a suite that renames it shows up as these cases
+# returning to their SUT-side categories, which is the safe direction.
+UNRESOLVED_TOKEN = "SET-YOUR-TOKEN-HERE"
+SMART_DISCOVERY_PATH = "/.well-known/smart-configuration"
+
+
+def request_as_resolved(run_dir: Path, case: dict) -> str:
+    """The request the failing assertion was made about, as the suite resolved it.
+
+    Tiger records each step twice: the Gherkin text with `${...}` references
+    intact, and - in `reportData` - the same step with every reference resolved,
+    plus the equivalent cURL command. For a TGR step that resolved form is the
+    only record of what actually went on the wire: Tiger issues the request
+    through its own proxy, so Serenity's `restQuery` is absent (see load_bodies).
+
+    Walked in Serenity's order and stopped at the first failing step, exactly as
+    load_bodies does, so the text returned belongs to the exchange the assertion
+    was about and not to a later one. Returns "" when nothing was recorded, which
+    reads as "no evidence" everywhere it is used.
+    """
+    rel = ((case.get("report") or {}).get("outcomeJson") or "")
+    if not rel:
+        return ""
+    doc = load_json(run_dir / rel, "outcome JSON", required=False)
+    if not isinstance(doc, dict):
+        return ""
+
+    last = ""
+
+    def walk(steps) -> bool:
+        nonlocal last
+        for st in steps or []:
+            if not isinstance(st, dict):
+                continue
+            texts = [rd.get("contents") or "" for rd in (st.get("reportData") or [])
+                     if isinstance(rd, dict)
+                     and rd.get("title") in ("Tiger Resolved Step Description",
+                                             "cURL")]
+            # A request step, not an assertion step: only those carry a cURL.
+            if any("curl " in t for t in texts):
+                last = "\n".join(texts)
+            failed = st.get("result") in ("FAILURE", "ERROR")
+            if walk(st.get("children")):
+                return True
+            if failed:
+                return True
+        return False
+
+    walk(doc.get("testSteps"))
+    return last
+
+
+def prerequisite_verdict(resolved: str, tokens_unresolved: bool
+                         ) -> tuple[str, str, str] | None:
+    """Whether this case's own precondition went unmet - see PREREQUISITE_RULES.
+
+    Positive evidence only, and from the official report rather than from a
+    module or feature name: a Connect scenario that fails with a real token in
+    hand is a conformance finding and has to stay one.
+    """
+    if UNRESOLVED_TOKEN in resolved:
+        return "ENVIRONMENT_PREREQUISITE", (
+            f"the request carries `Authorization: Bearer {UNRESOLVED_TOKEN}` - the "
+            "suite's own placeholder, resolved verbatim in the official report. "
+            "The scenario's precondition is a valid Bearer token for a named "
+            "scope; none was issued, so no scope was presented to the SUT"
+        ), "no-access-token-issued"
+    if tokens_unresolved and SMART_DISCOVERY_PATH in resolved:
+        return "ENVIRONMENT_PREREQUISITE", (
+            f"the request is for `{SMART_DISCOVERY_PATH}`, the SMART-on-FHIR "
+            "authorization discovery document, and this run's unresolved token "
+            "placeholders are its own evidence that no authorization server was "
+            "configured for the endpoint to describe"
+        ), "no-authorization-server-configured"
+    return None
+
+
 def truncate(text: str, limit: int = MAX_BODY) -> str:
     text = (text or "").strip()
     if len(text) <= limit:
@@ -948,7 +1048,8 @@ def truncate(text: str, limit: int = MAX_BODY) -> str:
 # =============================================================================
 
 def root_cause_key(category: str, attribution: dict, failure: dict,
-                   cls: dict, sub: dict | None) -> tuple:
+                   cls: dict, sub: dict | None, prereq_rule: str | None = None
+                   ) -> tuple:
     """The identity of a defect, independent of which scenario tripped over it.
 
     Levels are deliberately *not* part of the key: a search parameter missing on
@@ -960,6 +1061,12 @@ def root_cause_key(category: str, attribution: dict, failure: dict,
     if sub:
         args.update(sub.get("args") or {})
     feature = attribution.get("feature") or ""
+    if prereq_rule:
+        # One entry per unmet precondition, not per scenario that tripped over
+        # it: the finding is the prerequisite, and the scenarios are its
+        # occurrence list. The step shapes differ across these cases, so the
+        # generic key below would split one environmental fact into four.
+        return (category, prereq_rule)
     if category in ("MISSING_SEARCH_PARAM", "CAPABILITY_STATEMENT_GAP",
                     "UNSUPPORTED_OPERATION"):
         return (category, feature)
@@ -994,6 +1101,22 @@ def analyse(results: dict, index: dict, seed: dict, run_dir: Path,
     feature_names = {}
     for feat in (reqs or {}).get("features", []):
         feature_names[feat["rel"]] = feat.get("name")
+
+    # One pass for the requests, before any classification, because the second
+    # prerequisite rule is about the run and not about a single case: whether this
+    # round supplied the access tokens the Connect module asks for is decided by
+    # all of its failures together. Read once per case and kept, so the outcome
+    # JSONs are not parsed twice.
+    resolved_requests: dict[str, str] = {}
+    for level, L in (results.get("levels") or {}).items():
+        for case in L.get("cases") or []:
+            if not case.get("failure") or case.get("verdict") != "fail":
+                continue
+            rel = ((case.get("report") or {}).get("outcomeJson") or "")
+            if rel and rel not in resolved_requests:
+                resolved_requests[rel] = request_as_resolved(run_dir, case)
+    tokens_unresolved = any(UNRESOLVED_TOKEN in text
+                            for text in resolved_requests.values())
 
     for level, L in (results.get("levels") or {}).items():
         totals = L.get("totals") or {}
@@ -1037,22 +1160,35 @@ def analyse(results: dict, index: dict, seed: dict, run_dir: Path,
                                 + ("" if indexed_feature else " [feature not indexed]"))
             category, reason = categorise(failure, cls, sub, indexed)
 
-            # Test-data override, on positive evidence only.
-            evidence = test_data_evidence(seed, level, failure.get("http"))
-            if evidence and category != "RESPONSE_FORMAT":
-                category, reason = "TEST_DATA_DEFECT", (
-                    f"the seed step already recorded a defect on "
-                    f"{evidence['resourceType']}/{evidence['id']}")
-            elif category == "TEST_DATA_DEFECT" and not evidence:
-                warnings.append(
-                    f"{case.get('feature')}:{case.get('featureLine')} was "
-                    "categorised as a test-data defect without seed evidence; "
-                    "re-attributed to the SUT")
-                category = "UNCLASSIFIED"
+            # Precondition override, on positive evidence only, and ahead of the
+            # test-data override: a case whose own precondition was never met
+            # states nothing about either the SUT or our seeded data, so neither
+            # of them is the thing to look at.
+            prereq = prerequisite_verdict(
+                resolved_requests.get(
+                    (case.get("report") or {}).get("outcomeJson") or "", ""),
+                tokens_unresolved)
+            if prereq:
+                category, reason, prereq_rule = prereq
+            else:
+                prereq_rule = None
+                # Test-data override, on positive evidence only.
+                evidence = test_data_evidence(seed, level, failure.get("http"))
+                if evidence and category != "RESPONSE_FORMAT":
+                    category, reason = "TEST_DATA_DEFECT", (
+                        f"the seed step already recorded a defect on "
+                        f"{evidence['resourceType']}/{evidence['id']}")
+                elif category == "TEST_DATA_DEFECT" and not evidence:
+                    warnings.append(
+                        f"{case.get('feature')}:{case.get('featureLine')} was "
+                        "categorised as a test-data defect without seed evidence; "
+                        "re-attributed to the SUT")
+                    category = "UNCLASSIFIED"
 
             attribution = attribute(index, category, cls, sub, failure, indexed,
                                     level)
-            key = root_cause_key(category, attribution, failure, cls, sub)
+            key = root_cause_key(category, attribution, failure, cls, sub,
+                                 prereq_rule)
 
             grp = groups.get(key)
             if grp is None:
@@ -1113,8 +1249,8 @@ def analyse(results: dict, index: dict, seed: dict, run_dir: Path,
     order = {c: i for i, c in enumerate(
         ["UNSUPPORTED_OPERATION", "CAPABILITY_STATEMENT_GAP", "MISSING_SEARCH_PARAM",
          "PROFILE_NONCONFORMANCE", "WRITE_VALIDATION_GAP", "SEARCH_SEMANTICS",
-         "REFERENCE_INTEGRITY", "RESPONSE_FORMAT", "UNCLASSIFIED",
-         "TEST_DATA_DEFECT"])}
+         "REFERENCE_INTEGRITY", "AUTHORIZATION_SCOPE", "RESPONSE_FORMAT",
+         "UNCLASSIFIED", "TEST_DATA_DEFECT", "ENVIRONMENT_PREREQUISITE"])}
     entries = sorted(groups.values(),
                      key=lambda g: (order.get(g["category"], 99),
                                     -len(g["occurrences"]),
@@ -1134,16 +1270,18 @@ def analyse(results: dict, index: dict, seed: dict, run_dir: Path,
         for c, n in pl["byCategory"].items():
             by_cat[c] = by_cat.get(c, 0) + n
     data_defects = by_cat.get("TEST_DATA_DEFECT", 0)
+    prerequisites = by_cat.get("ENVIRONMENT_PREREQUISITE", 0)
     recon = {
         "officialFailedCases": official_failed,
         "failureRecordsAnalysed": seen,
         "categorised": sum(by_cat.values()),
         "byCategory": by_cat,
         "testDataDefects": data_defects,
-        "irisGapCases": seen - data_defects,
+        "environmentPrerequisites": prerequisites,
+        "irisGapCases": seen - data_defects - prerequisites,
         "entries": len(entries),
         "irisGapEntries": sum(1 for e in entries
-                              if e["category"] != "TEST_DATA_DEFECT"),
+                              if e["category"] not in NOT_SUT_CATEGORIES),
         "dedupRatio": (round(seen / len(entries), 1) if entries else None),
         "balanced": official_failed == seen == sum(by_cat.values()),
     }
@@ -1201,7 +1339,10 @@ CAT_TITLE = {
     "SEARCH_SEMANTICS": "Search semantics",
     "RESPONSE_FORMAT": "Response format / REST envelope",
     "REFERENCE_INTEGRITY": "Reference integrity",
+    "AUTHORIZATION_SCOPE": "SMART-on-FHIR scope enforcement",
     "TEST_DATA_DEFECT": "Test data defect (ours, not IRIS)",
+    "ENVIRONMENT_PREREQUISITE": "Precondition not met by this environment "
+                                "(neither IRIS nor our test data)",
     "UNCLASSIFIED": "Unclassified",
 }
 
@@ -1230,8 +1371,11 @@ def render(results: dict, index: dict, analysis: dict, run_dir: Path,
     L = analysis["levels"]
     recon = analysis["reconciliation"]
     entries = analysis["entries"]
-    iris_entries = [e for e in entries if e["category"] != "TEST_DATA_DEFECT"]
+    iris_entries = [e for e in entries
+                    if e["category"] not in NOT_SUT_CATEGORIES]
     data_entries = [e for e in entries if e["category"] == "TEST_DATA_DEFECT"]
+    prereq_entries = [e for e in entries
+                      if e["category"] == "ENVIRONMENT_PREREQUISITE"]
     src = results.get("source") or {}
     out: list[str] = []
     w = out.append
@@ -1289,8 +1433,10 @@ def render(results: dict, index: dict, analysis: dict, run_dir: Path,
         w(f"**{recon['irisGapCases']} failing test case(s) attributable to the SUT, "
           f"collapsing to {len(iris_entries)} distinct defect(s).** "
           f"{recon['testDataDefects']} further failure(s) are defects in this "
-          f"project's own test data and are excluded from that count "
-          f"(§{5 if data_entries else 5}).")
+          f"project's own test data and "
+          f"{recon['environmentPrerequisites']} failed on a precondition this "
+          "deployment did not meet; both are excluded from that count and "
+          "reported in §5.")
         w("")
         if recon["dedupRatio"]:
             w(f"Deduplication factor {recon['dedupRatio']}× — most scenarios fail "
@@ -1379,13 +1525,15 @@ def render(results: dict, index: dict, analysis: dict, run_dir: Path,
     for e in iris_entries:
         render_entry(w, e, index)
 
-    # --- test data appendix --------------------------------------------------
-    w("## 5 Appendix — test data defects (not IRIS gaps)")
+    # --- not-the-product appendix --------------------------------------------
+    w("## 5 Appendix — failures not attributable to the SUT")
+    w("")
+    w("### 5.1 Test data defects (ours, not IRIS)")
     w("")
     if not data_entries:
-        w("None. Every failure in this run is attributable to the SUT: the seed "
-          "step's pre-run `$validate` and read-back records show no defect on any "
-          "resource a failing scenario touched.")
+        w("None. No failure in this run is attributable to this project's test "
+          "data: the seed step's pre-run `$validate` and read-back records show no "
+          "defect on any resource a failing scenario touched.")
         w("")
     else:
         w("These failures were caused by this project's own seeded test data. Each "
@@ -1394,6 +1542,23 @@ def render(results: dict, index: dict, analysis: dict, run_dir: Path,
           "project's work, not the product's.")
         w("")
         for e in data_entries:
+            render_entry(w, e, index)
+    w("### 5.2 Preconditions this deployment did not meet")
+    w("")
+    if not prereq_entries:
+        w("None. Every failing case in this run was made under the conditions its "
+          "scenario states.")
+        w("")
+    else:
+        w("These cases failed on a condition the scenario itself requires and this "
+          "deployment did not provide. They are reported in full, and excluded "
+          "from the gap count in §1, because a case whose precondition was not met "
+          "measures the environment rather than the SUT — in either direction: it "
+          "can neither convict the product nor acquit it. The rule that decided "
+          "each one, and the evidence it needs, is "
+          "`index.json`'s `prerequisiteRules`.")
+        w("")
+        for e in prereq_entries:
             render_entry(w, e, index)
 
     # --- reconciliation ------------------------------------------------------
@@ -1409,6 +1574,8 @@ def render(results: dict, index: dict, analysis: dict, run_dir: Path,
     w(f"| Failure records analysed | {recon['failureRecordsAnalysed']} |")
     w(f"| Categorised findings | {recon['categorised']} |")
     w(f"| — of which test data defects | {recon['testDataDefects']} |")
+    w(f"| — of which preconditions not met by this deployment | "
+      f"{recon['environmentPrerequisites']} |")
     w(f"| SUT-attributable failing cases | {recon['irisGapCases']} |")
     w(f"| Distinct defects after deduplication | {recon['entries']} |")
     w(f"| Balanced | {'yes' if recon['balanced'] else '**NO**'} |")
@@ -1645,6 +1812,11 @@ def render_entry(w, e: dict, index: dict) -> None:
         w(f"- Required: {req}")
     if e["packages"]:
         w(f"- Supplied by: " + ", ".join(f"`{p}`" for p in e["packages"]))
+    elif e["category"] == "ENVIRONMENT_PREREQUISITE":
+        # Nothing was tested, so there is no feature to attribute and nothing for
+        # a package to supply. Saying so is the point of the entry.
+        w("- Supplied by: not applicable — the case did not reach a statement "
+          "about any FHIR feature, which is why it is in this appendix.")
     elif e["category"] in NO_SUPPLYING_PACKAGE:
         # Not a failed lookup. These categories are about the REST envelope and the
         # write path, which no FHIR package declares, so "not resolvable" would
@@ -1780,9 +1952,11 @@ def main() -> int:
     recon = analysis["reconciliation"]
     rel_md = out_md.relative_to(REPO) if out_md.is_relative_to(REPO) else out_md
     print(f"  {recon['failureRecordsAnalysed']} failing case(s) -> "
-          f"{recon['entries']} distinct defect(s) "
+          f"{recon['entries']} distinct finding(s) "
           f"({recon['irisGapEntries']} SUT, "
-          f"{recon['entries'] - recon['irisGapEntries']} test data)",
+          f"{recon['entries'] - recon['irisGapEntries']} not the SUT's: "
+          f"{recon['testDataDefects']} test-data and "
+          f"{recon['environmentPrerequisites']} unmet-precondition case(s))",
           file=sys.stderr)
     for cat, n in sorted(recon["byCategory"].items(), key=lambda kv: -kv[1]):
         print(f"    {n:5d}  {cat}", file=sys.stderr)

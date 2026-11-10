@@ -195,13 +195,27 @@ if not gaps:
           "can pass without proving much.", file=sys.stderr)
     raise SystemExit(0)
 
-sut = [g for g in gaps if g.get("category") != "TEST_DATA_DEFECT"]
+# The same two categories gap_report.py keeps out of the gap count: a defect in
+# our own test data, and a case whose precondition this deployment did not meet.
+# Named here rather than imported because this is a shell wrapper's summary, and
+# a stale list would overstate the work rather than crash - so it is kept short
+# and checked against the JSON's own count below.
+not_sut = {"TEST_DATA_DEFECT", "ENVIRONMENT_PREREQUISITE"}
+sut = [g for g in gaps if g.get("category") not in not_sut]
 print(f"  {r.get('irisGapCases', '?')} failing case(s) attributable to the SUT "
       f"-> {len(sut)} distinct defect(s) to fix", file=sys.stderr)
+if len(sut) != r.get("irisGapEntries", len(sut)):
+    print(f"  WARNING this summary counted {len(sut)} SUT finding(s) and the "
+          f"report counted {r['irisGapEntries']}. The report is authoritative; "
+          "this line's category list is out of date.", file=sys.stderr)
 if r.get("testDataDefects"):
     print(f"  {r['testDataDefects']} failure(s) are defects in this project's own "
           f"test data, segregated into the report's appendix and excluded from "
           f"that count", file=sys.stderr)
+if r.get("environmentPrerequisites"):
+    print(f"  {r['environmentPrerequisites']} failure(s) failed on a precondition "
+          f"this deployment did not meet (see the report's section 5.2) and are "
+          f"excluded from that count too", file=sys.stderr)
 if not r.get("balanced", True):
     print("  WARNING the reconciliation does not balance: not every failing case "
           "in the official report produced a finding. Treat the report as "
