@@ -121,7 +121,17 @@ RE_ALL_MATCHES = re.compile(
 # The type being searched, from the step that precedes the assertion. `all()` is
 # over the bundle's entries, so the resources that must carry the reference are of
 # the type the search targets - not of the type the reference points at.
-RE_SEARCH_URL = re.compile(r'(?:resource at|request to) "http://fhirserver/([A-Za-z]+)/\?')
+#
+# Three URL shapes are a search of a collection, and the suite writes all three:
+# `/Encounter/?date=...` (383 occurrences in 3.0.9), `/Encounter?_count=10` (12,
+# introduced by the Connect module) and `/DocumentReference` with no query at all
+# (11). A read is `/Encounter/${id}` and must not match, so the type may be
+# followed only by the query or by the end of the URL. `metadata` is excluded
+# because the CapabilityStatement step has that shape and is not a search; left in,
+# it would satisfy the "preceding search" test and so could mask a step shape this
+# check really does not model.
+RE_SEARCH_URL = re.compile(
+    r'(?:resource at|request to) "http://fhirserver/(?!metadata")([A-Za-z]+)/?(?=\?|")')
 
 # RE_DATA_KEY is imported from feature_parser rather than written again here: it
 # captures the *qualified* key (`data.patient-read-id` under 2.x, which loads

@@ -1,0 +1,99 @@
+# Values taken from the suite's precondition prose
+
+Each line names the staged body, then the feature file and line the
+value was read from. Nothing here is composed by the tool; each entry
+is checkable against the suite text it cites.
+
+- Observation-ICUext-Body-Temperature-Airway-617.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-Temperature-Airways.feature:50  display of B = 'Better'
+- Observation-ICUext-Body-Temperature-Airway-617.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-Temperature-Airways.feature:52  identifier system = 'https://fhir.krankenhaus.example/sid/observation', value left open
+- Observation-ICUext-Body-Temperature-Blood-617.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-Temperature-Blood.feature:34  display of 1222808002 = 'Core body temperature measured in blood'
+- Observation-ICUext-Body-Temperature-Blood-617.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-Temperature-Blood.feature:44  display of 60834-9 = 'Körpertemperatur - gemessen im Blut'
+- Observation-ICUext-Body-Temperature-Blood-617.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-Temperature-Blood.feature:49  display of 188436 = 'Blood temperature'
+- Observation-ICUext-Body-Temperature-Blood-617.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-Temperature-Blood.feature:54  effective is a Period
+- Observation-ICUext-Body-Temperature-Blood-617.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-Temperature-Blood.feature:60  display of B = 'Better'
+- Observation-ICUext-Body-Temperature-Blood-617.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-Temperature-Blood.feature:62  identifier system = 'https://fhir.krankenhaus.example/sid/observation', value left open
+- Observation-ICUext-Body-Temperature-Blood-617.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-Temperature-Blood.feature:68  unit of Cel = 'degree Celsius'
+- Observation-ICUext-Body-Temperature-Cervical-Spine-617.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-Temperature-CervicalSpine.feature:46  display of B = 'Better'
+- Observation-ICUext-Body-Temperature-Cervical-Spine-617.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-Temperature-CervicalSpine.feature:48  identifier system = 'https://fhir.krankenhaus.example/sid/observation', value left open
+- Observation-ICUext-Body-Temperature-Chest-617.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-Temperature-Chest.feature:46  display of B = 'Better'
+- Observation-ICUext-Body-Temperature-Chest-617.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-Temperature-Chest.feature:48  identifier system = 'https://fhir.krankenhaus.example/sid/observation', value left open
+- Observation-ICUext-Body-Temperature-Chest-617.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-Temperature-Chest.feature:52  display of 76752008 = 'Breast structure (body structure)'
+- Observation-ICUext-Body-Temperature-Esophagus-617.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-Temperature-Esophagus.feature:60  display of B = 'Better'
+- Observation-ICUext-Body-Temperature-Esophagus-617.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-Temperature-Esophagus.feature:62  identifier system = 'https://fhir.krankenhaus.example/sid/observation', value left open
+- Observation-ICUext-Body-Temperature-Lumbar-Spine-617.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-Temperature-LumbarSpine.feature:46  display of B = 'Better'
+- Observation-ICUext-Body-Temperature-Lumbar-Spine-617.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-Temperature-LumbarSpine.feature:48  identifier system = 'https://fhir.krankenhaus.example/sid/observation', value left open
+- Observation-ICUext-Body-Temperature-Myocardium-617.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-Temperature-Myocardium.feature:50  display of B = 'Better'
+- Observation-ICUext-Body-Temperature-Myocardium-617.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-Temperature-Myocardium.feature:52  identifier system = 'https://fhir.krankenhaus.example/sid/observation', value left open
+- Observation-ICUext-Body-Temperature-Nasopharynx-617.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-Temperature-Nasopharynx.feature:55  display of B = 'Better'
+- Observation-ICUext-Body-Temperature-Nasopharynx-617.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-Temperature-Nasopharynx.feature:57  identifier system = 'https://fhir.krankenhaus.example/sid/observation', value left open
+- Observation-ICUext-Body-Temperature-Thoracic-Spine-617.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-Temperature-ThoracicSpine.feature:46  display of B = 'Better'
+- Observation-ICUext-Body-Temperature-Thoracic-Spine-617.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-Temperature-ThoracicSpine.feature:48  identifier system = 'https://fhir.krankenhaus.example/sid/observation', value left open
+- Observation-ICUext-Cardiac-Output-617.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-CardiacOutput.feature:50  display of B = 'Better'
+- Observation-ICUext-Central-Venous-Blood-Pressure-617.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-CentralVenousPressure.feature:50  display of B = 'Better'
+- Observation-ICUext-Intracranial-Pressure-ICP.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-IntracranialPressure.feature:50  display of B = 'Better'
+- Observation-ICUext-Intracranial-Pressure-ICP.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-IntracranialPressure.feature:52  identifier system = 'https://fhir.krankenhaus.example/sid/observation', value left open
+- Observation-ICUext-Left-Atrial-Pressure-617.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-LeftAtrialPressure.feature:43  display of 150064 = 'MDC_PRESS_BLD_ATR_LEFT'
+- Observation-ICUext-Left-Atrial-Pressure-617.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-LeftAtrialPressure.feature:52  display of B = 'Better'
+- Observation-ICUext-Left-Atrial-Pressure-617.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-LeftAtrialPressure.feature:54  identifier system = 'https://fhir.krankenhaus.example/sid/observation', value left open
+- Observation-ICUext-Left-Ventricular-Cardiac-Index-617.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-LeftVentricularCardiacIndex.feature:50  display of B = 'Better'
+- Observation-ICUext-Left-Ventricular-Cardiac-Index-617.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-LeftVentricularCardiacIndex.feature:52  identifier system = 'https://fhir.krankenhaus.example/sid/observation', value left open
+- Observation-ICUext-Left-Ventricular-Cardiac-Index-By-Indicator-Dilution-617.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-LeftVentricularCardiacIndexThermodilution.feature:41  display of B = 'Better'
+- Observation-ICUext-Left-Ventricular-Cardiac-Index-By-Indicator-Dilution-617.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-LeftVentricularCardiacIndexThermodilution.feature:43  identifier system = 'https://fhir.krankenhaus.example/sid/observation', value left open
+- Observation-ICUext-Left-Ventricular-Cardiac-Output-By-Indicator-Dilution-17.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-LeftVentricularCardiacOutputThermodilution.feature:41  display of B = 'Better'
+- Observation-ICUext-Left-Ventricular-Cardiac-Output-By-Indicator-Dilution-17.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-LeftVentricularCardiacOutputThermodilution.feature:43  identifier system = 'https://fhir.krankenhaus.example/sid/observation', value left open
+- Observation-ICUext-Left-Ventricular-Pressure-617.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-LeftVentricularPressure.feature:38  display of 150100 = 'MDC_PRESS_BLD_VENT_LEFT'
+- Observation-ICUext-Left-Ventricular-Pressure-617.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-LeftVentricularPressure.feature:47  display of B = 'Better'
+- Observation-ICUext-Left-Ventricular-Pressure-617.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-LeftVentricularPressure.feature:49  identifier system = 'https://fhir.krankenhaus.example/sid/observation', value left open
+- Observation-ICUext-Left-Ventricular-Stroke-Volume-617.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-LeftVentricularStrokeVolume.feature:39  display of 150408 = 'MDC_VOL_BLD_VENT_LEFT_STROKE'
+- Observation-ICUext-Left-Ventricular-Stroke-Volume-617.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-LeftVentricularStrokeVolume.feature:50  display of B = 'Better'
+- Observation-ICUext-Left-Ventricular-Stroke-Volume-617.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-LeftVentricularStrokeVolume.feature:52  identifier system = 'https://fhir.krankenhaus.example/sid/observation', value left open
+- Observation-ICUext-Left-Ventricular-Stroke-Volume-By-Indicator-Dilution.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-LeftVentricularStrokeVolumeByThermodilution.feature:29  display of 8771-8 = 'Left ventricular Stroke volume by Indicator dilution'
+- Observation-ICUext-Left-Ventricular-Stroke-Volume-By-Indicator-Dilution.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-LeftVentricularStrokeVolumeByThermodilution.feature:35  effective is a Period
+- Observation-ICUext-Left-Ventricular-Stroke-Volume-By-Indicator-Dilution.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-LeftVentricularStrokeVolumeByThermodilution.feature:41  display of B = 'Better'
+- Observation-ICUext-Left-Ventricular-Stroke-Volume-By-Indicator-Dilution.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-LeftVentricularStrokeVolumeByThermodilution.feature:43  identifier system = 'https://fhir.krankenhaus.example/sid/observation', value left open
+- Observation-ICUext-Left-Ventricular-Stroke-Volume-By-Indicator-Dilution.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-LeftVentricularStrokeVolumeByThermodilution.feature:49  unit of mL = 'milliliter'
+- Observation-ICUext-Left-Ventricular-Stroke-Volume-Index-617.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-LeftVentricularStrokeVolumeIndex.feature:34  display of 150636 = 'MDC_VOL_BLD_STROKE_INDEX'
+- Observation-ICUext-Left-Ventricular-Stroke-Volume-Index-617.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-LeftVentricularStrokeVolumeIndex.feature:45  display of B = 'Better'
+- Observation-ICUext-Left-Ventricular-Stroke-Volume-Index-617.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-LeftVentricularStrokeVolumeIndex.feature:47  identifier system = 'https://fhir.krankenhaus.example/sid/observation', value left open
+- Observation-ICUext-Left-Ventricular-Stroke-Volume-Index-Example.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-LeftVentricularStrokeVolumeIndexByThermodilution.feature:29  display of 8791-6 = 'Left ventricular Stroke volume index by Indicator dilution'
+- Observation-ICUext-Left-Ventricular-Stroke-Volume-Index-Example.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-LeftVentricularStrokeVolumeIndexByThermodilution.feature:35  effective is a Period
+- Observation-ICUext-Left-Ventricular-Stroke-Volume-Index-Example.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-LeftVentricularStrokeVolumeIndexByThermodilution.feature:41  display of B = 'Better'
+- Observation-ICUext-Left-Ventricular-Stroke-Volume-Index-Example.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-LeftVentricularStrokeVolumeIndexByThermodilution.feature:43  identifier system = 'https://fhir.krankenhaus.example/sid/observation', value left open
+- Observation-ICUext-Left-Ventricular-Stroke-Volume-Index-Example.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-LeftVentricularStrokeVolumeIndexByThermodilution.feature:49  unit of mL/m2 = 'milliliter per square meter'
+- Observation-ICUext-O2-Saturation-In-Blood-Postductal-By-Pulse-Oximetry-67.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-O2SaturationPostductal.feature:29  display of 59418-4 = 'Oxygen saturation in Blood Postductal by Pulse oximetry'
+- Observation-ICUext-O2-Saturation-In-Blood-Postductal-By-Pulse-Oximetry-67.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-O2SaturationPostductal.feature:45  display of B = 'Better'
+- Observation-ICUext-O2-Saturation-In-Blood-Postductal-By-Pulse-Oximetry-67.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-O2SaturationPostductal.feature:47  identifier system = 'https://fhir.krankenhaus.example/sid/observation', value left open
+- Observation-ICUext-O2-Saturation-In-Blood-Preductal-By-Pulse-Oximetry-6.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-O2SaturationPreductal.feature:29  display of 59407-7 = 'Oxygen saturation in Blood Preductal by Pulse oximetry'
+- Observation-ICUext-O2-Saturation-In-Blood-Preductal-By-Pulse-Oximetry-6.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-O2SaturationPreductal.feature:45  display of B = 'Better'
+- Observation-ICUext-O2-Saturation-In-Blood-Preductal-By-Pulse-Oximetry-6.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-O2SaturationPreductal.feature:47  identifier system = 'https://fhir.krankenhaus.example/sid/observation', value left open
+- Observation-ICUext-Pulmonary-Arterial-Blood-Pressure-617.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-PulmonaryArterialPressure.feature:38  display of 76284-9 = 'Pulmonary artery Blood pressure'
+- Observation-ICUext-Pulmonary-Arterial-Blood-Pressure-617.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-PulmonaryArterialPressure.feature:43  display of 150044 = 'MDC_PRESS_BLD_ART_PULM'
+- Observation-ICUext-Pulmonary-Arterial-Blood-Pressure-617.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-PulmonaryArterialPressure.feature:52  display of B = 'Better'
+- Observation-ICUext-Pulmonary-Arterial-Blood-Pressure-617.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-PulmonaryArterialPressure.feature:54  identifier system = 'https://fhir.krankenhaus.example/sid/observation', value left open
+- Observation-ICUext-Pulmonary-Arterial-Wedge-Pressure-617.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-PulmonaryArterialWedgePressure.feature:50  display of B = 'Better'
+- Observation-ICUext-Pulmonary-Arterial-Wedge-Pressure-617.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-PulmonaryArterialWedgePressure.feature:52  identifier system = 'https://fhir.krankenhaus.example/sid/observation', value left open
+- Observation-ICUext-Pulmonary-Vascular-Resistance-Index-617.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-PulmonaryVascularResistanceIndex.feature:50  display of B = 'Better'
+- Observation-ICUext-Pulmonary-Vascular-Resistance-Index-617.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-PulmonaryVascularResistanceIndex.feature:52  identifier system = 'https://fhir.krankenhaus.example/sid/observation', value left open
+- Observation-ICUext-Right-Atrial-Pressure-617.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-RightAtrialPressure.feature:43  display of 150068 = 'MDC_PRESS_BLD_ATR_RIGHT'
+- Observation-ICUext-Right-Atrial-Pressure-617.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-RightAtrialPressure.feature:52  display of B = 'Better'
+- Observation-ICUext-Right-Atrial-Pressure-617.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-RightAtrialPressure.feature:54  identifier system = 'https://fhir.krankenhaus.example/sid/observation', value left open
+- Observation-ICUext-Right-Ventricular-Pressure-617.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-RightVentricularPressure.feature:38  display of 150104 = 'MDC_PRESS_BLD_VENT_RIGHT'
+- Observation-ICUext-Right-Ventricular-Pressure-617.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-RightVentricularPressure.feature:47  display of B = 'Better'
+- Observation-ICUext-Right-Ventricular-Pressure-617.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-RightVentricularPressure.feature:49  identifier system = 'https://fhir.krankenhaus.example/sid/observation', value left open
+- Observation-ICUext-Systemic-Vascular-Resistance-Index-617.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-SystemicVascularResistanceIndex.feature:50  display of B = 'Better'
+- Observation-ICUext-Systemic-Vascular-Resistance-Index-617.json  <- Stufe5/ICU/VitalSignExtended/Observation-Read-Ext-SystemicVascularResistanceIndex.feature:52  identifier system = 'https://fhir.krankenhaus.example/sid/observation', value left open
+- Observation-ISiKLaboruntersuchungCRP-Example.json  <- Stufe5/Labor/Observation-Read-CRP.feature:37  unit of mg/L = 'mg/L'
+- Observation-ISiKLaboruntersuchungGFR-Example.json  <- Stufe5/Labor/Observation-Read-GFR.feature:24  display of 98980-6 = 'Glomeruläre Filtrationsrate [Volumenrate/Fläche] in Serum, Plasma oder Blut mittels Creatinin- und Cystatin-C-basierter Formel (CKD-EPI 2021)/1,73 m²'
+- Observation-ISiKLaboruntersuchungHb-Example.json  <- Stufe5/Labor/Observation-Read-Hb.feature:24  display of 718-7 = 'Hämoglobin [Masse/Volumen] in Blut'
+- Observation-ISiKLaboruntersuchungHb-Example.json  <- Stufe5/Labor/Observation-Read-Hb.feature:37  unit of g/dL = 'g/dL'
+- Observation-ISiKLaboruntersuchungPCT-Example.json  <- Stufe5/Labor/Observation-Read-PCT.feature:24  display of 33959-8 = 'Procalcitonin [Masse/Volumen] in Serum oder Plasma'
+- Observation-ISiKLaboruntersuchungPCT-Example.json  <- Stufe5/Labor/Observation-Read-PCT.feature:37  unit of ng/mL = 'ng/mL'
+- Observation-ISiKLaboruntersuchungSerumkreatinin-Example.json  <- Stufe5/Labor/Observation-Read-Serumkreatinin.feature:24  display of 2160-0 = 'Creatinin [Masse/Volumen] in Serum oder Plasma'
+- Observation-ISiKLaboruntersuchungSerumkreatinin-Example.json  <- Stufe5/Labor/Observation-Read-Serumkreatinin.feature:37  unit of mg/dL = 'mg/dL'
+- Observation-ISiKLaboruntersuchungTSH-Example.json  <- Stufe5/Labor/Observation-Read-TSH.feature:24  display of 3015-5 = 'Thyreotropin [Einheiten/Volumen] in Blut'
+- Observation-ISiKLaboruntersuchungTSH-Example.json  <- Stufe5/Labor/Observation-Read-TSH.feature:37  unit of u[IU]/mL = 'u[IU]/mL'
+- Observation-ISiKLaboruntersuchungThrombozyten-Example.json  <- Stufe5/Labor/Observation-Read-Thrombozyten.feature:24  display of 26515-7 = 'Thrombozyten [#/Volumen] in Blut'
+- Observation-ISiKLaboruntersuchungThrombozyten-Example.json  <- Stufe5/Labor/Observation-Read-Thrombozyten.feature:37  unit of 10*3/uL = '10*3/uL'
+- Observation-ISiKLaboruntersuchungTroponin-Example.json  <- Stufe5/Labor/Observation-Read-Troponin.feature:24  display of 42757-5 = 'Troponin I.kardial [Masse/Volumen] in Blut'
+- Observation-Observation-ICU-Body-Height-Percentile.json  <- Stufe5/ICU/VitalSignMinimal/Observation-Read-Body-Height-Percentile-Age-dependent.feature:32  display of 248326004 = 'Body measure finding'
+- Observation-observation-read-body-weight-percentile-age-dependent-id.json  <- Stufe5/ICU/VitalSignMinimal/Observation-Read-Body-Weight-Percentile-Age-dependent.feature:32  display of 248326004 = 'Body measure finding'

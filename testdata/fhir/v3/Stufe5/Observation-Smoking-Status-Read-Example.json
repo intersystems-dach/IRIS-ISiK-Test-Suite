@@ -1,0 +1,53 @@
+{
+  "_provenance": "Overrides the shared Stufe5 body for a 3.x suite only. Test suite 3.0.9 changed the asserted subject of this Observation from ${basis.patient-read-id} to ${basis.patient-read-extended-id} (Stufe5/Basis/Observation-Smoking-Status-Read.feature:56); suite 2.7.0 asserts the former at the same line. One body cannot satisfy both, so the shared body keeps the 2.x target and this copy carries the 3.x one. No other element differs.",
+  "resourceType": "Observation",
+  "status": "final",
+  "code": {
+    "coding": [
+      {
+        "system": "http://snomed.info/sct",
+        "version": "http://snomed.info/sct/11000274103/version/{{data.snomed-ct-version}}",
+        "code": "77176002",
+        "display": "Smoker"
+      },
+      {
+        "system": "http://loinc.org",
+        "version": "{{data.loinc-version}}",
+        "code": "72166-2",
+        "display": "Tobacco smoking status"
+      }
+    ]
+  },
+  "subject": {
+    "reference": "Patient/{{basis.patient-read-extended-id}}"
+  },
+  "encounter": {
+    "reference": "Encounter/{{data.encounter-read-in-progress-id}}"
+  },
+  "effectiveDateTime": "2026-01-06T08:00:00+01:00",
+  "performer": [
+    {
+      "reference": "Practitioner/{{data.practitioner-read-id}}"
+    }
+  ],
+  "category": [
+    {
+      "coding": [
+        {
+          "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+          "code": "social-history"
+        }
+      ]
+    }
+  ],
+  "valueCodeableConcept": {
+    "coding": [
+      {
+        "system": "http://loinc.org",
+        "version": "{{data.loinc-version}}",
+        "code": "LA15920-4",
+        "display": "Former smoker"
+      }
+    ]
+  }
+}

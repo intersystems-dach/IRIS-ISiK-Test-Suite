@@ -1,0 +1,76 @@
+{
+  "bodySite": {
+    "coding": [
+      {
+        "code": "45206002",
+        "display": "Nasal structure",
+        "system": "http://snomed.info/sct"
+      },
+      {
+        "code": "45206002",
+        "display": "Nasal structure",
+        "system": "http://snomed.info/sct",
+        "version": "http://snomed.info/sct/11000274103/version/20251115"
+      }
+    ]
+  },
+  "category": [
+    {
+      "coding": [
+        {
+          "code": "vital-signs",
+          "display": "Vital Signs",
+          "system": "http://terminology.hl7.org/CodeSystem/observation-category"
+        }
+      ]
+    }
+  ],
+  "code": {
+    "coding": [
+      {
+        "code": "8310-5",
+        "display": "Körpertemperatur",
+        "system": "http://loinc.org"
+      },
+      {
+        "code": "188504",
+        "display": "Nasal temperature",
+        "system": "urn:iso:std:iso:11073:10101"
+      },
+      {
+        "code": "76010-8",
+        "display": "Nasal temperature",
+        "system": "http://loinc.org"
+      },
+      {
+        "code": "76010-8",
+        "display": "Nasal temperature",
+        "system": "http://loinc.org",
+        "version": "2.81"
+      }
+    ]
+  },
+  "device": {
+    "reference": "Device/{{icuminimal.observation-device-id}}"
+  },
+  "effectiveDateTime": "2026-03-12T09:10:00+01:00",
+  "encounter": {
+    "reference": "Encounter/{{icuminimal.observation-encounter-id}}"
+  },
+  "performer": [
+    {
+      "reference": "Practitioner/{{icuminimal.observation-practitioner-id}}"
+    }
+  ],
+  "resourceType": "Observation",
+  "status": "final",
+  "subject": {
+    "reference": "Patient/{{icuminimal.observation-patient-id}}"
+  },
+  "valueQuantity": {
+    "code": "Cel",
+    "system": "http://unitsofmeasure.org",
+    "unit": "degree Celsius",
+    "value": 35.9
+  }
+}

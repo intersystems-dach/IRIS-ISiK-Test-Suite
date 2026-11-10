@@ -1,0 +1,71 @@
+{
+  "bodySite": {
+    "coding": [
+      {
+        "code": "39352004",
+        "display": "Joint structure",
+        "system": "http://snomed.info/sct"
+      },
+      {
+        "code": "39352004",
+        "display": "Joint structure",
+        "system": "http://snomed.info/sct",
+        "version": "http://snomed.info/sct/11000274103/version/20251115"
+      }
+    ]
+  },
+  "category": [
+    {
+      "coding": [
+        {
+          "code": "vital-signs",
+          "display": "Vital Signs",
+          "system": "http://terminology.hl7.org/CodeSystem/observation-category"
+        }
+      ]
+    }
+  ],
+  "code": {
+    "coding": [
+      {
+        "code": "250124002",
+        "display": "Joint temperature",
+        "system": "http://snomed.info/sct"
+      },
+      {
+        "code": "8310-5",
+        "display": "Körpertemperatur",
+        "system": "http://loinc.org"
+      },
+      {
+        "code": "250124002",
+        "display": "Joint temperature",
+        "system": "http://snomed.info/sct",
+        "version": "http://snomed.info/sct/11000274103/version/20251115"
+      }
+    ]
+  },
+  "device": {
+    "reference": "Device/{{icuminimal.observation-device-id}}"
+  },
+  "effectiveDateTime": "2026-03-12T09:00:00+01:00",
+  "encounter": {
+    "reference": "Encounter/{{icuminimal.observation-encounter-id}}"
+  },
+  "performer": [
+    {
+      "reference": "Practitioner/{{icuminimal.observation-practitioner-id}}"
+    }
+  ],
+  "resourceType": "Observation",
+  "status": "final",
+  "subject": {
+    "reference": "Patient/{{icuminimal.observation-patient-id}}"
+  },
+  "valueQuantity": {
+    "code": "Cel",
+    "system": "http://unitsofmeasure.org",
+    "unit": "degree Celsius",
+    "value": 34.8
+  }
+}

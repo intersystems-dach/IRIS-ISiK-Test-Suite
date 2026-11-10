@@ -1,0 +1,120 @@
+{
+  "category": [
+    {
+      "coding": [
+        {
+          "code": "laboratory",
+          "system": "http://terminology.hl7.org/CodeSystem/observation-category"
+        }
+      ]
+    }
+  ],
+  "code": {
+    "coding": [
+      {
+        "code": "26515-7",
+        "display": "Thrombozyten [#/Volumen] in Blut",
+        "system": "http://loinc.org"
+      },
+      {
+        "code": "365632008",
+        "display": "Platelet count - finding",
+        "system": "http://snomed.info/sct"
+      },
+      {
+        "code": "26515-7",
+        "display": "Thrombozyten [#/Volumen] in Blut",
+        "system": "http://loinc.org",
+        "version": "2.81"
+      },
+      {
+        "code": "365632008",
+        "display": "Platelet count - finding",
+        "system": "http://snomed.info/sct",
+        "version": "http://snomed.info/sct/11000274103/version/20251115"
+      }
+    ]
+  },
+  "device": {
+    "display": "Sysmex XN-1000 Hämatologie-Analysator"
+  },
+  "effectiveDateTime": "2024-05-14",
+  "encounter": {
+    "reference": "Encounter/{{labor.observation-encounter-id}}"
+  },
+  "interpretation": [
+    {
+      "coding": [
+        {
+          "code": "N",
+          "display": "Normal",
+          "system": "http://terminology.hl7.org/CodeSystem/v3-ObservationInterpretation"
+        }
+      ]
+    }
+  ],
+  "issued": "2024-05-14",
+  "note": [
+    {
+      "text": "Unauffälliger Thrombozytenwert."
+    }
+  ],
+  "performer": [
+    {
+      "reference": "Practitioner/{{labor.observation-practitioner-id}}"
+    }
+  ],
+  "referenceRange": [
+    {
+      "high": {
+        "code": "10*3/uL",
+        "system": "http://unitsofmeasure.org",
+        "value": 400
+      },
+      "low": {
+        "code": "10*3/uL",
+        "system": "http://unitsofmeasure.org",
+        "value": 150
+      }
+    },
+    {
+      "high": {
+        "code": "10*3/uL",
+        "system": "http://unitsofmeasure.org",
+        "value": 400
+      },
+      "low": {
+        "code": "10*3/uL",
+        "system": "http://unitsofmeasure.org",
+        "value": 150
+      },
+      "type": {
+        "coding": [
+          {
+            "code": "normal",
+            "system": "http://terminology.hl7.org/CodeSystem/referencerange-meaning"
+          }
+        ]
+      }
+    }
+  ],
+  "resourceType": "Observation",
+  "specimen": {
+    "identifier": [
+      {
+        "system": "https://example.org/fhir/sid/proben",
+        "value": "PRB-2024-1003"
+      }
+    ]
+  },
+  "status": "final",
+  "subject": {
+    "reference": "Patient/{{labor.observation-patient-id}}"
+  },
+  "valueQuantity": {
+    "code": "10*3/uL",
+    "system": "http://unitsofmeasure.org",
+    "unit": "10*3/uL",
+    "value": 178
+  }
+}

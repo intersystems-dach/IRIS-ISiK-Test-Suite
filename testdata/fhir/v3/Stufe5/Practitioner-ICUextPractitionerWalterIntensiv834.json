@@ -1,0 +1,113 @@
+{
+  "resourceType": "Practitioner",
+  "id": "ICUextPractitionerWalterIntensiv834",
+  "identifier": [
+    {
+      "type": {
+        "coding": [
+          {
+            "system": "http://terminology.hl7.org/CodeSystem/v2-0203",
+            "code": "LANR"
+          }
+        ]
+      },
+      "system": "https://fhir.kbv.de/NamingSystem/KBV_NS_Base_ANR",
+      "value": "123456789"
+    },
+    {
+      "type": {
+        "coding": [
+          {
+            "system": "http://terminology.hl7.org/CodeSystem/v2-0203",
+            "code": "DN"
+          }
+        ]
+      },
+      "system": "http://fhir.de/sid/bundesaerztekammer/efn",
+      "value": "123456789123456"
+    },
+    {
+      "type": {
+        "coding": [
+          {
+            "system": "http://terminology.hl7.org/CodeSystem/v2-0203",
+            "code": "PRN"
+          }
+        ]
+      },
+      "system": "https://gematik.de/fhir/sid/telematik-id",
+      "value": "123456789"
+    }
+  ],
+  "active": true,
+  "name": [
+    {
+      "use": "official",
+      "family": "Musterarzt",
+      "_family": {
+        "extension": [
+          {
+            "url": "http://hl7.org/fhir/StructureDefinition/humanname-own-name",
+            "valueString": "Musterarzt"
+          }
+        ]
+      },
+      "given": [
+        "Walter"
+      ]
+    }
+  ],
+  "telecom": [
+    {
+      "system": "phone",
+      "value": "030 1234567",
+      "use": "work"
+    }
+  ],
+  "address": [
+    {
+      "extension": [
+        {
+          "url": "http://hl7.org/fhir/StructureDefinition/iso21090-ADXP-precinct",
+          "valueString": "Wilmersdorf"
+        }
+      ],
+      "use": "work",
+      "type": "both",
+      "line": [
+        "Musterweg 13"
+      ],
+      "_line": [
+        {
+          "extension": [
+            {
+              "url": "http://hl7.org/fhir/StructureDefinition/iso21090-ADXP-streetName",
+              "valueString": "Musterweg"
+            },
+            {
+              "url": "http://hl7.org/fhir/StructureDefinition/iso21090-ADXP-houseNumber",
+              "valueString": "13"
+            }
+          ]
+        }
+      ],
+      "city": "Berlin",
+      "postalCode": "11111",
+      "country": "DE"
+    }
+  ],
+  "gender": "male",
+  "qualification": [
+    {
+      "code": {
+        "coding": [
+          {
+            "system": "urn:oid:1.2.276.0.76.5.514",
+            "code": "010",
+            "display": "FA Allgemeinmedizin"
+          }
+        ]
+      }
+    }
+  ]
+}

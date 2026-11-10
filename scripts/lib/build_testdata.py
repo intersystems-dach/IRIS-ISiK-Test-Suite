@@ -80,7 +80,10 @@ human reading a search expression. Keeping them apart means the count of invento
 rows still reconciles against the extractor, and a reviewer can see at a glance
 which resources exist on our judgement rather than on the suite's contract. Each
 one carries a `_provenance` comment naming the scenario that requires it; the key is
-stripped before the file is written, since it is not valid FHIR.
+stripped before the file is written, since it is not valid FHIR. An ordinary body
+may carry the same key, where there is something to say about why it exists - an
+override of a shared body in a generation-specific tree, above all - and it is
+stripped there too. It is only *required* under `extra/`.
 
 `extra/` bodies get no `meta.profile` stamped from requirements.json - there is no
 row to stamp from - so a profile claim there must be written as `{{profile.Name}}`
@@ -417,6 +420,12 @@ def main() -> int:
                 continue
 
             doc = json.loads(src.read_text(encoding="utf-8"))
+            # An authored body may carry a `_provenance` comment, exactly as an
+            # `extra/` body must. It is optional here and required there, but it is
+            # stripped the same way, because it is not valid FHIR. A body in a
+            # generation-specific tree that overrides a shared one is the case this
+            # exists for: the reason for the override belongs beside it.
+            doc.pop("_provenance", None)
             if doc.get("resourceType") != r["resourceType"]:
                 problems.append(f"  {src.name}: declares resourceType "
                                 f"{doc.get('resourceType')!r}, inventory says "
