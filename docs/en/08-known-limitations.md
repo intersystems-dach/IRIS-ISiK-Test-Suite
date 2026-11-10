@@ -303,14 +303,18 @@ or fails on whether IRIS returns what the step demands, which is what the step
 would demand of any vendor. The defect is that the specification tells the vendor
 to prepare something else.
 
-### Eight defects in this rig, surfaced by the same bump
+### Nine defects in this rig, surfaced by the same bump
 
 Recorded here because this is the class of thing a version bump is supposed to
-expose. All eight are fixed. None changed a verdict in any round, and the reason
-is stated per defect rather than asserted once. Defects 1 to 3 are in the phase
-pipeline and were reached in that order, each stopping a round; defects 4 to 8 are
-in `reconcile_testdata.py`, the tool that brings the fabricated Level 5 bodies into
-line with the suite's assertions, and are grouped after them.
+expose. All nine are fixed. Defects 1 to 8 changed no verdict in any round, and
+the reason is stated per defect rather than asserted once; defect 9 changed no
+verdict either, but it would have changed an attribution, which is the one thing
+this rig exists to get right, so its evidence is given in full. Defects 1 to 3 are
+in the phase pipeline and were reached in that order, each stopping a round;
+defects 4 to 8 are in `reconcile_testdata.py`, the tool that brings the fabricated
+Level 5 bodies into line with the suite's assertions, and are grouped after them.
+Defect 9 is in `search_reference_check.py`, the gate that decides whether an empty
+search result is the system's deficiency or ours.
 
 **1. The base FHIR R4 package lost its only bundled payload.**
 `hl7.fhir.r4.core#4.0.1` is added to every level by `plan_packages.py` as an
@@ -483,6 +487,62 @@ this rig: `make check` passed on the corpus that carried it, because no check he
 holds R4 cardinality, and an `exists()` assertion is satisfied by a single-element
 array as readily as by an object. Also like defect 4, it is a case of satisfying a
 step rather than stating the specification.
+
+**9. A search criterion was a requirement on the corpus, and nothing held it.**
+`search_reference_check.py` exists so that "no search results were found" is never
+charged to IRIS when the corpus is what is missing. It mined that requirement from
+two *assertion* shapes, both of which name a reference. A search can also demand
+data through its own query string, with nothing in the scenario naming the element:
+
+```gherkin
+Scenario: Search for the RiskAssessment that belong to a Patient, by Risk
+  Then Get FHIR resource at "http://fhirserver/RiskAssessment/?risk=
+      http://terminology.hl7.org/CodeSystem/risk-probability%7Chigh&patient=..."
+  And FHIR current response body evaluates the FHIRPath
+      'entry.resource.count() > 0' ...
+```
+
+That `risk` searches `RiskAssessment.prediction.qualitativeRisk` is stated only in
+the `SearchParameter` definition in `hl7.fhir.r4.core#4.0.1`, so the corpus
+satisfied every reference requirement and still held no resource this search could
+find: the seeded `RiskAssessment-Read-Example` carried no `prediction` at all.
+
+What makes this one worth recording precisely is how it presented. In Round C the
+search returned `total 0` and the case was charged to IRIS as a conformance
+defect. In Round A — same rig, same corpus deficiency — the identical request
+returned two resources and the case passed. The two resources were
+`RiskAssessment/74` and `RiskAssessment-Update-Original-Example`, both written
+earlier *in that same run* by the suite's own Create and Update scenarios: suite
+2.7.0 executed those before the searches (17:29:37 and 17:43:24, against 17:55:30)
+and 3.0.9 after them (21:31:53 and 21:46:54, against 21:18:49). So the corpus never
+satisfied the scenario in either round, and the earlier round's pass rested on an
+execution order that is not the suite's contract. A defect that reports itself as a
+product regression on a version bump is the most expensive kind this rig can hold,
+which is why the gate was extended rather than the one resource quietly fixed.
+
+Token criteria are now mined from the query string of the search that precedes an
+`entry.resource.count() > 0` assertion — only there, since only there does the
+suite require a non-empty result — resolved to an element path through the pinned
+packages' `SearchParameter` definitions, and checked like any other requirement.
+Measured over Stufe 5 of 3.0.9: 53 criteria in scope, 84 not modelled and reported
+as such. The check gates `make all`, so it is deliberately conservative: a
+criterion fails only when the parameter resolves to exactly one plain element path
+rooted at the searched type. `Observation.code | Observation.component.code` is two
+and is skipped rather than halved, and a `where(...)` filter or an `as` cast is
+skipped likewise — guessing a path would make the gate fail rounds over its own
+modelling error. The authored corpus gained the one element the criterion needs,
+`prediction.qualitativeRisk` of `risk-probability|high`. That element is not
+invented for the search: `de.gematik.isik#5.1.3`'s `ISiKAMTSBewertung` marks
+`RiskAssessment.prediction.qualitativeRisk` `mustSupport: true` at 0..1 and binds
+it `extensible` to `http://hl7.org/fhir/ValueSet/risk-probability`, whose
+CodeSystem is the one the suite's criterion names. The seeded resource validates
+against the profile with no error-severity issue.
+
+One false positive of the first implementation is recorded because it is the kind
+that would make a gate like this untrustworthy: query strings are form-encoded, so
+`telecom=030+1234567` is `030 1234567`, and decoding with `unquote` rather than
+`unquote_plus` reported a passing scenario as unsatisfied against a correctly
+seeded Patient.
 
 **The standing remedy for defects 5 and 8, recorded and not yet taken.** Both
 arise from the same source: `reconcile_testdata.py` holds its FHIR R4 structural

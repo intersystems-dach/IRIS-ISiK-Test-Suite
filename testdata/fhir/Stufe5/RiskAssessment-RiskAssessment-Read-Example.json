@@ -37,6 +37,18 @@
       "reference": "Observation/{{data.riskassessment-observation-id}}"
     }
   ],
+  "prediction": [
+    {
+      "qualitativeRisk": {
+        "coding": [
+          {
+            "system": "http://terminology.hl7.org/CodeSystem/risk-probability",
+            "code": "high"
+          }
+        ]
+      }
+    }
+  ],
   "mitigation": "Monitor INR weekly and adjust the dose accordingly.",
   "note": [
     {
