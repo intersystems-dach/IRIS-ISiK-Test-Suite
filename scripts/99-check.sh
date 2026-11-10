@@ -20,8 +20,9 @@
 #   3. every YAML file parses; the Tiger templates parse once rendered
 #   4. the placeholders the templates use are exactly the ones the renderer
 #      substitutes, in both directions
-#   5. the test-data contract: no undefined ${data.*} keys, no empty values, and
-#      the requirement extractor runs clean over all 220 feature files
+#   5. the test-data contract: no undefined ${<namespace>.<key>} references, no
+#      empty values, and the requirement extractor runs clean over every feature
+#      file of the pinned release
 #  5b. the fabricated test data itself: it renders, it satisfies every assertion
 #      the feature files make about it, it carries every reference a search
 #      scenario filters on, and it can be ordered for seeding. These are the same
@@ -58,6 +59,75 @@ pass()    { printf '  %sPASS%s  %s\n' "$C_GRN" "$C_RESET" "$*"; }
 fail()    { printf '  %sFAIL%s  %s\n' "$C_RED" "$C_RESET" "$*"; FAILURES=$((FAILURES+1)); }
 skip()    { printf '  %sSKIP%s  %s\n' "$C_YEL" "$C_RESET" "$*"; SKIPPED=$((SKIPPED+1)); }
 note()    { printf '  %s      %s%s\n' "$C_DIM" "$*" "$C_RESET"; }
+
+# -----------------------------------------------------------------------------
+# Which suite generation this working tree is checked against
+# -----------------------------------------------------------------------------
+# Sections 5 and 5b walk the levels, the test-data contract and the Tiger
+# templates of ONE suite generation, and release 3.0.0 changed all three: ISiK
+# Level 3 was removed from the suite, and the single `data` key namespace became
+# one namespace per module. A check that assumed either shape would report the
+# other one as broken, so the shape is resolved first, from the same
+# TESTSUITE_VERSION a round would use.
+#
+# Precedence: an exported value, then .env, then .env.example. The last entry is
+# what lets `make check` run on a fresh clone with no configuration at all, which
+# is most of what this script exists for. Only the pinned version is read, not
+# TESTSUITE_VERSION_TRACK=latest - resolving that needs the network, and this
+# script must work without it; a tracked round that resolves to another
+# generation is caught by 25-extract-requirements.sh instead.
+env_file_var() {
+  # Last assignment wins, as sourcing the file does. Surrounding quotes are
+  # stripped because .env accepts them and the value is used as a version string.
+  local v
+  [[ -f "$1" ]] || return 1
+  v="$(sed -n "s/^[[:space:]]*$2=//p" "$1" | tail -n1 | tr -d "\"'")"
+  [[ -n "$v" ]] || return 1
+  printf '%s' "$v"
+}
+
+SUITE_VERSION="${TESTSUITE_VERSION:-}"
+SUITE_VERSION_FROM="the environment"
+if [[ -z "$SUITE_VERSION" ]]; then
+  if SUITE_VERSION="$(env_file_var .env TESTSUITE_VERSION)"; then
+    SUITE_VERSION_FROM=".env"
+  elif SUITE_VERSION="$(env_file_var .env.example TESTSUITE_VERSION)"; then
+    SUITE_VERSION_FROM=".env.example"
+  else
+    SUITE_VERSION=""
+  fi
+fi
+
+# Resolved through lib.sh in a subshell, never by a second copy of the mapping
+# here: two copies would eventually disagree, and the symptom would be a check
+# that passes against levels no round runs. A subshell because lib.sh sets -e,
+# which this script deliberately does not (see the header), and because it
+# assigns PACKAGES_DIR unconditionally, which section 5b lets the caller override.
+SUITE_GENERATION=''
+SUITE_LEVELS=''
+SUITE_TESTDATA_ROOT=''
+SUITE_TIGER_DIR=''
+SUITE_FHIR_ROOTS=''
+if [[ -z "$SUITE_VERSION" ]]; then
+  fail "TESTSUITE_VERSION is set neither in the environment nor in .env nor in .env.example - the suite generation, and with it which ISiK levels exist, cannot be resolved"
+elif ! shape="$(TESTSUITE_VERSION="$SUITE_VERSION" REPO_ROOT="$REPO_ROOT" \
+                bash -c '. scripts/lib.sh
+                         printf "%s\n%s\n%s\n%s\n%s\n" "$(suite_generation)" \
+                           "$(suite_levels)" "$(suite_testdata_root)" \
+                           "$(suite_tiger_dir)" "$(suite_fhir_roots)"' 2>&1)"; then
+  fail "TESTSUITE_VERSION=${SUITE_VERSION} (from ${SUITE_VERSION_FROM}) does not resolve to a suite generation:"
+  printf '%s\n' "$shape" | sed 's/^/        /' | head -n 12
+else
+  { read -r SUITE_GENERATION
+    read -r SUITE_LEVELS
+    read -r SUITE_TESTDATA_ROOT
+    read -r SUITE_TIGER_DIR
+    read -r SUITE_FHIR_ROOTS; } <<< "$shape"
+fi
+# Repo-relative, for the messages: an absolute path to a clone is noise in a
+# failure a reader has to act on.
+SUITE_TESTDATA_REL="${SUITE_TESTDATA_ROOT#$REPO_ROOT/}"
+SUITE_TIGER_REL="${SUITE_TIGER_DIR#$REPO_ROOT/}"
 
 # -----------------------------------------------------------------------------
 section "1. Shell syntax"
@@ -371,15 +441,30 @@ section "5. Test-data contract"
 # resource in the SUT - the single most misleading failure this rig can produce.
 #
 # Needs the feature files, which `make packages` extracts from the pinned image.
-if [[ ! -d vendor/upstream/features ]]; then
+#
+# Which keys, and which levels, is a property of the pinned release: the checks
+# below read the contract of ONE generation out of $(suite_testdata_root) and
+# judge scope for the levels of $(suite_levels).
+if [[ -n "$SUITE_GENERATION" ]]; then
+  note "suite ${SUITE_VERSION} (${SUITE_GENERATION}, from ${SUITE_VERSION_FROM}): levels ${SUITE_LEVELS}, contract ${SUITE_TESTDATA_REL}/, templates ${SUITE_TIGER_REL}/"
+fi
+if [[ -z "$SUITE_GENERATION" ]]; then
+  skip "suite generation unresolved - the test-data contract cannot be located"
+elif [[ ! -d vendor/upstream/features ]]; then
   skip "vendor/upstream/features absent - undefined-key check needs 'make packages' first"
   # The value check does not need the features and is always worth doing.
-  python3 - <<'PY'
+  python3 - "$SUITE_TESTDATA_ROOT" $SUITE_LEVELS <<'PY'
 import pathlib, sys
 import yaml
 
+root = pathlib.Path(sys.argv[1])
+# The levels of the pinned release, not every directory present: both generations
+# are kept in the tree, and a file from the other one is not part of this round's
+# contract.
+levels = sys.argv[2:]
+
 fails, total, upstream_empty = 0, 0, []
-for p in sorted(pathlib.Path("testdata").glob("Stufe*/*.yaml")):
+for p in sorted(q for lv in levels for q in (root / lv).glob("*.yaml")):
     data = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
     if not isinstance(data, dict):
         print(f"  FAIL  {p}: expected a flat key -> value mapping")
@@ -406,7 +491,7 @@ for e in upstream_empty:
 PY
   (( $? == 0 )) || FAILURES=$((FAILURES+1))
 else
-  python3 - <<'PY'
+  python3 - "$SUITE_TESTDATA_ROOT" "$SUITE_TIGER_DIR" $SUITE_LEVELS <<'PY'
 import os, pathlib, sys
 import yaml
 
@@ -416,15 +501,42 @@ import yaml
 # would show up as a check that passes while the documentation says otherwise.
 sys.path.insert(0, "scripts/lib")
 import feature_parser as fp
+import extract_requirements as er
+
+root = pathlib.Path(sys.argv[1])
+tiger_dir = pathlib.Path(sys.argv[2])
+levels = sys.argv[3:]
+
+# A test datum is identified by its QUALIFIED name `<namespace>.<key>`, because
+# that is what a feature file writes and because 3.0.9 defines three key names in
+# several modules with DIFFERENT values per module - a bare key is therefore not
+# an identity. The namespace a contract file's keys live in is the `baseKey` the
+# Tiger configuration loads it under, and nothing derives it from the file name
+# (dokumentenaustausch.yaml -> `dokument`), so it is read from the configuration
+# templates by the same loader the extractor uses.
+basekeys = er.load_basekeys(tiger_dir)
 
 fails = 0
-for stufe in ("Stufe3", "Stufe5"):
+for stufe in levels:
     defined = {}
     in_scope = {}
-    for p in sorted(pathlib.Path("testdata", stufe).glob("*.yaml")):
+    for p in sorted((root / stufe).glob("*.yaml")):
         data = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+        # The shape check the extractor's minimal reader deliberately leaves to
+        # this script: a nested mapping would be silently misread there.
+        if not isinstance(data, dict):
+            print(f"  FAIL  {p}: expected a flat key -> value mapping")
+            sys.exit(1)
+        ns = basekeys.get(f"{stufe}/{p.name}")
+        if ns is None:
+            # Staged but never loaded: every key in it resolves to nothing, and a
+            # scenario then sends the literal placeholder to the system under test.
+            print(f"  FAIL  {p} is staged as test data but no Tiger template under "
+                  f"{tiger_dir}/ loads it, so its key namespace is unknown")
+            fails += 1
+            continue
         for k, v in data.items():
-            defined[k] = (p.name, v)
+            defined[f"{ns}.{k}"] = (p.name, v)
             # Only our own overlay files are held to having a value; see the
             # sibling branch above for why upstream's empties are left alone.
             if (v is None or not str(v).strip()) and p.name.startswith("zz-"):
@@ -468,14 +580,15 @@ for stufe in ("Stufe3", "Stufe5"):
     # both an executed and a skipped feature stays required.
     missing = sorted(k for k in in_scope if k not in defined and k not in runtime)
     for k in missing:
-        print(f"  FAIL  {stufe}: ${{data.{k}}} used at {in_scope[k][0]} but defined nowhere in testdata/{stufe}/")
+        print(f"  FAIL  {stufe}: ${{{k}}} used at {in_scope[k][0]} "
+              f"but defined nowhere in {root}/{stufe}/")
         fails += 1
     unused_oos = sorted(k for k in used
                         if k not in in_scope and k not in defined and k not in runtime)
     print(f"  {'PASS' if not missing else 'FAIL'}  {stufe}: {len(defined)} keys defined, "
           f"{len(used)} referenced, {len(runtime)} set at run time, {len(missing)} unresolved")
     for k in unused_oos:
-        print(f"        not required: ${{data.{k}}} is used only by features that "
+        print(f"        not required: ${{{k}}} is used only by features that "
               f"{expr!r} does not select ({used[k][0]})")
 
 if fails:
@@ -490,9 +603,14 @@ PY
   # when one ${data.*} key is used with two different FHIR resource types, because
   # its level-wide type merge is then invalid. Both are release-bump hazards, and
   # both would otherwise first appear during `make packages`.
+  # Run at the generation's own shape: with the wrong --levels it would exit on a
+  # level the corpus does not carry, and without --tiger-templates every key of a
+  # 3.x corpus would be read as living in the 2.x namespace `data`.
   if err="$(python3 scripts/lib/extract_requirements.py \
               --features-root vendor/upstream/features \
-              --testdata-root testdata \
+              --testdata-root "$SUITE_TESTDATA_ROOT" \
+              --tiger-templates "$SUITE_TIGER_DIR" \
+              --levels "$SUITE_LEVELS" \
               --out-dir "$(mktemp -d)" 2>&1 >/dev/null)"; then
     pass "requirement extraction succeeds over all feature files"
   else
@@ -517,7 +635,9 @@ section "5b. Fabricated test data"
 # PACKAGES_DIR is honoured if the caller exports one, so this section is runnable
 # on a host where the packages were unpacked somewhere other than vendor/.
 CHECK_PACKAGES="${PACKAGES_DIR:-vendor/packages}"
-if [[ ! -f vendor/requirements.json ]]; then
+if [[ -z "$SUITE_GENERATION" ]]; then
+  skip "suite generation unresolved - the authored test data cannot be rendered"
+elif [[ ! -f vendor/requirements.json ]]; then
   skip "vendor/requirements.json absent - test-data checks need 'make packages' first"
 # maxdepth 3, not 2: 20-fetch-packages.sh unpacks with --strip-components=1 so
 # package.json sits at the package directory's root, but build_testdata.py also
@@ -538,9 +658,15 @@ else
   # Rendered into a temporary tree rather than build/: `make check` must not
   # disturb a corpus a seeding run may be about to write, and a check that mutates
   # the working tree cannot be run while something else is in progress.
+  # One --src per authored tree of the generation, shared tree first, exactly as
+  # 50-seed.sh renders it: a 3.x round reads testdata/fhir and testdata/fhir/v3,
+  # and checking only one of them would miss the resources the other supplies.
+  CHECK_SRC=()
+  for root in $SUITE_FHIR_ROOTS; do CHECK_SRC+=(--src "$root"); done
   if out="$(python3 scripts/lib/build_testdata.py \
-              --packages "$CHECK_PACKAGES" --out "$BUILD_TMP" 2>&1)"; then
-    pass "test data renders for both levels"
+              --packages "$CHECK_PACKAGES" --out "$BUILD_TMP" \
+              --levels "$SUITE_LEVELS" "${CHECK_SRC[@]}" 2>&1)"; then
+    pass "test data renders for ${SUITE_LEVELS}"
     printf '%s\n' "$out" | grep -E '^Stufe[35]:' | sed 's/^/        /'
     # The renderer notes every meta.profile claim that no assertion corroborates -
     # legitimate for a `never-read` or `fixture-body` row, where the claim is the
@@ -554,7 +680,7 @@ else
     printf '%s\n' "$out" | sed 's/^/        /' | head -n 30
   fi
 
-  for level in Stufe3 Stufe5; do
+  for level in $SUITE_LEVELS; do
     if [[ ! -d "${BUILD_TMP}/${level}" ]]; then
       skip "${level}: nothing rendered - assertion check not run"
       continue
@@ -569,12 +695,26 @@ else
     fi
   done
 
-  if [[ -d "${BUILD_TMP}/Stufe3" || -d "${BUILD_TMP}/Stufe5" ]]; then
+  # "Anything rendered at all", over the generation's own levels: a 3.x round has
+  # no Stufe3 directory by construction, and testing for one would read that as an
+  # empty render and skip the three checks below.
+  RENDERED_ANY=0
+  for level in $SUITE_LEVELS; do
+    [[ -d "${BUILD_TMP}/${level}" ]] && RENDERED_ANY=1
+  done
+
+  if (( RENDERED_ANY )); then
     # Tag expressions come from the environment if set, exactly as the extractor
     # does it, so a narrowed debugging scope is checked at the scope it will run.
+    # --tags-stufe3 is passed only when the suite carries Stufe 3, as 50-seed.sh
+    # does it, so that a 3.x round names no expression for a level it will not run.
+    SR_TAGS=()
+    [[ " ${SUITE_LEVELS} " == *" Stufe3 "* ]] && \
+      SR_TAGS+=(--tags-stufe3 "${TESTS_TO_RUN_STUFE3:-@Stufe3 and (not @Optional)}")
     if out="$(python3 scripts/lib/search_reference_check.py \
                 --data-root "$BUILD_TMP" \
-                --tags-stufe3 "${TESTS_TO_RUN_STUFE3:-@Stufe3 and (not @Optional)}" \
+                --levels "$SUITE_LEVELS" \
+                "${SR_TAGS[@]}" \
                 --tags-stufe5 "${TESTS_TO_RUN_STUFE5:-@Stufe5 and (not @Optional)}" 2>&1)"; then
       pass "search-scenario reference requirements are satisfied"
       printf '%s\n' "$out" | grep -E '^Stufe[35]:' | sed 's/^/        /'
@@ -594,7 +734,7 @@ else
   # but only after a licensed image, a bootstrap and a seeding pass - and the same
   # misspelling in a reference target would have surfaced in the official report as
   # an IRIS search failure rather than as our own data defect.
-  if [[ -d "${BUILD_TMP}/Stufe3" || -d "${BUILD_TMP}/Stufe5" ]]; then
+  if (( RENDERED_ANY )); then
     if out="$(python3 scripts/lib/choice_type_check.py \
                 --src "$BUILD_TMP" --packages "$CHECK_PACKAGES" 2>&1)"; then
       pass "$(printf '%s\n' "$out" | tail -n1)"
@@ -607,7 +747,7 @@ else
   # Reference ordering. Reported rather than failed: a cycle is a property of the
   # suite's own precondition prose (Encounter.diagnosis <-> Condition.encounter),
   # not a defect in this repository, and the seeder closes it with a second write.
-  for level in Stufe3 Stufe5; do
+  for level in $SUITE_LEVELS; do
     [[ -d "${BUILD_TMP}/${level}" ]] || continue
     if out="$(python3 scripts/lib/seed_order.py --level "$level" \
                 --data-root "$BUILD_TMP" 2>&1)"; then
@@ -638,8 +778,18 @@ done < <(grep -oE '\$\(SCRIPTS\)/[0-9a-z-]+\.sh' Makefile | sed 's|\$(SCRIPTS)|s
 # Compose bind-mount sources under run/ must be produced by the renderer, and the
 # renderer's outputs must be mounted. A mismatch means compose fails at container
 # start with a message about a path, not about the cause.
-python3 - <<'PY'
+python3 - "$SUITE_LEVELS" <<'PY'
 import pathlib, re, sys
+
+# Every ISiK level this rig has ever rendered a configuration for - NOT the levels
+# of this round. compose/ is one file shared by both suite generations, so a mount
+# for a level the pinned release no longer carries is correct and must not fail;
+# the service that mounts it is simply never started. A mount for a level no
+# generation ever had is a typo, and that is what this list separates out.
+ALL_LEVELS = ("stufe3", "stufe5")
+# Unresolved generation (reported by its own check in section 5): fall back to
+# every known level, so this check still compares something.
+levels = sys.argv[1].lower().split() or list(ALL_LEVELS)
 
 compose = pathlib.Path("compose/testsuite.yml").read_text(encoding="utf-8")
 mounted = set(re.findall(r"- \./run/(tiger/[A-Za-z0-9._/-]+\.yaml):", compose))
@@ -647,27 +797,42 @@ renderer = pathlib.Path("scripts/30-render-config.sh").read_text(encoding="utf-8
 
 fails = 0
 
-# The renderer builds its output paths from a loop variable, so there is no
-# literal list of them in the code to compare against. Its header block does list
-# them, and that block is what the operator and the documentation both read - so
-# checking against it verifies the two things that can drift: the header going
-# stale, and a mount pointing at a file nothing produces.
-declared = set(re.findall(r"#   (run/tiger/[A-Za-z0-9._/-]+\.yaml)", renderer))
-declared = {d[len("run/"):] for d in declared}
-if not declared:
-    print("  FAIL  scripts/30-render-config.sh header lists no run/tiger/*.yaml outputs")
+# The renderer writes one configuration per suite_levels(), so neither the code
+# nor its header carries a literal list of output paths: the header names each
+# FAMILY, as `run/tiger/tiger-isik-<level>.yaml`. That header block is what the
+# operator and the documentation both read, so comparing the families expanded
+# over the pinned generation's levels against the mounts verifies the two things
+# that can drift: the header going stale, and a mount pointing at a file nothing
+# produces.
+families = {d[len("run/"):]
+            for d in re.findall(r"#   (run/tiger/[A-Za-z0-9._/<>-]+\.yaml)", renderer)
+            if "<level>" in d}
+if not families:
+    print("  FAIL  scripts/30-render-config.sh header lists no "
+          "run/tiger/...<level>....yaml output families")
     sys.exit(1)
-only_mounted = mounted - declared
-only_declared = declared - mounted
-for m in sorted(only_mounted):
-    print(f"  FAIL  compose mounts run/{m} but scripts/30-render-config.sh does not list it as an output")
-    fails += 1
-for d in sorted(only_declared):
+
+
+def expand(lvs):
+    return {f.replace("<level>", lv) for f in families for lv in lvs}
+
+
+expected = expand(levels)       # rendered by THIS generation
+ever = expand(ALL_LEVELS)       # rendered by some generation
+
+for d in sorted(expected - mounted):
     print(f"  FAIL  scripts/30-render-config.sh writes run/{d} but no compose service mounts it")
+    fails += 1
+for m in sorted(mounted - ever):
+    print(f"  FAIL  compose mounts run/{m} but scripts/30-render-config.sh does not list it as an output")
     fails += 1
 if fails:
     sys.exit(1)
-print(f"  PASS  {len(mounted)} rendered files, compose mounts and renderer outputs agree")
+print(f"  PASS  {len(expected)} rendered configuration file(s) for {' '.join(levels)}, "
+      f"compose mounts and renderer outputs agree")
+for m in sorted(mounted - expected):
+    print(f"        mounted but not rendered: run/{m} - the pinned release carries only "
+          f"{', '.join(levels)}, and the service mounting it is not started")
 
 # The same invariant for the Web Gateway's two rendered files, which the base compose
 # file mounts rather than compose/testsuite.yml. Worth its own check: these two are
@@ -721,6 +886,11 @@ internal = {
     "PROXY_ADMIN_PORT", "UPSTREAM_TESTDATA", "PARITY_FILE", "ALLOWED_ADDED",
     "CRED_FILE", "MGMT_PW_FILE", "SUT_BASE_HOST3", "SUT_BASE_HOST5",
     "SUT_BASE_NET3", "SUT_BASE_NET5",
+    # 30-render-config.sh's accumulators: the configuration files it rendered this
+    # round, and the endpoint rows of run/CREDENTIALS.md. Both are built from
+    # suite_levels(), so an operator-set value would describe a round other than
+    # the one being rendered.
+    "RENDERED_CONFIGS", "ENDPOINT_ROWS",
     # Web Gateway rendering internals. GATEWAY_IRIS_PASSWORD is deliberately NOT an
     # operator setting: it is assigned from IRIS_MGMT_PASSWORD so that the value the
     # bootstrap sets on CSPSystem and the value in the rendered CSP.ini cannot drift.
@@ -753,6 +923,14 @@ internal = {
     "IRIS_KEY_PATH", "KEY_MODE", "KEY_OWNER", "NEW_MODE",
     "C_YEL", "C_DIM", "FAILURES", "SKIPPED",
     "LIB", "BUILD_DIR", "BUILD_TMP", "SEED_DIR", "SEED_LOG", "CHECK_PACKAGES",
+    # 99-check.sh's own resolution of the suite shape. SUITE_VERSION is read FROM
+    # the documented TESTSUITE_VERSION (in the environment, .env or .env.example)
+    # and the rest are derived from it by suite_*() in lib.sh - a separate
+    # operator setting would let `make check` examine a generation no round runs.
+    "SUITE_VERSION", "SUITE_VERSION_FROM", "SUITE_GENERATION", "SUITE_LEVELS",
+    "SUITE_TESTDATA_ROOT", "SUITE_TIGER_DIR", "SUITE_FHIR_ROOTS",
+    "SUITE_TESTDATA_REL", "SUITE_TIGER_REL", "CHECK_SRC", "SR_TAGS",
+    "RENDERED_ANY",
     # 60-run-tests.sh. TESTS_TO_RUN is derived from the documented
     # TESTS_TO_RUN_STUFE3/5 and exported for compose, so it is an internal name
     # even though the container reads it as its own setting.

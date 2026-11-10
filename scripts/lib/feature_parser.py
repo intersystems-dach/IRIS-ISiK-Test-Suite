@@ -463,8 +463,31 @@ def count_cases(feature: Feature, predicate, include_preconditions: bool = False
 # same profile.
 # -----------------------------------------------------------------------------
 
-RE_DATA_KEY = re.compile(r"\$\{data\.([A-Za-z0-9_.-]+)\}")
-RE_STORE_VAR = re.compile(r'in variable "data\.([A-Za-z0-9_.-]+)"')
+# A test datum is identified by its QUALIFIED name, `<namespace>.<key>`, in every
+# artefact this rig produces. For suite 2.x that is always `data.<key>`, the one
+# namespace it has, so the qualified form is what its feature files already
+# spell. For 3.x the namespace is the module's, and qualification is not
+# cosmetic: three key names are defined with different values in different
+# modules, so a bare key does not identify a resource. See suite_namespaces() in
+# scripts/lib.sh.
+#
+# The namespace is matched by shape rather than against a fixed list, so that a
+# namespace this rig has not been told about still yields a key rather than
+# unrecognised text that seeds nothing. Whether a namespace is one the test
+# environment actually loads is checked where that is knowable - against the
+# baseKeys of the Tiger configuration, in extract_requirements.analyse.
+#
+# Safe because it is measured, not assumed: every one of the 2107 `${...}`
+# occurrences in the 2.7.0 corpus and the 2323 in 3.0.9 is a test-data
+# reference. The suite has no other `${}` interpolation.
+#
+# One capture group, deliberately: the pattern is embedded in the resource-type
+# inference rules of extract_requirements.py, which index their own groups
+# around it.
+DATA_KEY_PATTERN = r"\$\{([A-Za-z0-9_]+\.[A-Za-z0-9_.-]+)\}"
+
+RE_DATA_KEY = re.compile(DATA_KEY_PATTERN)
+RE_STORE_VAR = re.compile(r'in variable "([A-Za-z0-9_]+\.[A-Za-z0-9_.-]+)"')
 
 # `is a valid <module> resource and conforms to profile "<canonical>"` and its
 # variant without the article. <module> is the refv-plugin id, which is what makes
@@ -484,6 +507,7 @@ RE_ENDPOINT_PATH = re.compile(r"http://fhirserver/([A-Za-z]+)")
 
 
 def data_keys_in(text: str) -> set[str]:
+    """The qualified test-data keys `text` references."""
     return set(RE_DATA_KEY.findall(text))
 
 

@@ -188,6 +188,189 @@ require_var() {
   done
 }
 
+# --- The shape of the pinned test suite -------------------------------------
+# gematik/isik-testsuite 3.0.0 changed the suite's shape, not merely its content.
+# ReleaseNotes.md for that release states both changes as breaking:
+#
+#   "Breaking Change: Tests for ISiK Level 3 have been removed"
+#   "Breaking Change: Test Resources IDs have been renamed/modified"
+#
+# and the "removed" section names "ISiK Level 3 Modules, Validation Plugins and
+# Settings". Measured against the 3.0.9 tag: the repository carries one Tiger
+# configuration (tiger-isik-stufe5.yaml, no stufe3 counterpart), one validation
+# plugin (refv-plugins/valmodule-isik5-refv-plugin.zip), and feature files only
+# under src/test/resources/features/Stufe5/.
+#
+# The second shape change is the key namespace. Through 2.7.0 every test-data
+# file was loaded under `baseKey: data`, so a feature referenced
+# `${data.patient-read-id}`. From 3.0.0 each module file has its own baseKey
+# (basis, dokument, medikation, terminplanung, vitalparameter, connect,
+# icuminimal, icuextended, labor) and features reference
+# `${basis.patient-read-id}`. This is not cosmetic: three key names carry
+# different values in different namespaces in 3.0.9 -
+#
+#   observation-patient-id       icuextended: ICUext-PatientinMusterfrau-617
+#                                icuminimal:  Patient-Read-Extended-Example
+#                                labor:       Patient-Read-Example
+#                                vitalparameter: Patient-Read-Extended-Example
+#   observation-encounter-id     four namespaces, three distinct values
+#   observation-practitioner-id  four namespaces, two distinct values
+#
+# so a flat key space would silently resolve one module's placeholder to another
+# module's resource. Every tool in this rig therefore identifies a test-datum by
+# its fully qualified `<baseKey>.<key>`, which is exactly the string the feature
+# files write. For a 2.x suite that is `data.<key>` for every key, so the two
+# generations share one implementation rather than branching.
+#
+# What this function selects is the set of inputs that differ between
+# generations - the levels that exist, where the test-data contract lives, and
+# which Tiger templates to render. It deliberately does NOT branch on behaviour:
+# a round against 2.7.0 after this change renders and runs exactly as before.
+suite_generation() {
+  local v="${TESTSUITE_VERSION:-}"
+  [[ -n "$v" ]] || die "TESTSUITE_VERSION must be set before the suite shape can be resolved"
+  case "$v" in
+    1.*|2.*)   printf '2x' ;;
+    3.*)       printf '3x' ;;
+    # A version this rig has never seen must stop the round rather than be
+    # guessed at: the shape changed once already, between 2.7.0 and 3.0.0, and
+    # the failure mode of guessing wrong is a round that measures the wrong
+    # thing while reporting success.
+    *) die "TESTSUITE_VERSION='${v}' belongs to no suite generation this rig knows.
+  Known: 1.x and 2.x (two levels, single 'data' key namespace), 3.x (Stufe 5
+  only, per-module key namespaces). Read the release's ReleaseNotes.md for
+  shape changes, then extend suite_generation() in scripts/lib.sh." ;;
+  esac
+}
+
+# The levels the pinned suite actually contains, as directory names. Scripts loop
+# over this rather than over a literal "Stufe3 Stufe5", so that a level the suite
+# does not carry is absent from the configuration, the seed, and the reports -
+# rather than present and empty, which reads as a level that was run and scored
+# nothing.
+suite_levels() {
+  case "$(suite_generation)" in
+    2x) printf 'Stufe3 Stufe5' ;;
+    3x) printf 'Stufe5' ;;
+  esac
+}
+
+# Lower-case form, as used in file names (tiger-isik-stufe5.yaml, reports/stufe5/).
+suite_levels_lc() {
+  local l out=""
+  for l in $(suite_levels); do
+    out="${out}${out:+ }$(printf '%s' "$l" | tr '[:upper:]' '[:lower:]')"
+  done
+  printf '%s' "$out"
+}
+
+# Where the generation's test-data contract and Tiger templates live. Kept in
+# separate trees rather than overwritten in place so that a round against 2.7.0
+# remains re-creatable from this repository at any later commit - the 2026-08-07
+# baseline round and this round's primary result both depend on that.
+suite_testdata_root() {
+  case "$(suite_generation)" in
+    2x) printf '%s/testdata' "$REPO_ROOT" ;;
+    3x) printf '%s/testdata/v3' "$REPO_ROOT" ;;
+  esac
+}
+
+suite_tiger_dir() {
+  case "$(suite_generation)" in
+    2x) printf '%s/tiger' "$REPO_ROOT" ;;
+    3x) printf '%s/tiger/v3' "$REPO_ROOT" ;;
+  esac
+}
+
+# The authored FHIR bodies. The shared `common/` tree is generation-independent
+# by construction - a body there carries {{<ns>.<key>}} placeholders and no
+# literal ID - so both generations read it, and each adds its own tree for the
+# resources only it needs.
+suite_fhir_roots() {
+  case "$(suite_generation)" in
+    2x) printf '%s/testdata/fhir' "$REPO_ROOT" ;;
+    3x) printf '%s/testdata/fhir %s/testdata/fhir/v3' "$REPO_ROOT" "$REPO_ROOT" ;;
+  esac
+}
+
+# The test-data contract of the pinned release, as paths below testdata/ in the
+# suite's own repository. 20-fetch-packages.sh downloads exactly this list from
+# the release tag and 30-render-config.sh proves the staged copies equal it, so
+# the list is the definition of what "unmodified contract" means for a round. It
+# is enumerated rather than discovered, because a file silently missing from a
+# directory listing would weaken the proof to "equal to whatever we found".
+#
+# 3.x: nine files, one per Level 5 module, Level 3 having been removed in 3.0.0.
+# The four names after vitalparameter are the modules 3.0.0 added.
+suite_contract_files() {
+  case "$(suite_generation)" in
+    2x) printf '%s\n' Stufe3/basis.yaml Stufe3/dokumentenaustausch.yaml \
+                      Stufe3/medikation.yaml Stufe3/shared.yaml \
+                      Stufe3/terminplanung.yaml Stufe3/vitalparameter.yaml \
+                      Stufe5/basis.yaml Stufe5/dokumentenaustausch.yaml \
+                      Stufe5/medikation.yaml Stufe5/terminplanung.yaml \
+                      Stufe5/vitalparameter.yaml ;;
+    3x) printf '%s\n' Stufe5/basis.yaml Stufe5/dokumentenaustausch.yaml \
+                      Stufe5/medikation.yaml Stufe5/terminplanung.yaml \
+                      Stufe5/vitalparameter.yaml Stufe5/connect.yaml \
+                      Stufe5/icu-minimal.yaml Stufe5/icu-extended.yaml \
+                      Stufe5/labor.yaml ;;
+  esac
+}
+
+# Our own additions to the contract: one overlay file per namespace that needs a
+# key the release defines nowhere. They are the only files 30-render-config.sh
+# may stage without an upstream counterpart, so the list is also the parity
+# check's allow-list - a file appearing beside them is an accident and stops the
+# round. Each key in them is justified in docs/en/05-testdata.md.
+#
+# 2.x needs one key per level. 3.x needs two, and they must live in separate
+# files because the overlay is loaded under the baseKey of the module whose key
+# it completes: Location-read-active-id belongs to `basis`,
+# RiskAssessment-read-id to `medikation`.
+suite_overlay_files() {
+  case "$(suite_generation)" in
+    2x) printf '%s\n' Stufe3/zz-upstream-key-defects.yaml \
+                      Stufe5/zz-upstream-key-defects.yaml ;;
+    3x) printf '%s\n' Stufe5/zz-upstream-key-defects-basis.yaml \
+                      Stufe5/zz-upstream-key-defects-medikation.yaml ;;
+  esac
+}
+
+# The test-data namespaces the feature files of this generation reference, i.e.
+# the `baseKey` of every entry in the Tiger configuration. A feature file writes
+# ${<namespace>.<key>}, so this list is what makes a placeholder recognisable at
+# all: a namespace missing from it turns every key of that module into
+# unrecognised text, which seeds nothing and reads downstream as a resource the
+# system under test does not have.
+#
+# 2.x loads all five of its files under the single namespace `data`. 3.0.0
+# replaced that with one namespace per module; the names are upstream's and are
+# not derivable from the file names (dokumentenaustausch.yaml -> `dokument`,
+# icu-minimal.yaml -> `icuminimal`). 30-render-config.sh checks this list against
+# the baseKeys of the rendered configuration, so the two cannot drift apart.
+#
+# Note that 45 of the 262 key names of 3.0.9 are defined in more than one module.
+# Three of them - observation-encounter-id, observation-patient-id and
+# observation-practitioner-id - carry *different* values per module, which is why
+# a test datum is identified throughout this rig by the qualified
+# <namespace>.<key> and never by the bare key.
+suite_namespaces() {
+  case "$(suite_generation)" in
+    2x) printf 'data' ;;
+    3x) printf 'basis dokument medikation terminplanung vitalparameter connect icuminimal icuextended labor' ;;
+  esac
+}
+
+# Documentation baselines: the diff targets for this generation's Tiger
+# templates. 3.0.0 removed tiger-isik-stufe3.yaml along with the level.
+suite_tiger_baselines() {
+  case "$(suite_generation)" in
+    2x) printf '%s\n' tiger-isik-stufe3.yaml tiger-isik-stufe5.yaml serenity.properties ;;
+    3x) printf '%s\n' tiger-isik-stufe5.yaml serenity.properties ;;
+  esac
+}
+
 # --- Compose ----------------------------------------------------------------
 # Always both files, always from the repository root: compose/testsuite.yml uses
 # project-root-relative bind mounts, and compose resolves those against the

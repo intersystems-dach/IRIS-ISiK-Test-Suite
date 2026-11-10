@@ -80,12 +80,14 @@ log "reading ${nfeat} feature files from ${FEATURES_DIR#$REPO_ROOT/}"
 mkdir -p "$OUT_DIR"
 python3 "${SCRIPTS_DIR}/lib/extract_requirements.py" \
     --features-root "$FEATURES_DIR" \
-    --testdata-root "${REPO_ROOT}/testdata" \
+    --testdata-root "$(suite_testdata_root)" \
+    --tiger-templates "$(suite_tiger_dir)" \
+    --levels "$(suite_levels)" \
     --out-dir "$OUT_DIR" \
     --json-out "$JSON_OUT" \
     --source-label "$SOURCE_LABEL" \
-    --tags-stufe3 "${TESTS_TO_RUN_STUFE3:?TESTS_TO_RUN_STUFE3 must be set in .env}" \
     --tags-stufe5 "${TESTS_TO_RUN_STUFE5:?TESTS_TO_RUN_STUFE5 must be set in .env}" \
+    ${TESTS_TO_RUN_STUFE3:+--tags-stufe3 "$TESTS_TO_RUN_STUFE3"} \
   || die "requirement extraction failed - see above"
 
 # -----------------------------------------------------------------------------

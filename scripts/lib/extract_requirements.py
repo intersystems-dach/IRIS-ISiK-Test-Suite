@@ -69,6 +69,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from feature_parser import (  # noqa: E402
+    DATA_KEY_PATTERN,
+    RE_DATA_KEY,
     RE_PROFILE_FULL,
     RE_PROFILE_SHORT,
     data_keys_in,
@@ -79,7 +81,24 @@ from feature_parser import (  # noqa: E402
     runtime_keys_in,
 )
 
-KEY = r"\$\{data\.([A-Za-z0-9_.-]+)\}"
+# A test datum, captured as its QUALIFIED name `<namespace>.<key>` - `data.x` in
+# suite 2.x, which has one namespace, and `basis.x`, `icuminimal.x` and so on in
+# 3.x, which replaced it with one namespace per ISiK module. Qualification is not
+# cosmetic there: observation-encounter-id, observation-patient-id and
+# observation-practitioner-id are each defined by several modules with DIFFERENT
+# values, so a bare key does not identify a resource.
+#
+# The namespace is matched by shape rather than against a fixed list, so that a
+# namespace this rig has not been told about still yields a key instead of
+# unrecognised text that seeds nothing. Which namespaces are legitimate is then
+# checked separately, against the baseKeys of the Tiger configuration itself (see
+# load_basekeys and the namespace check in analyse). Measured on both corpora:
+# every `${...}` occurrence in the feature files and fixtures of 2.7.0 (2107) and
+# 3.0.9 (2323) is a test-data reference, so nothing else can match this shape.
+#
+# Defined once, in feature_parser, so that the gap-analysis index and this
+# extractor cannot disagree about what a key is.
+KEY = DATA_KEY_PATTERN
 
 # -----------------------------------------------------------------------------
 # Resource-type inference
@@ -352,15 +371,25 @@ def attribute_assertions(feature, values: dict[str, object] | None = None) -> di
     - `$.responseCode` and `$.header.*` are properties of the HTTP exchange. They
       are requirements on IRIS, not on our JSON.
 
-    ``values`` resolves `${data.key}` inside an expected value to the ID the suite's
-    own contract assigns it, so a reference requirement reads `Patient-Read-Example`
-    rather than a placeholder the author would have to look up by hand.
+    ``values`` resolves `${<namespace>.<key>}` inside an expected value to the ID
+    the suite's own contract assigns it, so a reference requirement reads
+    `Patient-Read-Example` rather than a placeholder the author would have to look
+    up by hand.
+
+    Keyed by the QUALIFIED name, and matched with feature_parser.RE_DATA_KEY
+    rather than a second pattern written here. Both halves are load-bearing: a
+    pattern of its own hardcoding the 2.x namespace `data` resolves nothing in a
+    3.x corpus, and a lookup by the bare key resolves nothing once ``values`` is
+    qualified. Either way every reference assertion keeps its placeholder, and
+    assertion_check.py then reports correct seed data as failing to carry a
+    reference whose required value it was never told - measured on the 2.7.0
+    corpus as 56 of 122 EXACT assertions failing, all of them spuriously.
     """
     values = values or {}
 
     def resolve_placeholders(text: str) -> str:
-        return re.sub(r"\$\{data\.([A-Za-z0-9_.-]+)\}",
-                      lambda m: str(values.get(m.group(1), m.group(0))), text)
+        return RE_DATA_KEY.sub(
+            lambda m: str(values.get(m.group(1), m.group(0))), text)
 
     out: dict[str, list[dict]] = collections.defaultdict(list)
     for scenario in feature.scenarios:
@@ -540,7 +569,56 @@ def infer_fixture_types(body: str, own_ids: set[str]) -> dict[str, set[str]]:
     return found
 
 
-def load_testdata(testdata_root: Path, level: str) -> tuple[dict[str, object], dict[str, str]]:
+# -----------------------------------------------------------------------------
+# Which namespace a test-data file is loaded under
+# -----------------------------------------------------------------------------
+# Taken from the Tiger configuration rather than from a list kept here, because
+# the configuration is what actually decides it: Tiger loads
+# `testdata/Stufe5/icu-minimal.yaml` under `baseKey: icuminimal`, and no rule
+# derives that name from the file name. A second copy of the mapping in this file
+# could disagree with the configuration, and the symptom would be a key resolving
+# to nothing - which downstream reads as a resource the system under test lacks.
+RE_CFG_FILENAME = re.compile(r"^\s*-\s*filename:\s*(\S+)\s*$")
+RE_CFG_BASEKEY = re.compile(r"^\s*baseKey:\s*(\S+)\s*$")
+
+
+def load_basekeys(tiger_dir: Path) -> dict[str, str]:
+    """`Stufe5/basis.yaml` -> `basis`, for every configuration in `tiger_dir`.
+
+    The level is part of the key because file names repeat across levels
+    (Stufe3/basis.yaml and Stufe5/basis.yaml in 2.x).
+    """
+    out: dict[str, str] = {}
+    for tmpl in sorted(tiger_dir.glob("*.tmpl")):
+        pending: str | None = None
+        for raw in tmpl.read_text(encoding="utf-8").splitlines():
+            m = RE_CFG_FILENAME.match(raw)
+            if m:
+                if pending is not None:
+                    sys.exit(f"{tmpl}: `filename: {pending}` has no baseKey")
+                pending = m.group(1)
+                continue
+            m = RE_CFG_BASEKEY.match(raw)
+            if m and pending is not None:
+                rel = pending[len("testdata/"):] if pending.startswith("testdata/") else pending
+                prev = out.get(rel)
+                if prev is not None and prev != m.group(1):
+                    sys.exit(
+                        f"{tmpl}: {rel} is loaded under baseKey {m.group(1)!r} here but "
+                        f"{prev!r} in another configuration of the same generation"
+                    )
+                out[rel] = m.group(1)
+                pending = None
+        if pending is not None:
+            sys.exit(f"{tmpl}: `filename: {pending}` has no baseKey")
+    if not out:
+        sys.exit(f"no `filename:`/`baseKey:` pairs in any *.tmpl under {tiger_dir}")
+    return out
+
+
+def load_testdata(
+    testdata_root: Path, level: str, basekeys: dict[str, str] | None = None
+) -> tuple[dict[str, object], dict[str, str]]:
     """The suite's key->value contract for one level, plus which file defines each.
 
     Parsed with a deliberately minimal YAML reader rather than PyYAML: this module
@@ -569,6 +647,18 @@ def load_testdata(testdata_root: Path, level: str) -> tuple[dict[str, object], d
     if not d.is_dir():
         return values, origin
     for path in sorted(d.glob("*.yaml")):
+        # The namespace this file's keys live in. Absent a configuration to read
+        # it from, `data` - the single namespace of suite 2.x.
+        if basekeys is None:
+            ns = "data"
+        else:
+            ns = basekeys.get(f"{level}/{path.name}")
+            if ns is None:
+                sys.exit(
+                    f"{path} is staged as test data but no Tiger configuration "
+                    f"loads it, so the namespace its keys live in is unknown. "
+                    f"Either add it to the configuration template or remove it."
+                )
         for raw in path.read_text(encoding="utf-8").splitlines():
             line = raw.rstrip()
             if not line or line.lstrip().startswith("#") or ":" not in line:
@@ -585,16 +675,47 @@ def load_testdata(testdata_root: Path, level: str) -> tuple[dict[str, object], d
                 val = val.split(" #", 1)[0].rstrip()
             elif len(val) >= 2 and val[0] == val[-1] and val[0] in ("'", '"'):
                 val = val[1:-1]
-            values[key.strip()] = val
-            origin[key.strip()] = path.name
+            qualified = f"{ns}.{key.strip()}"
+            values[qualified] = val
+            origin[qualified] = path.name
     return values, origin
 
 
-def analyse(features_root: Path, testdata_root: Path, tag_expr: dict[str, str]) -> dict:
+def analyse(features_root: Path, testdata_root: Path, tag_expr: dict[str, str],
+            basekeys: dict[str, str] | None = None) -> dict:
     features = load_features(features_root)
 
     preds = {lvl: parse_tag_expression(expr) for lvl, expr in tag_expr.items()}
-    testdata = {lvl: load_testdata(testdata_root, lvl) for lvl in tag_expr}
+    testdata = {lvl: load_testdata(testdata_root, lvl, basekeys) for lvl in tag_expr}
+
+    # --- Does the corpus reference a namespace nothing loads? ------------------
+    # KEY matches a namespace by shape, so an unexpected one yields keys rather
+    # than unrecognised text. That is the safe failure mode, but it must not pass
+    # silently: a namespace no configuration loads cannot resolve, and every key
+    # in it would reach the system under test as the literal string
+    # "${namespace.key}" - a request that fails for a reason which has nothing to
+    # do with conformance.
+    if basekeys is not None:
+        declared = set(basekeys.values())
+        seen: dict[str, set[str]] = collections.defaultdict(set)
+        for f in features:
+            for key in data_keys_in(f.text):
+                ns = key.split(".", 1)[0]
+                if ns not in declared:
+                    seen[ns].add(f.rel)
+        if seen:
+            detail = "\n".join(
+                f"    ${{{ns}.*}} in {len(files)} feature file(s), e.g. {sorted(files)[0]}"
+                for ns, files in sorted(seen.items())
+            )
+            sys.exit(
+                "the feature corpus references test-data namespaces that no Tiger "
+                "configuration loads:\n" + detail + "\n"
+                f"  configured namespaces: {', '.join(sorted(declared))}\n"
+                "  Every key in an unloaded namespace reaches the system under test "
+                "as a literal\n  placeholder. Add the module's file and baseKey to the "
+                "configuration template."
+            )
 
     out: dict = {
         "featuresRoot": str(features_root),
@@ -1243,6 +1364,17 @@ def main() -> int:
                     help="path for requirements.json (default: <out-dir>/requirements.json)")
     ap.add_argument("--tags-stufe3", default="@Stufe3 and (not @Optional)")
     ap.add_argument("--tags-stufe5", default="@Stufe5 and (not @Optional)")
+    # The levels the pinned release contains - suite_levels() in scripts/lib.sh.
+    # Test suite 3.0.0 removed ISiK Level 3, and a level named here but absent
+    # from the corpus is an error, not an empty table: an empty requirement table
+    # reads as a level that was examined and found to require nothing.
+    ap.add_argument("--levels", default="Stufe3 Stufe5")
+    # The generation's Tiger configuration templates. Read for one thing only:
+    # which namespace each test-data file is loaded under. Omitted, every file is
+    # assumed to be in `data`, which is correct for suite 2.x.
+    ap.add_argument("--tiger-templates", type=Path, default=None,
+                    help="directory of tiger-isik-*.yaml.tmpl, source of the "
+                         "filename -> baseKey mapping")
     # What the generated documents name as their source. The local extraction path
     # is not provenance - it says nothing about which release produced these lines
     # and leaks the host's directory layout into an auditable document - so the
@@ -1252,10 +1384,17 @@ def main() -> int:
                          "'gematik1/isik-testsuite:2.7.0 (sha256:...)'")
     args = ap.parse_args()
 
+    all_tags = {"Stufe3": args.tags_stufe3, "Stufe5": args.tags_stufe5}
+    levels = args.levels.split()
+    for lvl in levels:
+        if lvl not in all_tags:
+            sys.exit(f"--levels names {lvl!r}, which is not an ISiK level this rig knows")
+
     data = analyse(
         args.features_root,
         args.testdata_root,
-        {"Stufe3": args.tags_stufe3, "Stufe5": args.tags_stufe5},
+        {lvl: all_tags[lvl] for lvl in levels},
+        load_basekeys(args.tiger_templates) if args.tiger_templates else None,
     )
     data["source"] = args.source_label or str(args.features_root)
 

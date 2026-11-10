@@ -1,0 +1,46 @@
+# =============================================================================
+# Alias for an undefined ${medikation.*} key in the upstream feature files
+# =============================================================================
+# NOT an upstream file. See zz-upstream-key-defects-basis.yaml beside it for the
+# full rationale and for the evidence that the nine files around them are
+# byte-identical copies of gematik/isik-testsuite 3.0.9.
+#
+# Loaded under `baseKey: medikation`, immediately after the upstream
+# medikation.yaml, and defining only a key that file does not define - so it is
+# purely additive.
+#
+# This is the one alias in the 3.x contract that changes a verdict.
+# =============================================================================
+
+# Stufe5/Medikation/RiskAssessment-Search.feature:39, 40
+#   Scenario "Search for the RiskAssessment by ID"
+#   Feature tags (3.0.9): @Stufe5 @Medikation @Mandatory
+#                         @ISiKCapabilityStatementAMTSRolle @RiskAssessment-Search
+#     -> IN the default run scope.
+#
+#   Careful reading of the tags: the feature carries an @Optional tag a few lines
+#   above this scenario, but it belongs to the SECOND `Examples:` block of the
+#   preceding Scenario Outline (the _tag search parameter), not to this Scenario.
+#   The scenario using this key is therefore mandatory and does run by default.
+#
+#   The key is used in the REQUEST URL
+#   (`/RiskAssessment/?_id=${medikation.RiskAssessment-read-id}`) and in the
+#   asserted bundle ID. Left undefined it produces a search for the literal
+#   string "${medikation.RiskAssessment-read-id}", an empty bundle, and a
+#   mandatory-scenario failure attributable to the suite rather than to IRIS.
+#
+#   The difference from the upstream key is capitalisation only:
+#   Stufe5/medikation.yaml defines `riskassessment-read-id` (lower case). Tiger's
+#   configuration keys are case-sensitive, so the two do not resolve to each
+#   other. The value is kept identical to the upstream key deliberately - both
+#   names must denote the same seeded instance, and no additional test data is
+#   required.
+RiskAssessment-read-id: RiskAssessment-Read-Example
+
+# --- Deliberately NOT defined here -------------------------------------------
+#   medikation.medicationadministration-read-request-id
+#     Used by Stufe5/Medikation/MedicationAdministration-Read-Request.feature:19-20,
+#     which is @Disabled and @Optional in 3.0.9 and whose @Precondition scenario
+#     reads literally "TODO". It is an unfinished upstream stub that never
+#     executes - there is no defined resource for it to point at and nothing to
+#     seed.

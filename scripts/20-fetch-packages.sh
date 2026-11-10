@@ -147,11 +147,9 @@ fetch_upstream_sources() {
   local f n=0
 
   log "fetching the test-data contract from ${repo}@${TESTSUITE_VERSION} (not shipped in the image)"
-  mkdir -p "${UPSTREAM_DIR}/testdata/Stufe3" "${UPSTREAM_DIR}/testdata/Stufe5"
-  for f in Stufe3/basis.yaml Stufe3/dokumentenaustausch.yaml Stufe3/medikation.yaml \
-           Stufe3/shared.yaml Stufe3/terminplanung.yaml Stufe3/vitalparameter.yaml \
-           Stufe5/basis.yaml Stufe5/dokumentenaustausch.yaml Stufe5/medikation.yaml \
-           Stufe5/terminplanung.yaml Stufe5/vitalparameter.yaml; do
+  local lvl
+  for lvl in $(suite_levels); do mkdir -p "${UPSTREAM_DIR}/testdata/${lvl}"; done
+  for f in $(suite_contract_files); do
     curl -fsSL --retry 3 --retry-delay 2 \
          -o "${UPSTREAM_DIR}/testdata/${f}" "${raw}/testdata/${f}" \
       || die "cannot fetch testdata/${f} from ${repo}@${TESTSUITE_VERSION}
@@ -164,7 +162,7 @@ fetch_upstream_sources() {
 
   # Documentation baselines only: the diff targets for tiger/*.tmpl and the
   # Serenity settings. Nothing downstream breaks without them.
-  for f in tiger-isik-stufe3.yaml tiger-isik-stufe5.yaml serenity.properties; do
+  for f in $(suite_tiger_baselines); do
     curl -fsSL --retry 2 -o "${UPSTREAM_DIR}/${f}" "${raw}/${f}" \
       || warn "could not fetch ${f} - documentation baselines will be incomplete"
   done
@@ -188,6 +186,7 @@ python3 "${SCRIPTS_DIR}/lib/plan_packages.py" \
     --stufe3-endpoint  "$FHIR_BASE_STUFE3" \
     --stufe5-namespace "$IRIS_NS_STUFE5" \
     --stufe5-endpoint  "$FHIR_BASE_STUFE5" \
+    --levels "$(suite_levels_lc)" \
     --testsuite "${TESTSUITE_REF}" \
   || die "package planning failed - see the message above"
 

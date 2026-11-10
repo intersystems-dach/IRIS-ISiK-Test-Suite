@@ -73,6 +73,10 @@
 step "Collecting the report"
 
 load_env
+# Required because every loop below is over suite_levels(), which resolves the
+# suite generation from it. A report assembled for the wrong set of levels would
+# either omit a level that ran or claim one that did not.
+require_var TESTSUITE_VERSION
 need_cmd python3
 need_cmd unzip
 
@@ -103,7 +107,7 @@ mkdir -p "$ANALYSIS_DIR" "$PROV_DIR"
 step "1/5 Extracting the official report archives"
 
 found_any=0
-for stufe in stufe3 stufe5; do
+for stufe in $(suite_levels_lc); do
   official="${RUN_REPORT_DIR}/${stufe}/official"
   [[ -d "$official" ]] || continue
   found_any=1
@@ -155,8 +159,10 @@ for stufe in stufe3 stufe5; do
   done
 done
 
-(( found_any )) || die "neither stufe3/ nor stufe5/ exists under ${RUN_REPORT_DIR#$REPO_ROOT/}
-  Run 'make test-stufe3' / 'make test-stufe5' first."
+(( found_any )) || die "none of the level directories ($(suite_levels_lc)) exists under ${RUN_REPORT_DIR#$REPO_ROOT/}
+  Run 'make test' first, or 'make test-<level>' for a single one. Which levels
+  the pinned suite carries is suite_levels() in scripts/lib.sh: release 3.0.0
+  removed ISiK Level 3, so a 3.x round produces stufe5/ only."
 
 # -----------------------------------------------------------------------------
 # 2. Copy the provenance in
@@ -185,9 +191,9 @@ copy_prov() {
 }
 
 copy_prov "${RUN_DIR}/seed/SEED.txt" "seed/SEED.txt" \
-  "human-readable summary of what was seeded into both endpoints" \
+  "human-readable summary of what was seeded into every endpoint" \
   "scripts/50-seed.sh"
-for level in Stufe3 Stufe5; do
+for level in $(suite_levels); do
   copy_prov "${RUN_DIR}/seed/${level}.json" "seed/${level}.json" \
     "per-resource seed record: PUT status, read-back, \$validate issues" \
     "scripts/lib/seed_client.py"
@@ -297,6 +303,7 @@ step "3/5 Generating the results document"
 
 analysis_rc=0
 python3 "${SCRIPTS_DIR}/lib/results_report.py" \
+    --levels "$(suite_levels)" \
     --run-dir "$RUN_REPORT_DIR" \
     --requirements "${VENDOR_DIR}/requirements.json" \
     --features-root "${VENDOR_DIR}/upstream/features" \

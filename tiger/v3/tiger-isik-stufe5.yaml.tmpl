@@ -1,0 +1,113 @@
+# =============================================================================
+# Tiger test environment configuration - ISiK Stufe 5, test suite generation 3.x
+# =============================================================================
+# TEMPLATE. Rendered to run/tiger/tiger-isik-stufe5.yaml by
+# scripts/30-render-config.sh, which substitutes every doubled-at placeholder
+# below and fails if any is left unresolved. Do not edit the rendered file: it is
+# regenerated on every `make up`.
+#
+# Derived from the official tiger-isik-stufe5.yaml of gematik/isik-testsuite
+# 3.0.9 - the repository's only Tiger configuration, since 3.0.0 removed ISiK
+# Level 3. Every change from upstream is annotated [DEVIATION] so that the two
+# files can be diffed; the rationale for each is the same as in the 2.x template
+# (tiger/tiger-isik-stufe5.yaml.tmpl) and is not restated at length here.
+#
+# TWO SHAPE CHANGES relative to the 2.x template, both forced by upstream:
+#
+#  1. Nine test-data files rather than five. 3.0.0 added the Level 5 modules
+#     Connect, ICU Minimal, ICU Extended and Labor, each with its own file.
+#
+#  2. Per-module baseKeys rather than a single `data`. Upstream 3.0.9 loads
+#     basis.yaml under `basis`, dokumentenaustausch.yaml under `dokument`, and
+#     so on, and its feature files reference `${basis.patient-read-id}` instead
+#     of `${data.patient-read-id}`. The names below are upstream's, verbatim:
+#     getting one wrong does not fail loudly, it resolves a placeholder to
+#     nothing and produces a 404 that reads as a missing resource in the system
+#     under test. See scripts/lib.sh, suite_generation(), for why the rig
+#     identifies a test-datum by the qualified `<baseKey>.<key>`.
+#
+# The upstream file's own order of entries is preserved: basis,
+# dokumentenaustausch, medikation, terminplanung, vitalparameter, connect,
+# icu-minimal, icu-extended, labor.
+# =============================================================================
+
+servers:
+  fhirserver:
+    type: externalUrl
+    source:
+      # The ISiK Stufe 5 endpoint on the IRIS instance, in its own namespace.
+      - @@SUT_BASE_URL@@
+
+    # [DEVIATION] Not present upstream. Fails fast if IRIS is unreachable
+    # instead of letting every test case of this level fail one by one.
+    healthcheckUrl: @@SUT_BASE_URL@@/metadata
+    startupTimeoutSec: 60
+
+tigerProxy: # https://gematik.github.io/app-Tiger/Tiger-User-Manual.html#_configuring_the_local_test_suite_tiger_proxy
+  adminPort: @@PROXY_ADMIN_PORT@@
+
+  # Active because the SUT endpoint has a URL path (/isik5/fhir/r4); upstream
+  # ships this block active with exactly that instruction, pointing at
+  # http://localhost:8080/fhir.
+  proxyRoutes:
+    - from: "http://fhirserver"
+      to: "@@SUT_BASE_URL@@"
+      # [DEVIATION] Basic auth on the route, so that the official feature files
+      # are used byte-identically.
+      authentication:
+        username: "@@SUT_USER@@"
+        password: "@@SUT_PASSWORD@@"
+
+lib:
+  # [DEVIATION] Upstream ships `true`. False for an unattended run, true for
+  # MODE=manual: with the UI active TigerDirector waits for a browser to attach
+  # and aborts the entire run if none does, which is what happens in a detached
+  # container.
+  activateWorkflowUi: @@ACTIVATE_WORKFLOW_UI@@
+  # [DEVIATION] 9010 rather than upstream's 9012, matching the published port.
+  workflowUiPort: @@WORKFLOW_UI_PORT@@
+  trafficVisualization: true
+  runTestsOnStart: @@RUN_TESTS_ON_START@@
+
+logging:
+  level:
+    de.gematik.rbellogger.converter: WARN
+
+# The nine upstream entries are unchanged, in upstream order, with upstream's
+# baseKey for each.
+additionalConfigurationFiles:
+  - filename: testdata/Stufe5/basis.yaml
+    baseKey: basis
+  - filename: testdata/Stufe5/dokumentenaustausch.yaml
+    baseKey: dokument
+  - filename: testdata/Stufe5/medikation.yaml
+    baseKey: medikation
+  - filename: testdata/Stufe5/terminplanung.yaml
+    baseKey: terminplanung
+  - filename: testdata/Stufe5/vitalparameter.yaml
+    baseKey: vitalparameter
+  - filename: testdata/Stufe5/connect.yaml
+    baseKey: connect
+  - filename: testdata/Stufe5/icu-minimal.yaml
+    baseKey: icuminimal
+  - filename: testdata/Stufe5/icu-extended.yaml
+    baseKey: icuextended
+  - filename: testdata/Stufe5/labor.yaml
+    baseKey: labor
+  # [DEVIATION] The two entries below are not present upstream. They define the
+  # keys the upstream feature files reference but never define. Both defects
+  # from 2.7.0 survive unchanged in 3.0.9, now under module namespaces:
+  #
+  #   basis.Location-read-active-id        Basis/Location-Search.feature:44,66,77
+  #   medikation.RiskAssessment-read-id    Medikation/RiskAssessment-Search.feature:39,40
+  #
+  # medikation.RiskAssessment-read-id is used in a request URL inside a
+  # @Mandatory scenario, so without this file that scenario fails for a reason
+  # that has nothing to do with IRIS. Each file is listed immediately after the
+  # upstream file of the same namespace is loaded, and defines only keys that
+  # namespace does not already define, so both are additive. See each file's
+  # header and docs/en/05-testdata.md.
+  - filename: testdata/Stufe5/zz-upstream-key-defects-basis.yaml
+    baseKey: basis
+  - filename: testdata/Stufe5/zz-upstream-key-defects-medikation.yaml
+    baseKey: medikation

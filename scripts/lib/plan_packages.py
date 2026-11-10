@@ -209,13 +209,27 @@ def main() -> int:
     ap.add_argument("--plugins-dir", required=True,
                     help="vendor/refv-plugins, containing <module>/config.yaml")
     ap.add_argument("--out", required=True, help="output path for package-plan.json")
-    ap.add_argument("--stufe3-namespace", required=True)
-    ap.add_argument("--stufe3-endpoint", required=True)
+    ap.add_argument("--stufe3-namespace")
+    ap.add_argument("--stufe3-endpoint")
     ap.add_argument("--stufe5-namespace", required=True)
     ap.add_argument("--stufe5-endpoint", required=True)
+    # The levels the pinned suite contains, lower case, space-separated - the
+    # output of suite_levels_lc() in scripts/lib.sh. Test suite 3.0.0 removed
+    # ISiK Level 3, so a plan for that generation has one endpoint, and a plugin
+    # assigned to a level not named here is an error rather than a level to add:
+    # it would mean the rig planned packages for an endpoint it never configures.
+    ap.add_argument("--levels", default="stufe3 stufe5")
     ap.add_argument("--testsuite", required=True,
                     help="test suite image reference, recorded as the plan's provenance")
     args = ap.parse_args()
+
+    wanted = args.levels.split()
+    for lv in wanted:
+        if lv not in ("stufe3", "stufe5"):
+            fail(f"--levels names {lv!r}, which is not an ISiK level this rig knows")
+    if "stufe3" in wanted and not (args.stufe3_namespace and args.stufe3_endpoint):
+        fail("--levels includes stufe3, so --stufe3-namespace and "
+             "--stufe3-endpoint are required")
 
     # --- Read every plugin descriptor ---------------------------------------
     plugins = []
@@ -227,8 +241,8 @@ def main() -> int:
     if not plugins:
         fail(f"no <module>/config.yaml under {args.plugins_dir}")
 
-    # --- Group into the two endpoints ---------------------------------------
-    levels: dict[str, dict] = {
+    # --- Group into the endpoints this suite generation has -------------------
+    all_levels: dict[str, dict] = {
         "stufe3": {
             "level": "Stufe 3",
             "namespace": args.stufe3_namespace,
@@ -244,12 +258,22 @@ def main() -> int:
             "_names": {},
         },
     }
+    levels: dict[str, dict] = {lv: all_levels[lv] for lv in wanted}
 
     all_packages: dict[str, dict] = {}   # "name#version" -> record
     snapshot_only: dict[str, list[str]] = {}
 
     for plugin in plugins:
         level = level_of(plugin["module_id"])
+        if level not in levels:
+            fail(
+                f"validation module {plugin['module_id']!r} belongs to {level}, "
+                f"which this suite release is not expected to contain "
+                f"(--levels '{args.levels}'). Either the release still ships "
+                f"that level and suite_levels() in scripts/lib.sh is wrong, or "
+                f"the plugin set extracted from the image is not the one this "
+                f"release publishes. Both must be resolved before a round."
+            )
         bucket = levels[level]
         bucket["modules"].append(
             {
@@ -402,9 +426,11 @@ def main() -> int:
     for level, bucket in levels.items():
         if not bucket["modules"]:
             fail(
-                f"no validation module was assigned to {level}. The test suite "
-                "image does not appear to contain plugins for both ISiK levels; "
-                "check TESTSUITE_VERSION."
+                f"no validation module was assigned to {level}, although this "
+                f"suite release is expected to contain it (--levels "
+                f"'{args.levels}'). The plugin set extracted from the image does "
+                f"not cover every level the release publishes; check "
+                f"TESTSUITE_VERSION and suite_levels() in scripts/lib.sh."
             )
 
         chosen: list[str] = []
@@ -470,7 +496,7 @@ def main() -> int:
         fh.write("\n")
 
     # --- Report -------------------------------------------------------------
-    for level in ("stufe3", "stufe5"):
+    for level in wanted:
         b = plan["endpoints"][level]
         mods = ", ".join(m["id"] for m in b["modules"])
         print(f"  {b['level']:8} {b['namespace']:8} {b['endpoint']}")

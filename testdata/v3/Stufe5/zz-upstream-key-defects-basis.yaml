@@ -1,0 +1,52 @@
+# =============================================================================
+# Alias for an undefined ${basis.*} key in the upstream feature files
+# =============================================================================
+# NOT an upstream file. The nine files beside this one and its medikation
+# counterpart are byte-identical copies of gematik/isik-testsuite 3.0.9
+# testdata/Stufe5/; scripts/30-render-config.sh proves that mechanically against
+# the release tag on every run and stops the round if it does not hold. This file
+# and zz-upstream-key-defects-medikation.yaml are ours.
+#
+# Loaded under `baseKey: basis`, immediately after the upstream basis.yaml, and
+# defining only a key that file does not define - so it is purely additive.
+#
+# Why an alias is needed at all: an undefined key renders as the literal string
+# "${basis.<key>}" inside the request URL or the assertion text. In a URL that
+# yields a 404 which reads exactly like a missing resource in the system under
+# test.
+#
+# Carried over from the 2.x contract unchanged. The defect is still present in
+# 3.0.9, verified by resolving all 312 distinct `${<module>.<key>}` references in
+# the 203 feature files of that tag against all 345 defined keys: four keys are
+# referenced and never defined, and they are the same four as in 2.7.0.
+# =============================================================================
+
+# Stufe5/Basis/Location-Search.feature:44, 66, 77
+#   Scenarios "Search for the Location by ID", "... by Address and ID",
+#   "... by Type 'LOCHFID' and ID".
+#   Feature tags (3.0.9): @Stufe5 @Basis @Optional
+#     -> NOT in the default run scope (@Stufe5 and (not @Optional)), so this
+#        affects only an explicitly widened run.
+#
+#   All three uses are inside the error-message argument of
+#   `response bundle contains resource with ID "${basis.location-read-id}" with
+#   error message "The requested Location ${basis.Location-read-active-id} ..."`.
+#   The asserted ID itself is spelled correctly, so the verdict is unaffected and
+#   only the message text would carry an unresolved placeholder.
+#
+#   Note the value: the referenced key is location-read-id, NOT a separate
+#   "active" Location. No location-read-active-id exists anywhere in the 3.0.9
+#   testdata, and the surrounding steps all assert against location-read-id, so
+#   the capitalised name is a stale leftover rather than a missing resource. No
+#   additional test data is required.
+Location-read-active-id: Location-Read-Example
+
+# --- Deliberately NOT defined here -------------------------------------------
+# One further ${basis.*}-adjacent key appears without a definition and must not
+# be "fixed" here:
+#
+#   dokument.documentreference-update-stored-id
+#     Not a static test-datum at all. It is written at runtime by
+#     Stufe5/Dokumentenaustausch/DocumentReference-UpdateMetadata.feature:36
+#     and read on the following line. Predefining it would be pointless; it is
+#     correct upstream behaviour. (That feature is @Disabled @Optional in 3.0.9.)

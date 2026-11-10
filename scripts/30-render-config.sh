@@ -6,16 +6,23 @@
 # needs in order to serve the SUT's FHIR endpoints at all, and the credential sheet
 # for the tester - from templates plus the resolved deployment configuration:
 #
-#   run/tiger/tiger-isik-stufe3.yaml          unattended run  (runTestsOnStart: true,
-#   run/tiger/tiger-isik-stufe5.yaml                           activateWorkflowUi: false)
-#   run/tiger/manual/tiger-isik-stufe3.yaml   MODE=manual     (runTestsOnStart: false,
-#   run/tiger/manual/tiger-isik-stufe5.yaml                     activateWorkflowUi: true)
+#   run/tiger/tiger-isik-<level>.yaml         unattended run  (runTestsOnStart: true,
+#                                                              activateWorkflowUi: false)
+#   run/tiger/manual/tiger-isik-<level>.yaml  MODE=manual     (runTestsOnStart: false,
+#                                                              activateWorkflowUi: true)
 #   run/webgateway/CSP.ini                    the gateway's IRIS server connection
 #   run/webgateway/isik-vhost.conf            Apache: which paths mod_csp claims
-#   run/testdata/Stufe{3,5}/*.yaml            the suite's logical-key contract
+#   run/testdata/<Level>/*.yaml               the suite's logical-key contract
 #   run/tiger/RENDERED.txt                    what was rendered, from what, when
 #   run/tiger/TESTDATA-PARITY.txt             our contract files vs the release's
 #   run/CREDENTIALS.md                        the credential sheet for the tester
+#
+# <level> is every level the pinned suite contains - suite_levels() in lib.sh,
+# which is Stufe3 and Stufe5 up to 2.7.0 and Stufe5 alone from 3.0.0, that
+# release having removed ISiK Level 3 entirely. Nothing here enumerates levels
+# itself, so a level the suite does not carry produces no configuration file, no
+# staged contract and no report section, rather than an empty one that reads as a
+# level which ran and scored nothing.
 #
 # Why render at all, rather than committing finished YAML: the SUT URL, the
 # generated API password and the port assignments are deploy-time facts. A
@@ -36,12 +43,29 @@
 step "Rendering the test tool configuration"
 
 load_env
-require_var IRIS_IP FHIR_BASE_STUFE3 FHIR_BASE_STUFE5 SUT_USER SUT_PASSWORD \
+# TESTSUITE_VERSION is required here even though nothing is downloaded: it
+# selects the suite generation, and therefore which levels exist, which
+# templates are rendered and which contract is staged.
+#
+# FHIR_BASE_STUFE3 stays required for every generation. It names an endpoint of
+# the system under test, not a level of the test suite: the IRIS bootstrap
+# installs both endpoints and the Web Gateway's virtual host claims both paths
+# regardless of which levels the pinned suite carries. Dropping it under a 3.x
+# suite would change the system under test between rounds and make the two
+# rounds' results incomparable.
+require_var TESTSUITE_VERSION IRIS_IP FHIR_BASE_STUFE3 FHIR_BASE_STUFE5 \
+            SUT_USER SUT_PASSWORD \
             IRIS_MGMT_USER IRIS_MGMT_PASSWORD WEBGATEWAY_IP
 
-TIGER_TMPL_DIR="${REPO_ROOT}/tiger"
+# Per generation, not fixed: 3.0.0 changed both the set of levels and the key
+# namespaces, so its templates and its contract live in their own trees and the
+# 2.7.0 ones stay exactly as they were. See suite_tiger_dir() /
+# suite_testdata_root() in lib.sh for why the trees are parallel rather than
+# overwritten - the August 2026 baseline round must stay re-creatable from this
+# repository.
+TIGER_TMPL_DIR="$(suite_tiger_dir)"
 WEBGATEWAY_TMPL_DIR="${REPO_ROOT}/webgateway"
-TESTDATA_SRC="${REPO_ROOT}/testdata"
+TESTDATA_SRC="$(suite_testdata_root)"
 OUT_WEBGATEWAY="${RUN_DIR}/webgateway"
 OUT_TIGER="${RUN_DIR}/tiger"
 OUT_TIGER_MANUAL="${OUT_TIGER}/manual"
@@ -159,9 +183,14 @@ PY
 rm -rf "$OUT_TIGER"
 mkdir -p "$OUT_TIGER" "$OUT_TIGER_MANUAL"
 
-for stufe in stufe3 stufe5; do
+RENDERED_CONFIGS=()      # the unattended variants, consumed by section 2 below
+nlevels=0
+for stufe in $(suite_levels_lc); do
   tmpl="${TIGER_TMPL_DIR}/tiger-isik-${stufe}.yaml.tmpl"
-  [[ -f "$tmpl" ]] || die "template missing: ${tmpl#$REPO_ROOT/}"
+  [[ -f "$tmpl" ]] || die "template missing: ${tmpl#$REPO_ROOT/}
+  suite_levels() reports '$(suite_levels)' for TESTSUITE_VERSION=${TESTSUITE_VERSION:-?},
+  so a template is required for each. Templates are per generation: see
+  suite_tiger_dir() in scripts/lib.sh."
 
   base_url="$(sut_base_url "$stufe")"
 
@@ -170,9 +199,11 @@ for stufe in stufe3 stufe5; do
   # Manual: the container comes up, serves the WorkflowUI and waits.
   render "$tmpl" "${OUT_TIGER_MANUAL}/tiger-isik-${stufe}.yaml" false "$base_url"
 
+  RENDERED_CONFIGS+=("${OUT_TIGER}/tiger-isik-${stufe}.yaml")
+  nlevels=$((nlevels+1))
   log "${stufe}: SUT is ${base_url}"
 done
-ok "rendered 4 Tiger configuration files (2 unattended, 2 manual)"
+ok "rendered $((nlevels*2)) Tiger configuration files (${nlevels} unattended, ${nlevels} manual)"
 
 # -----------------------------------------------------------------------------
 # 1b. Render the Web Gateway configuration
@@ -262,11 +293,13 @@ ok "rendered the Web Gateway configuration (IRIS at ${IRIS_IP}:1972 as ${GATEWAY
 # 2. Stage the test-data contract
 # -----------------------------------------------------------------------------
 # These YAML files are the suite's own contract: every key is referenced from a
-# feature file as ${data.<key>} and its value is the resource id that must exist
-# in the SUT. The 11 files that exist upstream are carried over byte-identically -
-# step 4 below proves it rather than asserting it - because a changed value would
-# mean our data conforms to us rather than to the official configuration. The two
-# zz-upstream-key-defects.yaml files are ours; see docs/en/05-testdata.md.
+# feature file as ${<namespace>.<key>} and its value is the resource id that must
+# exist in the SUT. The files that exist upstream - 11 in 2.7.0, 9 in 3.0.9, see
+# suite_contract_files() - are carried over byte-identically, and step 3 below
+# proves it rather than asserting it, because a changed value would mean our data
+# conforms to us rather than to the official configuration. The
+# zz-upstream-key-defects*.yaml overlays are ours; see suite_overlay_files() and
+# docs/en/05-testdata.md.
 #
 # Only the files the corresponding tiger-isik-*.yaml lists are staged, and the
 # list is read from the rendered configuration rather than restated here: a file
@@ -288,7 +321,7 @@ while read -r rel; do
   dest="${OUT_TESTDATA}/${rel#testdata/}"
   mkdir -p "$(dirname "$dest")"
   cp "$src" "$dest"
-done < <(python3 - "${OUT_TIGER}/tiger-isik-stufe3.yaml" "${OUT_TIGER}/tiger-isik-stufe5.yaml" <<'PY'
+done < <(python3 - "${RENDERED_CONFIGS[@]}" <<'PY'
 import sys
 
 import yaml
@@ -306,8 +339,53 @@ PY
 )
 
 if [[ -n "$missing" ]]; then
-  die "test-data contract files listed in the Tiger configuration but absent from testdata/: ${missing}"
+  die "test-data contract files listed in the Tiger configuration but absent from ${TESTDATA_SRC#$REPO_ROOT/}/: ${missing}"
 fi
+
+# The baseKeys of the rendered configuration must be exactly the namespaces the
+# feature files of this generation reference. The check exists because the two
+# are stated in different places - the namespace list in lib.sh, the baseKeys in
+# the Tiger templates - and because neither failure direction is visible at run
+# time: a missing baseKey leaves every ${<ns>.<key>} of that module as
+# unrecognised text, which the suite sends verbatim in a request URL and the SUT
+# answers 404, i.e. it reads as a resource the system under test does not have;
+# a surplus baseKey loads a module the features never reference, which seeds
+# resources no scenario reads.
+python3 - "$(suite_namespaces)" "${RENDERED_CONFIGS[@]}" <<'PY'
+import sys
+
+import yaml
+
+expected = set(sys.argv[1].split())
+found = {}
+for path in sys.argv[2:]:
+    with open(path, encoding="utf-8") as fh:
+        cfg = yaml.safe_load(fh) or {}
+    for entry in cfg.get("additionalConfigurationFiles") or []:
+        base = entry.get("baseKey")
+        name = entry.get("filename", "?")
+        if not base:
+            sys.exit(f"30-render-config.sh: {path}: entry '{name}' has no baseKey; "
+                     "a test-data file loaded without one is unreachable from any feature file")
+        found.setdefault(base, []).append(name)
+
+missing = sorted(expected - set(found))
+surplus = sorted(set(found) - expected)
+if missing or surplus:
+    parts = []
+    if missing:
+        parts.append("namespaces the feature files reference but the rendered "
+                     "configuration does not load: " + ", ".join(missing))
+    if surplus:
+        parts.append("baseKeys the rendered configuration loads but no feature "
+                     "file references: " + ", ".join(surplus))
+    sys.exit("30-render-config.sh: " + "; ".join(parts)
+             + "\n  Expected exactly: " + " ".join(sorted(expected))
+             + "\n  Reconcile suite_namespaces() in scripts/lib.sh with the baseKey "
+               "of every entry in the Tiger templates.")
+
+print(f"  {len(found)} test-data namespace(s): " + " ".join(sorted(found)))
+PY
 
 staged="$(find "$OUT_TESTDATA" -name '*.yaml' | wc -l | tr -d ' ')"
 (( staged == expected )) \
@@ -331,17 +409,23 @@ import yaml
 # reason each one is harmless. Anything not listed here is a hole in OUR test data
 # and stops the round.
 #
-# Verified against gematik/isik-testsuite 2.7.0 by grepping all 220 feature files:
-# no feature references this key. Both places the Appointment specialty system is
-# actually needed spell it out inline -
-#   Stufe5/Terminplanung/Appointment-Read.feature:48
-#   Stufe5/Terminplanung/Appointment-Search.feature:63,65
-# both as the literal http://ihe-d.de/CodeSystems/AerztlicheFachrichtungen - so the
-# key is an unused leftover and no request URL can inherit its emptiness.
+# Verified by grepping every feature file of both pinned releases - 220 files in
+# 2.7.0, 203 in 3.0.9 - for the key under both of its possible qualifications
+# (${data.appointment-read-specialty-system} and
+# ${terminplanung.appointment-read-specialty-system}): no feature references it
+# in either release, and it is the only empty value in either contract. Every
+# place the Appointment specialty system is actually needed spells it out inline
+# as the literal http://ihe-d.de/CodeSystems/AerztlicheFachrichtungen -
+#   Stufe5/Terminplanung/Appointment-Read.feature
+#   Stufe5/Terminplanung/Appointment-Search.feature
+#   Stufe5/Terminplanung/Schedule-Search.feature        (3.0.9)
+#   Stufe5/Terminplanung/HealthcareService-Search.feature (3.0.9)
+# - so the key is an unused leftover and no request URL can inherit its
+# emptiness. The path is the same in both generations, so one entry covers both.
 UPSTREAM_EMPTY_OK = {
     "Stufe5/terminplanung.yaml:appointment-read-specialty-system":
-        "empty upstream; referenced by no feature file in 2.7.0 (the two "
-        "Appointment features hardcode the system inline)",
+        "empty upstream; referenced by no feature file in 2.7.0 or 3.0.9 (the "
+        "Terminplanung features hardcode the system inline)",
 }
 
 root = sys.argv[1]
@@ -389,11 +473,12 @@ ok "staged ${staged} test-data contract files into run/testdata/"
 # comment. (Not from the image: the image carries no /app/testdata at all. See
 # fetch_upstream_sources() in 20-fetch-packages.sh.) Three outcomes:
 #
-#   IDENTICAL  same bytes as the released file. Expected for all 11.
+#   IDENTICAL  same bytes as the released file. Expected for every file
+#              suite_contract_files() lists - 11 in 2.7.0, 9 in 3.0.9.
 #   MODIFIED   same path, different bytes. Fatal: someone edited a value, and the
 #              run would test against a contract that is not the official one.
-#   ADDED      no counterpart upstream. Expected only for the two
-#              zz-upstream-key-defects.yaml overlays, which are ours by design;
+#   ADDED      no counterpart upstream. Expected only for the
+#              zz-upstream-key-defects*.yaml overlays, which are ours by design;
 #              anything else is fatal.
 #
 # When vendor/upstream/testdata is absent (someone ran this before `make packages`)
@@ -402,9 +487,9 @@ ok "staged ${staged} test-data contract files into run/testdata/"
 UPSTREAM_TESTDATA="${VENDOR_DIR}/upstream/testdata"
 PARITY_FILE="${OUT_TIGER}/TESTDATA-PARITY.txt"
 
-# Files that legitimately have no upstream counterpart. Anything else that shows
-# up as ADDED is an accident and must stop the round.
-ALLOWED_ADDED='Stufe3/zz-upstream-key-defects.yaml Stufe5/zz-upstream-key-defects.yaml'
+# Files that legitimately have no upstream counterpart, per generation. Anything
+# else that shows up as ADDED is an accident and must stop the round.
+ALLOWED_ADDED="$(suite_overlay_files | tr '\n' ' ')"
 
 if [[ -d "$UPSTREAM_TESTDATA" ]]; then
   modified=""; added=""; identical=0
@@ -445,13 +530,15 @@ if [[ -d "$UPSTREAM_TESTDATA" ]]; then
     die "test-data contract files differ from the official ${TESTSUITE_REPO:-gematik/isik-testsuite}@${TESTSUITE_VERSION:-?} release: ${modified}
   These files must stay byte-identical to the official release: a changed value
   means the run tests against a contract that is not the certified one. To add
-  keys, put them in testdata/Stufe{3,5}/zz-upstream-key-defects.yaml instead.
-  Diff with: diff -u vendor/upstream/testdata/<file> testdata/<file>"
+  keys, put them in one of the overlay files instead: ${ALLOWED_ADDED}
+  (relative to ${TESTDATA_SRC#$REPO_ROOT/}/).
+  Diff with: diff -u vendor/upstream/testdata/<file> ${TESTDATA_SRC#$REPO_ROOT/}/<file>"
   fi
   if [[ -n "$added" ]]; then
     die "test-data files with no upstream counterpart: ${added}
-  Only the zz-upstream-key-defects.yaml overlays may be added. Remove the file,
-  or fold its keys into the overlay and document them there."
+  Only these overlays may be added: ${ALLOWED_ADDED}
+  Remove the file, or fold its keys into the overlay for the namespace it
+  belongs to and document them in docs/en/05-testdata.md."
   fi
   ok "test-data parity verified: ${identical} files byte-identical to ${TESTSUITE_REPO:-gematik/isik-testsuite}@${TESTSUITE_VERSION:-?}"
 else
@@ -478,11 +565,20 @@ fi
   printf '# generated %s by scripts/30-render-config.sh\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   printf '# configuration source: %s\n' "${ENV_LOADED_FROM#$REPO_ROOT/}"
   printf '#\n'
+  printf '# Suite generation, which selects everything below that is per-level:\n'
+  printf '  TESTSUITE_VERSION      %s  (generation %s)\n' \
+         "$TESTSUITE_VERSION" "$(suite_generation)"
+  printf '  levels                 %s\n' "$(suite_levels)"
+  printf '  templates              %s\n' "${TIGER_TMPL_DIR#$REPO_ROOT/}"
+  printf '  test-data contract     %s\n' "${TESTDATA_SRC#$REPO_ROOT/}"
+  printf '  key namespaces         %s\n' "$(suite_namespaces)"
+  printf '\n'
   printf '# Substituted values, in full. SUT_PASSWORD is generated per deployment\n'
   printf '# and kept in secrets/sut.password; see CREDENTIALS.md beside this file.\n'
   printf '#\n'
-  printf '  SUT_BASE_URL (stufe3)  %s\n' "$(sut_base_url stufe3)"
-  printf '  SUT_BASE_URL (stufe5)  %s\n' "$(sut_base_url stufe5)"
+  for stufe in $(suite_levels_lc); do
+    printf '  SUT_BASE_URL (%-7s) %s\n' "$stufe" "$(sut_base_url "$stufe")"
+  done
   printf '  SUT_USER               %s\n' "$SUT_USER"
   printf '  SUT_PASSWORD           %s\n' "$SUT_PASSWORD"
   printf '  WORKFLOW_UI_PORT       %s\n' "$WORKFLOW_UI_PORT"
@@ -547,8 +643,22 @@ CRED_FILE="${RUN_DIR}/CREDENTIALS.md"
 # a failed script.
 SUT_BASE_HOST3="$(sut_base_url_host stufe3)"
 SUT_BASE_HOST5="$(sut_base_url_host stufe5)"
-SUT_BASE_NET3="$(sut_base_url stufe3)"
-SUT_BASE_NET5="$(sut_base_url stufe5)"
+
+# The endpoint table's rows. Both endpoints are installed by every round - they
+# are a property of the system under test, not of the test suite - but only the
+# levels suite_levels() reports are exercised by the pinned suite, and the sheet
+# must not describe an endpoint as "what the suite uses" when the suite does not
+# carry that level. The third column therefore states exercised-or-not, derived
+# from the same helper the rendering loop used.
+ENDPOINT_ROWS=""
+for stufe in stufe3 stufe5; do
+  case " $(suite_levels_lc) " in
+    *" $stufe "*) scope="yes - this round" ;;
+    *)            scope="no - not in ${TESTSUITE_VERSION}" ;;
+  esac
+  ENDPOINT_ROWS+="| Stufe ${stufe#stufe} | $(sut_base_url_host "$stufe") | $(sut_base_url "$stufe") | ${scope} |
+"
+done
 
 {
   cat <<EOF
@@ -596,12 +706,16 @@ wrong, every FHIR request returns a bare HTTP 500 and the only trace is
 
 ## Endpoints
 
-| Level | From the host | From inside the subnet (what the suite uses) |
-|---|---|---|
-| Stufe 3 | ${SUT_BASE_HOST3} | ${SUT_BASE_NET3} |
-| Stufe 5 | ${SUT_BASE_HOST5} | ${SUT_BASE_NET5} |
+| Level | From the host | From inside the subnet (what the suite uses) | Exercised |
+|---|---|---|---|
+${ENDPOINT_ROWS}
+Both endpoints are installed and verified by every round, because they are a
+property of the system under test. The right-hand column says whether the pinned
+test suite, \`${TESTSUITE_VERSION}\`, carries that level at all: ISiK Level 3 was
+removed from the suite in release 3.0.0, so a 3.x round exercises Stufe 5 only
+and the Stufe 3 endpoint stays installed but untested.
 
-Both columns address the **Web Gateway**, not IRIS. The IRIS for Health images ship
+Both address columns address the **Web Gateway**, not IRIS. The IRIS for Health images ship
 no web server at all, so the gateway at \`${WEBGATEWAY_IP}\` is the FHIR server's
 entire HTTP surface; IRIS itself is reachable only on its superserver port
 \`${IRIS_IP}:1972\`, which speaks no HTTP. The suite uses the right-hand column,

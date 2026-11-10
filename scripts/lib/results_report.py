@@ -99,7 +99,13 @@ from typing import Any, Iterable, Iterator
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import feature_parser as fp  # noqa: E402  (path set above, by design)
 
-LEVELS = ("Stufe3", "Stufe5")
+# Every level this tool knows how to read a report for. NOT the levels a given
+# round covers: that is `doc["suiteLevels"]`, passed in with --levels, because
+# suite release 3.0.0 removed ISiK Level 3 and a Stufe-5-only round against a 3.x
+# suite is complete rather than partial. Deriving "partial" from this tuple would
+# put the "This round covers Stufe5 only" warning box into a document describing
+# a full round.
+ALL_LEVELS = ("Stufe3", "Stufe5")
 STUFE_DIR = {"Stufe3": "stufe3", "Stufe5": "stufe5"}
 
 # net.thucydides.model.domain.TestResult, in the enum's own order. Grouped into
@@ -1001,7 +1007,8 @@ def cite(case: dict) -> str:
 def render(doc: dict, run_root: Path) -> str:
     out: list[str] = []
     w = out.append
-    levels = [lv for lv in (doc["levels"].get(l) for l in LEVELS) if lv]
+    expected_levels = doc["suiteLevels"]
+    levels = [lv for lv in (doc["levels"].get(l) for l in expected_levels) if lv]
 
     w("# ISiK conformance results")
     w("")
@@ -1096,8 +1103,9 @@ def render(doc: dict, run_root: Path) -> str:
     # without RUN_ID mints a fresh round id, so two levels that were both run land in
     # two directories and each round then looks like a deliberate single-level round.
     # The reader cannot tell those two situations apart from this document alone.
-    if len(levels) < len(LEVELS):
-        missing = [l for l in LEVELS if l not in {lv["level"] for lv in levels}]
+    if len(levels) < len(expected_levels):
+        missing = [l for l in expected_levels
+                   if l not in {lv["level"] for lv in levels}]
         w(f"> **This round covers {levels[0]['level']} only.** No archive was found for "
           + ", ".join(f"`{m}`" for m in missing)
           + ", so nothing in this document states anything about that level - neither"
@@ -1674,7 +1682,7 @@ def write_csv(doc: dict, path: Path) -> int:
     with path.open("w", encoding="utf-8", newline="") as fh:
         writer = csv.writer(fh)
         writer.writerow(CSV_COLUMNS)
-        for level in LEVELS:
+        for level in doc["suiteLevels"]:
             lv = doc["levels"].get(level)
             if not lv:
                 continue
@@ -1717,6 +1725,10 @@ def read_manifest(path: Path) -> list[dict]:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--levels", default="Stufe3 Stufe5",
+                    help="the levels the pinned suite carries, space-separated. "
+                         "A level absent from this list is neither read nor "
+                         "reported as missing (default: both, i.e. a 2.x suite)")
     ap.add_argument("--run-dir", type=Path, required=True,
                     help="reports/<run-id>/ - must already hold the extracted archives")
     ap.add_argument("--requirements", type=Path, required=True,
@@ -1741,6 +1753,16 @@ def main() -> int:
         print(f"{args.requirements} not found - run 'make packages' first", file=sys.stderr)
         return 2
 
+    suite_levels = args.levels.split()
+    unknown = [lv for lv in suite_levels if lv not in ALL_LEVELS]
+    if unknown:
+        print(f"--levels: unknown level(s): {', '.join(unknown)}; "
+              f"known: {', '.join(ALL_LEVELS)}", file=sys.stderr)
+        return 2
+    if not suite_levels:
+        print("--levels is empty; name at least one level", file=sys.stderr)
+        return 2
+
     reqs = json.loads(args.requirements.read_text(encoding="utf-8"))
     try:
         index = FeatureIndex(args.features_root)
@@ -1759,11 +1781,12 @@ def main() -> int:
             "suite": reqs.get("source"),
             "tagExpressions": reqs.get("tagExpressions"),
         },
+        "suiteLevels": suite_levels,
         "levels": {},
         "anomalies": [],
     }
 
-    for level in LEVELS:
+    for level in suite_levels:
         collected = collect_level(level, run_root, index, reqs)
         if collected:
             doc["levels"][level] = collected
@@ -1771,8 +1794,9 @@ def main() -> int:
     if not doc["levels"]:
         doc["anomalies"].append({
             "kind": "noLevels",
-            "detail": "neither stufe3/ nor stufe5/ exists in this run directory; "
-                      "no report was archived",
+            "detail": "none of the expected level directories ("
+                      + ", ".join(STUFE_DIR[lv] for lv in suite_levels)
+                      + ") exists in this run directory; no report was archived",
             "where": ".",
         })
     elif len(doc["levels"]) == 1:
@@ -1837,7 +1861,7 @@ def main() -> int:
 
     # Summary to stderr: the shell wrapper prints it, and `make report` output is
     # the only thing an operator running a remote round sees.
-    for level in LEVELS:
+    for level in doc["suiteLevels"]:
         lv = doc["levels"].get(level)
         if not lv:
             continue

@@ -54,13 +54,19 @@ resources the SUT returns for a given search, which is the thing under test.
 Scope
 -----
 Only scenarios the run will actually execute: the level's tag expression must
-select them (default `@Stufe3 and (not @Optional)`), and `@Disabled` features are
-skipped. Out-of-scope requirements are counted and listed under `--all` rather
-than silently dropped, since a future tag expression can bring them into scope.
+select them (default `@Stufe<n> and (not @Optional)`), and `@Disabled` features
+are skipped. Out-of-scope requirements are counted and listed under `--all`
+rather than silently dropped, since a future tag expression can bring them into
+scope.
+
+Which levels are checked by default is the caller's decision, passed as
+`--levels`: suite release 3.0.0 removed ISiK Level 3, and defaulting to both here
+would report `no rendered resources under build/fhir/Stufe3` and exit 2 on a
+round that is correct.
 
 Usage
 -----
-    scripts/lib/search_reference_check.py --level Stufe3 --data-root build/fhir
+    scripts/lib/search_reference_check.py --level Stufe5 --data-root build/fhir
     scripts/lib/search_reference_check.py --level Stufe5 -v      # list satisfied too
 """
 
@@ -76,6 +82,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from assertion_check import resolve                      # noqa: E402
 from feature_parser import (                             # noqa: E402
+    RE_DATA_KEY,
     effective_tags,
     load_features,
     parse_tag_expression,
@@ -116,17 +123,30 @@ RE_ALL_MATCHES = re.compile(
 # the type the search targets - not of the type the reference points at.
 RE_SEARCH_URL = re.compile(r'(?:resource at|request to) "http://fhirserver/([A-Za-z]+)/\?')
 
-RE_DATA_KEY = re.compile(r"\$\{data\.([A-Za-z0-9_.-]+)\}")
+# RE_DATA_KEY is imported from feature_parser rather than written again here: it
+# captures the *qualified* key (`data.patient-read-id` under 2.x, which loads
+# every file under one baseKey, and e.g. `medikation.medication-patient-id` under
+# 3.x, which gives each module its own). requirements.json keys its dataKeys by
+# exactly that qualified string, so one pattern keeps this check and the seeder
+# resolving a placeholder through the same name. A second copy of the pattern is
+# what made this check report 0 requirements against 3.0.9 while reporting
+# success.
 RE_OUTLINE = re.compile(r"<([^<>]+)>")
 
-# Three steps in 2.7.0 write a `$` *after* the closing brace of the placeholder in
-# the plain-string form of the assertion:
+# Some steps write a `$` *after* the closing brace of the placeholder in the
+# plain-string form of the assertion. Three in 2.7.0:
 #
 #   Stufe3/Medikation/MedicationRequest-Search.feature:71
 #       ... references resource with ID "Encounter/${data.medication-encounter-id}$"
 #   Stufe3/Medikation/MedicationStatement-Search.feature:83
 #   Stufe5/Medikation/MedicationStatement-Search.feature:57
 #       ... references resource with ID "Patient/${data.medication-patient-id}$"
+#
+# One survives in 3.0.9 - the two Stufe 3 sites went with the level, the Stufe 5
+# one was carried over unchanged apart from the new namespace:
+#
+#   Stufe5/Medikation/MedicationStatement-Search.feature:58
+#       ... references resource with ID "Patient/${medikation.medication-patient-id}$"
 #
 # In the FHIRPath form the `$` belongs there - it anchors the `matches()` regex. In
 # this form the value is compared as a string, so the anchor is a literal character
@@ -150,8 +170,11 @@ def expand(text: str, row: dict[str, str]) -> str:
 def contract(level: str, req: dict) -> dict[str, str]:
     """key -> ID, from the suite's own test-data contract.
 
+    Keyed by the qualified `<namespace>.<key>`, which is the string the feature
+    files write and the string requirements.json records.
+
     Read out of requirements.json rather than the YAML so that this check and the
-    seed data resolve `${data.*}` through the same path; a discrepancy between the
+    seed data resolve `${<ns>.*}` through the same path; a discrepancy between the
     two would make the check pass on values the suite never sends.
     """
     out: dict[str, str] = {}
@@ -165,7 +188,7 @@ def contract(level: str, req: dict) -> dict[str, str]:
 
 
 def resolve_keys(text: str, values: dict[str, str]) -> tuple[str, set[str]]:
-    """Replace `${data.key}` with the contract value; report keys with none."""
+    """Replace `${<ns>.<key>}` with the contract value; report keys with none."""
     missing: set[str] = set()
 
     def repl(m: re.Match) -> str:
@@ -317,7 +340,10 @@ def check(reqs: list[dict], data: dict[str, list[dict]]) -> list[dict]:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--level", choices=("Stufe3", "Stufe5"), action="append",
-                    help="check only this level (repeatable; default: both)")
+                    help="check only this level (repeatable; default: --levels)")
+    ap.add_argument("--levels", default="Stufe3 Stufe5",
+                    help="the levels the pinned suite carries, space-separated "
+                         "(default: both, i.e. a 2.x suite)")
     ap.add_argument("--features", type=Path,
                     default=REPO / "vendor" / "upstream" / "features")
     ap.add_argument("--data-root", type=Path, default=REPO / "build" / "fhir")
@@ -338,9 +364,22 @@ def main() -> int:
     req = json.loads(args.requirements.read_text(encoding="utf-8"))
     exprs = {"Stufe3": args.tags_stufe3, "Stufe5": args.tags_stufe5}
 
+    wanted = args.levels.split()
+    unknown = [lv for lv in wanted if lv not in exprs]
+    if unknown:
+        print(f"--levels: unknown level(s): {', '.join(unknown)}; "
+              f"known: {', '.join(sorted(exprs))}", file=sys.stderr)
+        return 2
+    selected = args.level or wanted
+    outside = [lv for lv in selected if lv not in wanted]
+    if outside:
+        print(f"--level names {', '.join(outside)}, which --levels says the "
+              f"pinned suite does not carry", file=sys.stderr)
+        return 2
+
     rc = 0
     report: list[dict] = []
-    for level in args.level or ["Stufe3", "Stufe5"]:
+    for level in selected:
         values = contract(level, req)
         predicate = parse_tag_expression(exprs[level])
         reqs = requirements(args.features, level, predicate, values, args.all)

@@ -13,7 +13,7 @@
 # Five stages, each of which can fail the step:
 #
 #   1. render     testdata/fhir/{common,Stufe*,extra} -> build/fhir/<level>/
-#                 (scripts/lib/build_testdata.py: resolves ${data.*} against the
+#                 (scripts/lib/build_testdata.py: resolves ${<ns>.*} against the
 #                 suite's own contract and stamps meta.profile from the profiles
 #                 the feature files assert)
 #   2. assert     every rendered resource against the assertions extracted from
@@ -36,7 +36,12 @@
 # safe and is the intended way to reset the corpus after a scenario has mutated
 # it. Several scenarios do mutate it (`*-Update-Original-Example`,
 # `Patient-Delete-Example`), which is why `make test` depends on `seed` and why
-# the two levels are seeded independently.
+# each level is seeded independently.
+#
+# Which levels those are is suite_levels(), never a literal: release 3.0.0
+# removed ISiK Level 3 from the suite, and seeding a level the suite does not
+# carry would write a corpus no scenario reads - harmless in itself, but it would
+# appear in the seed record as data the round depended on.
 # =============================================================================
 
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
@@ -44,7 +49,10 @@
 step "Seeding the test data"
 
 load_env
-require_var SUT_USER SUT_PASSWORD FHIR_BASE_STUFE3 FHIR_BASE_STUFE5
+# TESTSUITE_VERSION selects which levels exist; the two FHIR_BASE_* variables
+# describe the system under test, which installs both endpoints regardless.
+require_var TESTSUITE_VERSION SUT_USER SUT_PASSWORD \
+            FHIR_BASE_STUFE3 FHIR_BASE_STUFE5
 
 need_cmd python3
 need_cmd curl
@@ -69,11 +77,18 @@ mkdir -p "$SEED_DIR"
 step "1/5 Rendering the authored test data"
 
 rm -rf "${REPO_ROOT}/build/fhir"
+# One --src per authored tree, shared tree first: a 3.x round adds
+# testdata/fhir/v3 for the resources release 3.0.0 introduced, and the shared
+# bodies stay where they are rather than being copied per generation.
+src_args=()
+for root in $(suite_fhir_roots); do src_args+=(--src "$root"); done
+
 python3 "${LIB}/build_testdata.py" --packages "$PACKAGES_DIR" \
+  --levels "$(suite_levels)" "${src_args[@]}" \
   || die "test-data rendering failed - see above.
-  An unresolved \${data.*} placeholder means the suite's contract does not define
-  that key at this level; an unresolved {{profile.*}} means no loaded ISiK package
-  defines that profile name."
+  An unresolved \${<ns>.*} placeholder means the suite's contract does not define
+  that key in that namespace at this level; an unresolved {{profile.*}} means no
+  loaded ISiK package defines that profile name."
 
 # -----------------------------------------------------------------------------
 # 2. Assertion check
@@ -85,7 +100,7 @@ python3 "${LIB}/build_testdata.py" --packages "$PACKAGES_DIR" \
 step "2/5 Checking the rendered data against the suite's assertions"
 
 assert_failed=0
-for level in Stufe3 Stufe5; do
+for level in $(suite_levels); do
   python3 "${LIB}/assertion_check.py" --level "$level" --data-root "$BUILD_DIR" \
       --json-report "${SEED_DIR}/assertions-${level}.json" \
     || assert_failed=1
@@ -104,9 +119,12 @@ done
 # defect. See the module docstring for why `all()` over the result set is vacuous.
 step "3/5 Checking the search-scenario reference requirements"
 
+# TESTS_TO_RUN_STUFE3 is passed only when the suite carries Stufe 3; under a 3.x
+# suite the variable may legitimately be unset, and `:?` would abort the step.
 python3 "${LIB}/search_reference_check.py" --data-root "$BUILD_DIR" \
-    --tags-stufe3 "${TESTS_TO_RUN_STUFE3:?}" \
+    --levels "$(suite_levels)" \
     --tags-stufe5 "${TESTS_TO_RUN_STUFE5:?}" \
+    ${TESTS_TO_RUN_STUFE3:+--tags-stufe3 "$TESTS_TO_RUN_STUFE3"} \
     --json-report "${SEED_DIR}/search-references.json" \
   || die "a search scenario requires a reference no seeded resource carries - see above"
 
@@ -138,11 +156,8 @@ if [[ "$SEED_VALIDATE" != 1 ]]; then
 fi
 
 seed_failed=0
-for level in Stufe3 Stufe5; do
-  case "$level" in
-    Stufe3) stufe=stufe3 ;;
-    Stufe5) stufe=stufe5 ;;
-  esac
+for level in $(suite_levels); do
+  stufe="$(printf '%s' "$level" | tr '[:upper:]' '[:lower:]')"
   base="$(sut_base_url_host "$stufe")"
   log "${level} -> ${base}"
 
@@ -181,13 +196,13 @@ step "5/5 Recording what was seeded"
     "$SEED_VALIDATE" "$SEED_VALIDATE_STRICT"
 } > "$SEED_LOG"
 
-python3 - "$SEED_DIR" >> "$SEED_LOG" <<'PY'
+python3 - "$SEED_DIR" $(suite_levels) >> "$SEED_LOG" <<'PY'
 import json
 import pathlib
 import sys
 
 seed_dir = pathlib.Path(sys.argv[1])
-for level in ("Stufe3", "Stufe5"):
+for level in sys.argv[2:]:
     path = seed_dir / f"{level}.json"
     if not path.is_file():
         print(f"{level}: not seeded (no record written)\n")
@@ -257,6 +272,6 @@ if (( seed_failed )); then
   SEED_VALIDATE_STRICT=0 in .env to proceed anyway with the defects recorded."
 fi
 
-ok "test data seeded and verified in both endpoints"
-log "record: run/seed/{Stufe3,Stufe5}.json, run/seed/SEED.txt"
+ok "test data seeded and verified in $(suite_levels | wc -w | tr -d ' ') endpoint(s): $(suite_levels)"
+log "record: run/seed/SEED.txt and one JSON per level ($(suite_levels))"
 step "Seeding complete"
