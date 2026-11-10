@@ -872,7 +872,7 @@ internal = {
     "REPO_ROOT", "RUN_ID", "SCRIPTS_DIR", "ENV_FILE", "ENV_RESOLVED_FILE",
     "VENDOR_DIR", "PACKAGES_DIR", "RUN_DIR", "REPORTS_DIR", "SECRETS_DIR",
     "ENV_LOADED_FROM", "TESTSUITE_REF", "PLUGINS_DIR", "TGZ_DIR", "UPSTREAM_DIR",
-    "MANIFEST", "PARITY", "BUNDLED_DIR", "PROMOTED_FETCHED",
+    "MANIFEST", "PARITY", "BUNDLED_DIR", "PROMOTED_FETCHED", "IMPLICIT_FETCHED",
     # 20-fetch-packages.sh's parity bookkeeping. SUBSTITUTED holds the payloads the
     # simplifier route could not download and filled from the image; the rest are
     # the classified rows and their tallies.

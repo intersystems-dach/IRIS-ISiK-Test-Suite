@@ -98,7 +98,7 @@ fi
 # IRIS, not service_healthy, so it comes up while IRIS is still installing and is
 # already answering by the time this check first runs for real.
 for var in ISIK_FHIR_BASE_STUFE3 ISIK_FHIR_BASE_STUFE5 ISIK_SUT_USER ISIK_SUT_PASSWORD \
-           ISIK_WEBGATEWAY_HOST; do
+           ISIK_WEBGATEWAY_HOST ISIK_PACKAGE_PLAN; do
     if [[ -z "${!var:-}" ]]; then
         echo "environment variable ${var} is not set - cannot probe the endpoints"
         exit 1
@@ -147,14 +147,55 @@ probe() {
     return 0
 }
 
+# Which endpoints have to answer: the ones the package plan describes, not both
+# levels literally. plan_packages.py builds `endpoints` over the levels the pinned
+# test suite carries, and ISiK.Setup installs exactly those (see its PlanLevels()),
+# so under a 3.x suite - Gematik release 3.0.0 removed ISiK Level 3 - there is no
+# ISIK3 namespace and no web application behind ISIK_FHIR_BASE_STUFE3. Probing it
+# regardless would make the container permanently unhealthy on a correct
+# installation, with a 404 whose message blames the gateway configuration.
+#
+# The plan is the same file ISiK.Setup reads, mounted at ISIK_PACKAGE_PLAN, so the
+# two cannot disagree about which endpoints should exist.
+plan_bases() {
+    python3 - "$ISIK_PACKAGE_PLAN" <<'PY'
+import json, os, sys
+
+with open(sys.argv[1], encoding="utf-8") as fh:
+    plan = json.load(fh)
+endpoints = plan.get("endpoints")
+if not isinstance(endpoints, dict):
+    sys.exit("no 'endpoints' object in the package plan")
+# Fixed order, so the output of two runs is comparable.
+for level, var in (("stufe3", "ISIK_FHIR_BASE_STUFE3"),
+                   ("stufe5", "ISIK_FHIR_BASE_STUFE5")):
+    if isinstance(endpoints.get(level), dict):
+        print(os.environ[var])
+PY
+}
+
+if ! BASES="$(plan_bases)"; then
+    echo "cannot read the package plan at ${ISIK_PACKAGE_PLAN} - see the message above"
+    exit 1
+fi
+# An empty list must not read as "nothing failed". A healthy verdict that verified
+# no endpoint at all is the one outcome this check exists to prevent.
+if [[ -z "$BASES" ]]; then
+    echo "${ISIK_PACKAGE_PLAN}: 'endpoints' describes no known level - nothing to probe, so health cannot be established"
+    exit 1
+fi
+
 failed=0
-probe "$ISIK_FHIR_BASE_STUFE3" || failed=1
-probe "$ISIK_FHIR_BASE_STUFE5" || failed=1
+n=0
+for base in $BASES; do
+    probe "$base" || failed=1
+    n=$((n+1))
+done
 
 if (( failed )); then
     echo "bootstrap completed but an endpoint is not serving CapabilityStatements"
     exit 1
 fi
 
-echo "healthy: both FHIR endpoints serve /metadata as ${ISIK_SUT_USER} via ${GATEWAY}"
+echo "healthy: ${n} FHIR endpoint(s) serve /metadata as ${ISIK_SUT_USER} via ${GATEWAY}: ${BASES//$'\n'/ }"
 exit 0

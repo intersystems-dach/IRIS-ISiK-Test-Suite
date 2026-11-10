@@ -68,10 +68,15 @@ ClassMethod Run() As %Status
         // before the per-level work.
         $$$ThrowOnError(..EnsureSecurity(config))
 
-        // Per level. Sequential rather than parallel: package import is I/O and
-        // CPU bound and the two levels share the same instance, so overlapping
-        // them would only lengthen the critical path.
-        #dim levels As %DynamicArray = ["stufe3", "stufe5"]
+        // Per level, as the plan describes them - see PlanLevels(). Sequential
+        // rather than parallel: package import is I/O and CPU bound and the levels
+        // share the same instance, so overlapping them would only lengthen the
+        // critical path.
+        #dim levels As %DynamicArray = ..PlanLevels(plan)
+        if levels.%Size() = 0 {
+            // One line, see RequireEnv() on why.
+            $$$ThrowStatus($$$ERROR($$$GeneralError, config.packagePlan _ ": 'endpoints' describes no known level - regenerate it with 'make packages'"))
+        }
         #dim iter As %Iterator.Array = levels.%GetIterator()
         #dim key, level As %String
         while iter.%GetNext(.key, .level) {
@@ -170,6 +175,39 @@ ClassMethod ReadPlan(path As %String) As %DynamicObject
         $$$ThrowStatus($$$ERROR($$$GeneralError, path _ ": no 'endpoints' object - regenerate it with 'make packages'"))
     }
     quit plan
+}
+
+/// The levels this round installs: the known levels, filtered by what the package
+/// plan actually describes.
+///
+/// <p>Both halves matter. The literal list fixes the order, so two instances built
+/// from the same plan install in the same sequence and the provenance record lists
+/// the endpoints in the same order; iterating the plan's own keys would make that
+/// an artefact of JSON key order. The plan is what decides which of them exist,
+/// because <code>plan_packages.py</code> builds <code>endpoints</code> over
+/// suite_levels_lc() - the levels the pinned test suite carries. Gematik release
+/// 3.0.0 removed ISiK Level 3, so under a 3.x suite the plan has no
+/// <code>endpoints.stufe3</code>, and installing a namespace nothing will test is
+/// not a harmless extra: it would appear in iris-provenance.json as an endpoint of
+/// this round, which the generated reports read as evidence of what was tested.</p>
+///
+/// <p>Returns the levels in order. The caller must treat an empty result as an
+/// error: a plan that describes no endpoint is a defect in the plan, not a round
+/// with nothing to do.</p>
+ClassMethod PlanLevels(plan As %DynamicObject) As %DynamicArray
+{
+    #dim known As %DynamicArray = ["stufe3", "stufe5"]
+    #dim out As %DynamicArray = []
+    #dim iter As %Iterator.Array = known.%GetIterator()
+    #dim key As %String
+    #dim level As %String
+
+    while iter.%GetNext(.key, .level) {
+        if $isobject(plan.endpoints.%Get(level)) {
+            do out.%Push(level)
+        }
+    }
+    quit out
 }
 
 // =========================================================================
@@ -821,7 +859,11 @@ ClassMethod VerifyEndpoints() As %Status
     #dim sc As %Status = $$$OK
     try {
         #dim config As %DynamicObject = ..ReadConfig()
-        #dim levels As %DynamicArray = ["stufe3", "stufe5"]
+        // The plan is read here too, for its endpoint list only: verifying an
+        // endpoint the round did not install would report a correct installation as
+        // a failure. See PlanLevels().
+        #dim plan As %DynamicObject = ..ReadPlan(config.packagePlan)
+        #dim levels As %DynamicArray = ..PlanLevels(plan)
         #dim iter As %Iterator.Array = levels.%GetIterator()
         #dim key As %String
         #dim level As %String
@@ -961,7 +1003,11 @@ ClassMethod WriteProvenance(config As %DynamicObject, plan As %DynamicObject) As
 
     set out.endpoints = []
 
-    #dim levels As %DynamicArray = ["stufe3", "stufe5"]
+    // Only what was installed, which is what the plan describes - see PlanLevels().
+    // This file is read by the report generators as the record of the endpoints
+    // this round tested, so an entry for a level the suite does not carry would be
+    // a false statement about the round, not a spare row.
+    #dim levels As %DynamicArray = ..PlanLevels(plan)
     #dim iter As %Iterator.Array = levels.%GetIterator()
     #dim key, level As %String
 

@@ -644,17 +644,19 @@ CRED_FILE="${RUN_DIR}/CREDENTIALS.md"
 SUT_BASE_HOST3="$(sut_base_url_host stufe3)"
 SUT_BASE_HOST5="$(sut_base_url_host stufe5)"
 
-# The endpoint table's rows. Both endpoints are installed by every round - they
-# are a property of the system under test, not of the test suite - but only the
-# levels suite_levels() reports are exercised by the pinned suite, and the sheet
-# must not describe an endpoint as "what the suite uses" when the suite does not
-# carry that level. The third column therefore states exercised-or-not, derived
-# from the same helper the rendering loop used.
+# The endpoint table's rows. Both are listed, including one the round may not
+# install: the namespaces the SUT creates come from vendor/package-plan.json, which
+# plan_packages.py builds over suite_levels_lc(), so under a 3.x suite - which
+# dropped ISiK Level 3 - only the Stufe 5 endpoint exists. The sheet must not
+# describe an endpoint as "what the suite uses" when the suite does not carry that
+# level, and must not imply a URL answers when nothing was installed behind it. The
+# third column therefore states scope-and-existence, derived from the same helper
+# the rendering loop used.
 ENDPOINT_ROWS=""
 for stufe in stufe3 stufe5; do
   case " $(suite_levels_lc) " in
     *" $stufe "*) scope="yes - this round" ;;
-    *)            scope="no - not in ${TESTSUITE_VERSION}" ;;
+    *)            scope="no - not in ${TESTSUITE_VERSION}, not installed" ;;
   esac
   ENDPOINT_ROWS+="| Stufe ${stufe#stufe} | $(sut_base_url_host "$stufe") | $(sut_base_url "$stufe") | ${scope} |
 "

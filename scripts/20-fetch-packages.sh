@@ -325,13 +325,33 @@ esac
 # and reported by the results analysis. There is deliberately no fallback: with the
 # package missing the import fails inside IRIS after the namespace has been created,
 # which is a far worse failure than stopping here with the reason named.
+#
+# A second class joined it at test suite 3.0.9, for a different reason and with the
+# same consequence. `hl7.fhir.r4.core#4.0.1` is added to every level implicitly
+# (see plan_packages.py, "The base FHIR R4 package"): the validator always has core
+# R4 and so does not pin it, but an IRIS endpoint's package list must contain it.
+# Under 2.7.0 that addition cost nothing, because the `isik3-basismodul` plugin
+# named core R4 explicitly and therefore bundled its payload, which the pool is
+# shared across. Release 3.0.0 removed ISiK Level 3, so the only plugin left is
+# `isik5`, whose dependency list starts at `de.basisprofil.r4#1.5.4` - and with it
+# went the only bundled copy of core R4 in the image. The package is still required
+# and still has to come from somewhere, so it is fetched here, by the same route,
+# with the same archive verification, and recorded separately because the reason it
+# has no bundled payload is not the same reason.
 fetch_promoted_packages() {
   local ids
   ids="$(python3 -c '
 import json, sys
 plan = json.load(open(sys.argv[1]))
+seen = set()
 for p in plan.get("snapshotDependenciesPromoted", []):
-    print(p["id"])
+    seen.add(p["id"]); print(p["id"], "promoted")
+# Packages the planner added itself. Only these: a package named by a plugin and
+# absent from the image is not a case to paper over with a download, and still
+# fails the load-order gate below with its name.
+for p in plan.get("allPackages", []):
+    if p.get("implicit") and p["id"] not in seen:
+        print(p["id"], "implicit")
 ' "${VENDOR_DIR}/package-plan.json")"
   [[ -n "$ids" ]] || return 0
 
@@ -352,22 +372,29 @@ for p in plan.get("snapshotDependenciesPromoted", []):
   done
   shopt -u nullglob
 
-  local id name version out
-  while read -r id; do
+  local id kind name version out why
+  while read -r id kind; do
     [[ -n "$id" ]] || continue
     name="${id%%#*}"; version="${id#*#}"
+    if [[ "$kind" == implicit ]]; then
+      why="This package is not optional and has no bundled copy: the reference validator
+  plugins for this suite version do not name it, so the image carries no payload for
+  it, while an IRIS endpoint cannot be built without the base FHIR R4 definitions."
+    else
+      why="This package is not optional and has no bundled copy. A package the ${PACKAGE_SOURCE}
+  route does load declares it as a dependency, and HS.FHIRMeta.Load.NpmLoader
+  resolves declared dependencies by exact id: without it the IRIS import aborts with
+  ERROR #5809 after the namespace has been created."
+    fi
     if [[ -n "${pool[$id]:-}" ]]; then
-      log "promoted dependency ${id} is already in the payload pool"
+      log "${kind} dependency ${id} is already in the payload pool"
       continue
     fi
-    log "fetching promoted dependency ${id} from ${registry} (no payload in the image)"
+    log "fetching ${kind} dependency ${id} from ${registry} (no payload in the image)"
     out="${TGZ_DIR}/${name}-${version}.tgz"
     curl -fsSL --retry 3 --retry-delay 2 -o "$out" "${registry}/${name}/${version}" \
       || { rm -f "$out"; die "cannot fetch ${id} from ${registry}
-  This package is not optional and has no bundled copy. A package the ${PACKAGE_SOURCE}
-  route does load declares it as a dependency, and HS.FHIRMeta.Load.NpmLoader
-  resolves declared dependencies by exact id: without it the IRIS import aborts with
-  ERROR #5809 after the namespace has been created. Check network access to
+  ${why} Check network access to
   ${registry}, then re-run 'make packages'."; }
     # A 200 with the wrong content would surface much later as a mis-named package
     # directory, so the archive is checked here against what was asked for.
@@ -375,12 +402,17 @@ for p in plan.get("snapshotDependenciesPromoted", []):
       | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["name"], d["version"])' 2>/dev/null || true)"
     [[ "$meta" == "${name} ${version}" ]] \
       || { rm -f "$out"; die "${registry}/${name}/${version} served '${meta:-nothing readable}', not ${name} ${version}"; }
-    PROMOTED_FETCHED+=("$id")
+    if [[ "$kind" == implicit ]]; then
+      IMPLICIT_FETCHED+=("$id")
+    else
+      PROMOTED_FETCHED+=("$id")
+    fi
     ok "fetched ${id} ($(sha256_of "$out"))"
   done <<<"$ids"
 }
 
 PROMOTED_FETCHED=()
+IMPLICIT_FETCHED=()
 fetch_promoted_packages
 
 # -----------------------------------------------------------------------------
@@ -482,6 +514,20 @@ MANIFEST="${PACKAGES_DIR}/MANIFEST.txt"
     printf '#   dependencies by exact id - see snapshotDependenciesPromoted in\n'
     printf '#   vendor/package-plan.json.\n'
     for id in "${PROMOTED_FETCHED[@]}"; do
+      printf '#     %s\n' "$id"
+    done
+  fi
+  # The same exception for a different reason, kept apart from the one above so the
+  # manifest states why each payload could not come from the image.
+  if (( ${#IMPLICIT_FETCHED[@]} )); then
+    printf '#\n'
+    printf '# Exception: the package(s) below have no payload in the test suite image and\n'
+    printf '#   were fetched from %s regardless of PACKAGE_SOURCE. They are\n' "${SIMPLIFIER_REGISTRY:-https://packages.simplifier.net}"
+    printf '#   not named by any reference-validator plugin of this suite version - the\n'
+    printf '#   validator has the base FHIR R4 definitions and does not pin them - while\n'
+    printf '#   an IRIS endpoint package list must contain them. Added by the planner and\n'
+    printf '#   marked `implicit: true` in vendor/package-plan.json.\n'
+    for id in "${IMPLICIT_FETCHED[@]}"; do
       printf '#     %s\n' "$id"
     done
   fi
@@ -597,12 +643,15 @@ if [[ "$PACKAGE_SOURCE" == simplifier ]]; then
       printf '# PACKAGE_SOURCE=refv if the round must use what the validator ships.\n#\n'
     fi
     printf '# %-8s %-56s %s\n' 'STATUS' 'PACKAGE' 'VERSION'
-    for id in "${PROMOTED_FETCHED[@]}"; do
+    # Both fetch classes belong here: REGISTRY means "no bundled copy exists to
+    # compare against", which is true of each for its own reason.
+    for id in "${PROMOTED_FETCHED[@]}" "${IMPLICIT_FETCHED[@]}"; do
       printf '  %-8s %s\n' 'REGISTRY' "$id"
     done
     printf '%s' "$PARITY_ROWS" | sort -k2
     printf '#\n# summary: %d MATCH, %d EQUIV, %d DIFFER, %d BUNDLED, %d ABSENT, %d REGISTRY\n' \
-      "$n_match" "$n_equiv" "$n_differ" "$n_bundled" "$n_absent" "${#PROMOTED_FETCHED[@]}"
+      "$n_match" "$n_equiv" "$n_differ" "$n_bundled" "$n_absent" \
+      "$(( ${#PROMOTED_FETCHED[@]} + ${#IMPLICIT_FETCHED[@]} ))"
     printf '# corroborated (MATCH + EQUIV): %d of %d comparable package(s)\n' \
       "$(( n_match + n_equiv ))" "$(( n_match + n_equiv + n_differ ))"
   } >"$PARITY"

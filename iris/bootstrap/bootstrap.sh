@@ -60,8 +60,12 @@ for var in ISIK_NS_STUFE3 ISIK_NS_STUFE5 ISIK_FHIR_BASE_STUFE3 ISIK_FHIR_BASE_ST
     [[ -n "${!var:-}" ]] || fail "environment variable ${var} is not set"
 done
 
-say "namespaces:  ${ISIK_NS_STUFE3} (Stufe 3), ${ISIK_NS_STUFE5} (Stufe 5)"
-say "endpoints:   ${ISIK_FHIR_BASE_STUFE3}, ${ISIK_FHIR_BASE_STUFE5}"
+# Configured, not necessarily installed: which of the two ISiK.Setup creates comes
+# from the package plan's `endpoints` (see its PlanLevels()), and a 3.x suite has no
+# ISiK Level 3. The banner therefore says what it is - the configuration it was
+# handed - and the install log below states what was actually created.
+say "configured:  ${ISIK_NS_STUFE3} ${ISIK_FHIR_BASE_STUFE3} (Stufe 3), ${ISIK_NS_STUFE5} ${ISIK_FHIR_BASE_STUFE5} (Stufe 5)"
+say "installed:   whichever of those the package plan describes - see below"
 say "api user:    ${ISIK_SUT_USER}"
 say "mgmt user:   ${ISIK_MGMT_USER} (Management Portal; password set to never expire)"
 say "packages:    ${ISIK_PACKAGE_ROOT}"

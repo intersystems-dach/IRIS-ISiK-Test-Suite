@@ -70,6 +70,19 @@ load_env
 require_var TESTSUITE_IMAGE TESTSUITE_VERSION TESTSUITE_IP IRIS_IP \
             SUT_USER SUT_PASSWORD IRIS_MGMT_USER IRIS_MGMT_PASSWORD
 
+# A level the pinned suite does not carry is refused rather than run. Release 3.0.0
+# removed ISiK Level 3, and the suite answers a tag expression that selects no
+# scenario with a successful build and an empty report - indistinguishable, in the
+# archive, from a level that ran and found nothing. That is the one outcome this
+# project must never produce silently, so the refusal is here and not only in the
+# Makefile's `test` target, which is one of several ways to reach this script.
+case " $(suite_levels_lc) " in
+  *" ${STUFE} "*) ;;
+  *) die "test suite ${TESTSUITE_VERSION} does not carry ${LEVEL} - it carries $(suite_levels).
+  Running it would start a container whose tag expression selects no scenario and
+  write an empty report, which cannot be told apart from a level that found nothing." ;;
+esac
+
 need_cmd docker
 need_cmd python3
 # For the archive checks in section 4 (`unzip -t`, CRC integrity) and 4b
@@ -99,8 +112,15 @@ RUN_TIMEOUT="${TESTSUITE_TIMEOUT:-10800}"
 # a wall of IRIS conformance gaps - the one misattribution this project exists to
 # avoid.
 
-for f in "${RUN_DIR}/tiger/tiger-isik-stufe3.yaml" "${RUN_DIR}/tiger/tiger-isik-stufe5.yaml" \
-         "${RUN_DIR}/testdata"; do
+# One Tiger configuration per level the pinned suite carries. Listing both levels
+# literally would fail a 3.x round, which has no Stufe 3 and therefore no
+# tiger-isik-stufe3.yaml - see the same guard in 40-up.sh.
+tiger_expected=()
+for s in $(suite_levels_lc); do
+  tiger_expected+=("${RUN_DIR}/tiger/tiger-isik-${s}.yaml")
+done
+(( ${#tiger_expected[@]} )) || die "suite_levels() named no level for TESTSUITE_VERSION=${TESTSUITE_VERSION:-?}"
+for f in "${tiger_expected[@]}" "${RUN_DIR}/testdata"; do
   [[ -e "$f" ]] || die "${f#$REPO_ROOT/} is missing - run 'make up' (scripts/30-render-config.sh renders it)"
 done
 

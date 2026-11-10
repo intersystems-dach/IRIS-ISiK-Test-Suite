@@ -256,7 +256,129 @@ defect leaves a workaround that is now itself a deviation. The step-shape drift
 table in `index.json` and the version-pinned counts in the extractor are what make
 a bump visible rather than silent.
 
-### A fifth, in the ISiK packages rather than in the suite: same version, two definitions
+### Re-checked against test suite 3.0.9
+
+The instruction above — a bumped suite version leaves every workaround to be
+re-checked, because a fixed upstream defect turns its workaround into a deviation
+— was carried out for release 3.0.9. Each row states what was measured, not what
+was expected.
+
+| Defect | State in 3.0.9 | Consequence |
+|---|---|---|
+| Stray `$` regex anchors | **1 of 4 occurrences remains**: `Stufe5/Medikation/MedicationStatement-Search.feature:58`. The other three were in Stufe 3 features (`Medikation/MedicationRequest-Search.feature:71`, `Medikation/MedicationStatement-Search.feature:83`, and the already commented-out `Basis/Encounter-Read-In-Progress.feature:44`) and are absent because release 3.0.0 removed ISiK Level 3, not because they were corrected | `STRAY_ANCHOR` is still required and still fires. One Level 5 scenario fails regardless of the data, attributed to the test suite |
+| `@Precondition:` with a trailing colon | **Unchanged: 4 occurrences**, out of 205 `@Precondition` tags in the 203 feature files | The normalisation in `feature_parser.py` is still required |
+| Undefined test-data keys | **Unchanged in substance: 4 referenced and never defined, the same four as in 2.7.0**, measured by resolving all 312 distinct `${<module>.<key>}` references against all 345 defined keys. Two are aliased, in `testdata/v3/Stufe5/zz-upstream-key-defects-basis.yaml` and `-medikation.yaml`; two are deliberately not | `RiskAssessment-read-id` still changes a verdict and is still aliased. The per-module `baseKey` namespaces introduced at 3.0.0 mean the aliases are now two files instead of one, with no change of content |
+| Scheme-inconsistent `Bundle` canonical | **Unchanged: still present, 45 occurrences** (64 in 2.7.0; the reduction is Level 3's removal). The features assert `https://hl7.org/fhir/StructureDefinition/Bundle`; `hl7.fhir.r4.core#4.0.1` declares `http://hl7.org/fhir/StructureDefinition/Bundle`, confirmed by reading the package's own `StructureDefinition-Bundle.json` | The scheme-insensitive match is still required |
+
+None of the four was corrected upstream, so no workaround became obsolete and
+none was removed. One new defect was found, below.
+
+### A new upstream defect, present only in 3.0.9: prose and step state different units
+
+`Stufe5/Labor/Observation-Read-Troponin.feature` states the measured value twice
+and inconsistently:
+
+| Line | Text | Reads as |
+|---|---|---|
+| 37 | `* Value: 0.1 ng/L` | the vendor is to seed 0.1 nanogram per litre |
+| 67 | `value.where(value ~ 0.1 and code = 'ng/mL' and unit.exists() and system = 'http://unitsofmeasure.org').exists()` | the server must return 0.1 nanogram per *millilitre* |
+| 68 | `referenceRange.where(high.value ~ 0.14 and high.code = 'ng/mL' …)` | likewise for the reference range |
+
+`ng/L` and `ng/mL` are both valid UCUM codes and differ by a factor of 1000, and
+the stated number is the same in both places, so the two statements describe
+physically different concentrations. A vendor who seeds what the prose says fails
+the step.
+
+**Not worked around, because it needs no workaround — only a decision about which
+statement governs.** The step is the executable artefact and is what produces the
+verdict, so `testdata/fhir/v3/Stufe5/Observation-ISiKLaboruntersuchungTroponin-Example.json`
+carries `ng/mL`. `Quantity.unit`, which the step requires only to *exist* and for
+which neither the prose nor any step states a text, is written from the UCUM code
+the step itself asserts; that is the one text which cannot contradict the step.
+`reconcile_testdata.py` records the substitution in the body's `used` list rather
+than making it silently.
+
+**Effect on a verdict: none that is attributable to the SUT.** The scenario passes
+or fails on whether IRIS returns what the step demands, which is what the step
+would demand of any vendor. The defect is that the specification tells the vendor
+to prepare something else.
+
+### Three defects in this rig, surfaced by the same bump
+
+Recorded here because this is the class of thing a version bump is supposed to
+expose. All three are fixed. None changed a verdict in any round, and the reason
+is stated per defect rather than asserted once.
+
+**1. The base FHIR R4 package lost its only bundled payload.**
+`hl7.fhir.r4.core#4.0.1` is added to every level by `plan_packages.py` as an
+implicit requirement: the reference validator always has core R4 and so does not
+pin it, while an IRIS endpoint's package list must contain it. Under 2.7.0 that
+addition cost nothing, because the `isik3-basismodul` plugin named core R4
+explicitly and therefore bundled its `.tgz`, which the payload pool is shared
+across. Release 3.0.0 removed ISiK Level 3, leaving `isik5` as the only plugin —
+and its dependency list starts at `de.basisprofil.r4#1.5.4`. The image carries 19
+payloads for a 20-package plan, so `make packages` stopped at the load-order gate
+with `missing package directories: vendor/packages/hl7.fhir.r4.core#4.0.1`.
+
+The gate was right and the fetcher was incomplete: `20-fetch-packages.sh` fetched
+only `snapshotDependenciesPromoted` from the package registry. It now also fetches
+plan entries marked `implicit: true`, with the same archive verification — the
+downloaded tarball's own `package.json` must state the name and version asked for —
+and records them in a *separate* `MANIFEST.txt` block, because the reason this
+payload is absent from the image is not the reason the promoted one is. A package
+named by a plugin and absent from the image is still a hard failure; only the
+planner's own additions are fetchable this way. Consequence, stated rather than
+hidden: under a 3.x suite `PACKAGE_SOURCE=refv` takes two payloads from the
+registry rather than one.
+
+**2. Six sites named both levels literally.**
+Two authorities were already generation-aware — `30-render-config.sh` renders one
+Tiger configuration per `suite_levels_lc()`, and `plan_packages.py` builds
+`endpoints` over the same set — so under a 3.x suite there is no
+`tiger-isik-stufe3.yaml` and no `endpoints.stufe3`, both correctly. Six consumers
+still assumed two of everything, and each failed in turn:
+
+| Site | Assumed | Now |
+|---|---|---|
+| `40-up.sh`, config guard | `run/tiger/tiger-isik-stufe3.yaml` exists | one expected file per `suite_levels_lc()` |
+| `40-up.sh`, endpoint check | `FHIR_BASE_STUFE3` answers with a `CapabilityStatement` | `verify_endpoint` over `suite_levels_lc()` |
+| `60-run-tests.sh`, config guard | the same file exists | the same per-level list |
+| `ISiK.Setup.Run()` | `plan.endpoints.stufe3` is present; aborted with `ERROR #5001` when it was not | installs `PlanLevels(plan)`, and refuses a plan that describes no known level |
+| `ISiK.Setup.VerifyEndpoints()` and `WriteProvenance()` | both levels were installed | the same `PlanLevels(plan)` |
+| `healthcheck.sh` | both endpoints serve `/metadata` | probes the endpoints the plan describes, read from the same `package-plan.json` the setup class reads |
+
+The failure mode this removes is not a false pass but a false fault: a Stufe 3
+endpoint that was never installed, reported as an unreachable SUT or a misconfigured
+gateway, in a round where nothing asked for it to exist. Two of the six would have
+produced a *false record* rather than a false fault — `WriteProvenance` writes
+`iris-provenance.json`, which the report generators read as the statement of which
+endpoints this round tested, and `healthcheck.sh` decides whether the SUT is ever
+declared healthy. Both now refuse an empty level list explicitly, because a health
+verdict that verified no endpoint at all, or a provenance record listing none, must
+not be reachable by omission.
+
+`60-run-tests.sh` additionally now **refuses** a level the pinned suite does not
+carry, rather than running it. The suite answers a tag expression that selects no
+scenario with a successful build and an empty report, which in the archive is
+indistinguishable from a level that ran and found nothing. The refusal is in the
+script and not only in the Makefile's `test` target, because the script is
+reachable several ways.
+
+**3. The search-URL pattern modelled one of three shapes.**
+`search_reference_check.py` recognised a search URL only in the shape
+`http://fhirserver/<Type>/?<query>`. The Connect module introduced at 3.0.0
+writes two further shapes — `http://fhirserver/Encounter?_count=10` (12
+occurrences in 3.0.9) and `http://fhirserver/DocumentReference` with no query at
+all (11) — so the assertion at
+`Stufe5/Connect/Patient-Wildcard-Read-Scope.feature:49` was reported as a step
+shape the check does not model. The pattern now accepts all three, excluding
+`/metadata`, which has the same shape and is not a search. The requirement turns
+out to be one the corpus already satisfies, and is recorded as a fifth site on
+`Encounter.subject -> Patient-Read-Example`. Against the 2.7.0 corpus the widened
+pattern enumerates the same 110 requirements as before, so no earlier round's
+validation is affected.
+
+### In the ISiK packages rather than in the suite: same version, two definitions
 
 Found by the parity gate on the official 2026.2 round, and **not worked around** —
 it needs no workaround, only a decision about which copy to load. Three packages are

@@ -95,7 +95,16 @@ pkg_dirs="$(find -L "$PACKAGES_DIR" -maxdepth 2 -name package.json 2>/dev/null |
 (( pkg_dirs > 0 )) \
   || die "no unpacked FHIR packages under vendor/packages/ - run 'make packages' first"
 
-for f in "${RUN_DIR}/tiger/tiger-isik-stufe3.yaml" "${RUN_DIR}/tiger/tiger-isik-stufe5.yaml" \
+# One Tiger configuration per level the pinned suite carries, not two literals:
+# 30-render-config.sh renders over suite_levels_lc(), so under a 3.x suite - which
+# dropped ISiK Level 3 - tiger-isik-stufe3.yaml is correctly absent, and demanding
+# it here fails a valid round for a file nothing would read.
+tiger_expected=()
+for stufe in $(suite_levels_lc); do
+  tiger_expected+=("${RUN_DIR}/tiger/tiger-isik-${stufe}.yaml")
+done
+(( ${#tiger_expected[@]} )) || die "suite_levels() named no level for TESTSUITE_VERSION=${TESTSUITE_VERSION:-?}"
+for f in "${tiger_expected[@]}" \
          "${RUN_DIR}/webgateway/CSP.ini" "${RUN_DIR}/webgateway/isik-vhost.conf"; do
   [[ -f "$f" ]] || die "${f#$REPO_ROOT/} is missing - run scripts/30-render-config.sh (or 'make up')"
 done
@@ -387,9 +396,15 @@ print(doc.get("fhirVersion", "?"))
   return 0
 }
 
+# Only the levels the pinned suite carries. The namespaces the SUT installs come
+# from vendor/package-plan.json, which plan_packages.py builds over the same
+# suite_levels_lc() set, so under a 3.x suite there is no ISIK3 namespace to probe
+# and no endpoint behind FHIR_BASE_STUFE3. Probing it anyway would report a missing
+# endpoint as an SUT fault when nothing asked for it to exist.
 failed=0
-verify_endpoint stufe3 || failed=1
-verify_endpoint stufe5 || failed=1
+for stufe in $(suite_levels_lc); do
+  verify_endpoint "$stufe" || failed=1
+done
 (( failed == 0 )) || die "an endpoint is not reachable from the host - see above"
 
 # -----------------------------------------------------------------------------

@@ -141,7 +141,20 @@ test-stufe3: seed ## Run the ISiK Stufe 3 conformance suite
 test-stufe5: seed ## Run the ISiK Stufe 5 conformance suite
 	@$(SCRIPTS)/60-run-tests.sh stufe5
 
-test: test-stufe3 test-stufe5 ## Run both levels, sequentially (they share the report volume)
+# Every level the pinned suite carries, sequentially - they share the report
+# volume, which is why they are serialised and why each archives before the next
+# starts. The levels come from suite_levels() in scripts/lib.sh rather than being
+# listed here, because release 3.0.0 removed ISiK Level 3: under a 3.x suite
+# `60-run-tests.sh stufe3` would start a container whose tag expression selects no
+# scenario, and an empty report is the one outcome that must not be produced
+# silently in a round whose product is a statement about the SUT.
+test: seed ## Run every level the pinned suite carries, sequentially
+	@set -e; \
+	levels="$$(. scripts/lib.sh; load_env; suite_levels)"; \
+	[ -n "$$levels" ] || { echo "make test: suite_levels named no level - see above" >&2; exit 1; }; \
+	for level in $$levels; do \
+	  $(SCRIPTS)/60-run-tests.sh "$$(echo "$$level" | tr 'A-Z' 'a-z')"; \
+	done
 
 # --- Phase 4: evidence ------------------------------------------------------
 
