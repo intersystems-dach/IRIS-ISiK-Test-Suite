@@ -1,108 +1,109 @@
 {
-  "resourceType": "Encounter",
-  "id": "ICUext-Department-Case-617",
+  "class": {
+    "code": "IMP",
+    "display": "inpatient encounter",
+    "system": "http://terminology.hl7.org/CodeSystem/v3-ActCode"
+  },
   "extension": [
     {
-      "url": "http://fhir.de/StructureDefinition/Aufnahmegrund",
       "extension": [
         {
           "url": "ErsteUndZweiteStelle",
           "valueCoding": {
-            "system": "http://fhir.de/CodeSystem/dkgev/AufnahmegrundErsteUndZweiteStelle",
             "code": "01",
-            "display": "Krankenhausbehandlung, vollstationär"
+            "display": "Krankenhausbehandlung, vollstationär",
+            "system": "http://fhir.de/CodeSystem/dkgev/AufnahmegrundErsteUndZweiteStelle"
           }
         },
         {
           "url": "DritteStelle",
           "valueCoding": {
-            "system": "http://fhir.de/CodeSystem/dkgev/AufnahmegrundDritteStelle",
             "code": "0",
-            "display": "Anschlussheilbehandlung/Reha"
+            "display": "Anschlussheilbehandlung/Reha",
+            "system": "http://fhir.de/CodeSystem/dkgev/AufnahmegrundDritteStelle"
           }
         },
         {
           "url": "VierteStelle",
           "valueCoding": {
-            "system": "http://fhir.de/CodeSystem/dkgev/AufnahmegrundVierteStelle",
             "code": "1",
-            "display": "Normalfall"
+            "display": "Normalfall",
+            "system": "http://fhir.de/CodeSystem/dkgev/AufnahmegrundVierteStelle"
           }
+        }
+      ],
+      "url": "http://fhir.de/StructureDefinition/Aufnahmegrund"
+    }
+  ],
+  "hospitalization": {
+    "admitSource": {
+      "coding": [
+        {
+          "code": "E",
+          "display": "Einweisung durch einen Arzt",
+          "system": "http://fhir.de/CodeSystem/dgkev/Aufnahmeanlass"
         }
       ]
     }
-  ],
+  },
+  "id": "ICUext-Department-Case-617",
   "identifier": [
     {
+      "system": "https://test.krankenhaus.de/fhir/sid/fallnr",
       "type": {
         "coding": [
           {
-            "system": "http://terminology.hl7.org/CodeSystem/v2-0203",
-            "code": "VN"
+            "code": "VN",
+            "display": "Visit number",
+            "system": "http://terminology.hl7.org/CodeSystem/v2-0203"
           }
         ]
       },
-      "system": "https://test.krankenhaus.de/fhir/sid/fallnr",
       "value": "0123456789"
     }
   ],
+  "period": {
+    "start": "2026-01-06"
+  },
+  "resourceType": "Encounter",
+  "serviceProvider": {
+    "display": "Hospital",
+    "identifier": {
+      "system": "http://fhir.de/sid/arge-ik/iknr",
+      "value": "123456789"
+    }
+  },
+  "serviceType": {
+    "coding": [
+      {
+        "code": "1500",
+        "display": "Allgemeine Chirurgie",
+        "system": "http://fhir.de/CodeSystem/dkgev/Fachabteilungsschluessel"
+      }
+    ]
+  },
   "status": "in-progress",
-  "class": {
-    "system": "http://terminology.hl7.org/CodeSystem/v3-ActCode",
-    "code": "IMP",
-    "display": "inpatient encounter"
+  "subject": {
+    "reference": "Patient/{{icuextended.observation-patient-id}}"
   },
   "type": [
     {
       "coding": [
         {
-          "system": "http://fhir.de/CodeSystem/Kontaktebene",
           "code": "abteilungskontakt",
-          "display": "Abteilungskontakt"
+          "display": "Abteilungskontakt",
+          "system": "http://fhir.de/CodeSystem/Kontaktebene"
         }
       ]
     },
     {
       "coding": [
         {
-          "system": "http://fhir.de/CodeSystem/kontaktart-de",
           "code": "normalstationaer",
-          "display": "Normalstationär"
+          "display": "Normalstationär",
+          "system": "http://fhir.de/CodeSystem/kontaktart-de"
         }
       ]
     }
-  ],
-  "serviceType": {
-    "coding": [
-      {
-        "system": "http://fhir.de/CodeSystem/dkgev/Fachabteilungsschluessel",
-        "code": "1500",
-        "display": "Allgemeine Chirurgie"
-      }
-    ]
-  },
-  "subject": {
-    "reference": "Patient/{{icuextended.observation-patient-id}}"
-  },
-  "period": {
-    "start": "2026-01-06"
-  },
-  "hospitalization": {
-    "admitSource": {
-      "coding": [
-        {
-          "system": "http://fhir.de/CodeSystem/dgkev/Aufnahmeanlass",
-          "code": "E",
-          "display": "Einweisung durch einen Arzt"
-        }
-      ]
-    }
-  },
-  "serviceProvider": {
-    "identifier": {
-      "system": "http://fhir.de/sid/arge-ik/iknr",
-      "value": "123456789"
-    },
-    "display": "Hospital"
-  }
+  ]
 }

@@ -4,11 +4,6 @@
       {
         "code": "45206002",
         "display": "Nasal structure",
-        "system": "http://snomed.info/sct"
-      },
-      {
-        "code": "45206002",
-        "display": "Nasal structure",
         "system": "http://snomed.info/sct",
         "version": "http://snomed.info/sct/11000274103/version/20251115"
       }
@@ -36,11 +31,6 @@
         "code": "188504",
         "display": "Nasal temperature",
         "system": "urn:iso:std:iso:11073:10101"
-      },
-      {
-        "code": "76010-8",
-        "display": "Nasal temperature",
-        "system": "http://loinc.org"
       },
       {
         "code": "76010-8",

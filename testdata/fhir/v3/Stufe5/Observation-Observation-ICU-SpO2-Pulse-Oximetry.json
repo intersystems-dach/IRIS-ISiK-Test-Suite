@@ -4,11 +4,6 @@
       {
         "code": "11527006",
         "display": "Arterial system structure",
-        "system": "http://snomed.info/sct"
-      },
-      {
-        "code": "11527006",
-        "display": "Arterial system structure",
         "system": "http://snomed.info/sct",
         "version": "http://snomed.info/sct/11000274103/version/20251115"
       }
@@ -30,26 +25,6 @@
       {
         "code": "442476006",
         "display": "Arterial oxygen saturation",
-        "system": "http://snomed.info/sct"
-      },
-      {
-        "code": "59408-5",
-        "display": "Sauerstoffsättigung in arteriellem Blut mittels Pulsoximetrie",
-        "system": "http://loinc.org"
-      },
-      {
-        "code": "150324",
-        "display": "MDC_SAT_O2_ART",
-        "system": "urn:iso:std:iso:11073:10101"
-      },
-      {
-        "code": "2708-6",
-        "display": "Sauerstoffsättigung in arteriellem Blut",
-        "system": "http://loinc.org"
-      },
-      {
-        "code": "442476006",
-        "display": "Arterial oxygen saturation",
         "system": "http://snomed.info/sct",
         "version": "http://snomed.info/sct/11000274103/version/20251115"
       },
@@ -58,6 +33,16 @@
         "display": "Sauerstoffsättigung in arteriellem Blut mittels Pulsoximetrie",
         "system": "http://loinc.org",
         "version": "2.81"
+      },
+      {
+        "code": "150324",
+        "display": "MDC_SAT_O2_ART",
+        "system": "urn:iso:std:iso:11073:10101"
+      },
+      {
+        "code": "2708-6",
+        "display": "Sauerstoffsaettigung in arteriellem Blut",
+        "system": "http://loinc.org"
       }
     ]
   },

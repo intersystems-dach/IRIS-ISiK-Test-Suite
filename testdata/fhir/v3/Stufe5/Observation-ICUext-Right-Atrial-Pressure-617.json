@@ -4,11 +4,6 @@
       {
         "code": "73829009",
         "display": "Right atrial structure",
-        "system": "http://snomed.info/sct"
-      },
-      {
-        "code": "73829009",
-        "display": "Right atrial structure",
         "system": "http://snomed.info/sct",
         "version": "http://snomed.info/sct/11000274103/version/20251115"
       }
@@ -29,27 +24,6 @@
     "coding": [
       {
         "code": "75367002",
-        "display": "Blood pressure",
-        "system": "http://snomed.info/sct"
-      },
-      {
-        "code": "276755008",
-        "display": "Right atrial pressure",
-        "system": "http://snomed.info/sct"
-      },
-      {
-        "code": "60996-6",
-        "display": "Right atrial pressure",
-        "system": "http://loinc.org"
-      },
-      {
-        "code": "150068",
-        "display": "MDC_PRESS_BLD_ATR_RIGHT",
-        "system": "urn:iso:std:iso:11073:10101"
-      },
-      {
-        "code": "75367002",
-        "display": "Blood pressure",
         "system": "http://snomed.info/sct",
         "version": "http://snomed.info/sct/11000274103/version/20251115"
       },
@@ -64,6 +38,11 @@
         "display": "Right atrial pressure",
         "system": "http://loinc.org",
         "version": "2.81"
+      },
+      {
+        "code": "150068",
+        "display": "MDC_PRESS_BLD_ATR_RIGHT",
+        "system": "urn:iso:std:iso:11073:10101"
       }
     ]
   },
@@ -73,89 +52,7 @@
         "coding": [
           {
             "code": "8480-6",
-            "system": "http://loinc.org"
-          },
-          {
-            "code": "150069",
-            "display": "Systolic right atrial pressure",
-            "system": "urn:iso:std:iso:11073:10101"
-          },
-          {
-            "code": "60998-2",
-            "display": "Right atrial pressure Systolic",
-            "system": "http://loinc.org"
-          }
-        ]
-      },
-      "valueQuantity": {
-        "code": "mm[Hg]",
-        "system": "http://unitsofmeasure.org",
-        "unit": "millimeter Mercury column",
-        "value": 5
-      }
-    },
-    {
-      "code": {
-        "coding": [
-          {
-            "code": "8478-0",
-            "system": "http://loinc.org"
-          },
-          {
-            "code": "150071",
-            "display": "Mean right atrial pressure",
-            "system": "urn:iso:std:iso:11073:10101"
-          },
-          {
-            "code": "8400-4",
-            "display": "Right atrial Intrachamber mean pressure",
-            "system": "http://loinc.org"
-          },
-          {
-            "code": "276775004",
-            "display": "Mean right atrial pressure",
-            "system": "http://snomed.info/sct"
-          }
-        ]
-      },
-      "valueQuantity": {
-        "code": "mm[Hg]",
-        "system": "http://unitsofmeasure.org",
-        "unit": "millimeter Mercury column",
-        "value": 4
-      }
-    },
-    {
-      "code": {
-        "coding": [
-          {
-            "code": "8462-4",
-            "system": "http://loinc.org"
-          },
-          {
-            "code": "150070",
-            "display": "Diastolic right atrial pressure",
-            "system": "urn:iso:std:iso:11073:10101"
-          },
-          {
-            "code": "60997-4",
-            "display": "Right atrial pressure Diastolic",
-            "system": "http://loinc.org"
-          }
-        ]
-      },
-      "valueQuantity": {
-        "code": "mm[Hg]",
-        "system": "http://unitsofmeasure.org",
-        "unit": "millimeter Mercury column",
-        "value": 3
-      }
-    },
-    {
-      "code": {
-        "coding": [
-          {
-            "code": "8480-6",
+            "display": "Systolic blood pressure",
             "system": "http://loinc.org",
             "version": "2.81"
           },
@@ -184,6 +81,7 @@
         "coding": [
           {
             "code": "8478-0",
+            "display": "Mean blood pressure",
             "system": "http://loinc.org",
             "version": "2.81"
           },
@@ -218,6 +116,7 @@
         "coding": [
           {
             "code": "8462-4",
+            "display": "Diastolic blood pressure",
             "system": "http://loinc.org",
             "version": "2.81"
           },

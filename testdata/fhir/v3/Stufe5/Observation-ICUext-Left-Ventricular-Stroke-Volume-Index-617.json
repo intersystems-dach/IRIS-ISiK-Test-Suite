@@ -4,11 +4,6 @@
       {
         "code": "87878005",
         "display": "Left cardiac ventricular structure",
-        "system": "http://snomed.info/sct"
-      },
-      {
-        "code": "87878005",
-        "display": "Left cardiac ventricular structure",
         "system": "http://snomed.info/sct",
         "version": "http://snomed.info/sct/11000274103/version/20251115"
       }
@@ -30,18 +25,13 @@
       {
         "code": "76297-1",
         "display": "Left ventricular Stroke volume index",
-        "system": "http://loinc.org"
+        "system": "http://loinc.org",
+        "version": "2.81"
       },
       {
         "code": "150636",
         "display": "MDC_VOL_BLD_STROKE_INDEX",
         "system": "urn:iso:std:iso:11073:10101"
-      },
-      {
-        "code": "76297-1",
-        "display": "Left ventricular Stroke volume index",
-        "system": "http://loinc.org",
-        "version": "2.81"
       }
     ]
   },

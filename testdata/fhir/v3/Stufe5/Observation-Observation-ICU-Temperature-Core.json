@@ -15,12 +15,14 @@
       {
         "code": "8310-5",
         "display": "Körpertemperatur",
-        "system": "http://loinc.org"
+        "system": "http://loinc.org",
+        "version": "2.81"
       },
       {
         "code": "276885007",
         "display": "Körperkerntemperatur",
-        "system": "http://snomed.info/sct"
+        "system": "http://snomed.info/sct",
+        "version": "http://snomed.info/sct/11000274103/version/20251115"
       },
       {
         "code": "150364",
@@ -35,28 +37,6 @@
       {
         "code": "8329-5",
         "display": "Body temperature - Core",
-        "system": "http://loinc.org"
-      },
-      {
-        "code": "276885007",
-        "display": "Körperkerntemperatur",
-        "system": "http://snomed.info/sct",
-        "version": "http://snomed.info/sct/11000274103/version/20251115"
-      },
-      {
-        "code": "8329-5",
-        "display": "Body temperature - Core",
-        "system": "http://loinc.org",
-        "version": "2.81"
-      },
-      {
-        "code": "150364",
-        "display": "MDC_TEMP_BODY",
-        "system": "urn:iso:std:iso:11073:10101"
-      },
-      {
-        "code": "8310-5",
-        "display": "Körpertemperatur",
         "system": "http://loinc.org",
         "version": "2.81"
       }

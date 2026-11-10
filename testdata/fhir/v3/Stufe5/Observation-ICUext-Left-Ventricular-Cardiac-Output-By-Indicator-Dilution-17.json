@@ -15,11 +15,6 @@
       {
         "code": "8737-9",
         "display": "Left ventricular Cardiac output by Indicator dilution",
-        "system": "http://loinc.org"
-      },
-      {
-        "code": "8737-9",
-        "display": "Left ventricular Cardiac output by Indicator dilution",
         "system": "http://loinc.org",
         "version": "2.81"
       }

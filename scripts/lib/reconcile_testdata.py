@@ -62,9 +62,24 @@ Where a feature requires a coding to carry a display without saying which, the
 display is taken from the specification itself: every ``code``/``system`` pair
 occurring in the pinned packages - in their example instances and in the
 ``concept`` lists of the ``CodeSystem`` resources they ship - is indexed with the
-display given there, and a pair carrying two different displays is treated as
-unknown. A code the packages do not display is reported. No display is composed
-here.
+display given there. The two sources are not of equal standing: a CodeSystem
+*defines* a display and outranks any number of example instances *using* one, which
+matters because the example packages are not always careful with them. A pair two
+CodeSystems display differently, or that only usages display and they disagree, is
+treated as unknown. A code the packages do not display is reported. No display is
+composed here. See ``build_display_index``.
+
+Selecting versus creating
+-------------------------
+A ``where(...)`` that selects nothing is read as a requirement, but not always as a
+requirement for a *new* element. Three states are distinguished: a list entry that
+satisfies the selector, one that conflicts with it, and one that is merely silent
+where the selector states a value. Where exactly one entry conflicts with nothing,
+the asserted values are written into that entry; where several do, the choice is
+ambiguous and an entry is appended. ``conflicts`` carries the full reasoning, and
+the ICU Extended pressure features show why it is not cosmetic: read as
+"append", three selectors turn a three-component body into a six-component one and
+the feature contradicts its own ``component.count() = 3``.
 
 The precondition prose
 ----------------------
@@ -73,7 +88,7 @@ Some of what a feature requires it states only in the prose of its
 the unit of a quantity, the system of an identifier. ``extract_requirements.py``
 deliberately does not translate that prose into JSON, and is right not to: the
 prose is irregular and the judgement calls belong to a person reading it. This tool
-therefore reads the prose only for five constructs that the suite states
+therefore reads the prose only for six constructs that the suite states
 formulaically in every feature that states them at all, and for nothing else:
 
     * Code: 2160-0                          the display of a code
@@ -89,6 +104,8 @@ formulaically in every feature that states them at all, and for nothing else:
         Value: ICUmin-OBS-009
     * Effective date/time: 2026-03-12T08:46:00+01:00
                                             which member of a choice is meant
+    * Issued: 2024-05-14T09:15:00+02:00     the whole value, where a step asserts
+                                            only a substring of it
 
 Only the features a resource's own ``usedBy`` names are read for that resource, and
 a construct the resource's features state two different ways is discarded rather
@@ -106,6 +123,16 @@ feature that uses it. A feature whose prose reads ``* Effective date/time:`` ass
 ``effectivePeriod`` cannot satisfy; where the prose names the type, the body is
 corrected to it. The other form, ``* Effective Period:`` with ``- Start:`` and
 ``- End:``, is left as a period. Nothing is converted without the prose saying so.
+
+The sixth settles a disagreement between a step and the specification it tests.
+Steps of the form ``issued.toString().contains('2024-05-14')`` assert a substring of
+the value the same feature's prose states in full, ``* Issued:
+2024-05-14T09:15:00+02:00``. Writing the substring satisfies the step and misstates
+the specification, and where the element is an ``instant`` - ``Observation.issued``
+is one - the substring is not a legal value at all: a server conforming to FHIR R4
+rejects it. So where the prose states a value of which the asserted literal is a
+substring, that value is written, and a value already containing the literal is left
+alone.
 
 Two narrower readings are applied, each recorded with the body it affected:
 
@@ -222,6 +249,10 @@ class Prose:
     # Base element -> the FHIR type the prose names for it, e.g. effective ->
     # DateTime from `* Effective date/time:`. Settles a choice the body got wrong.
     choice_types: dict[str, str] = dataclasses.field(default_factory=dict)
+    # Element name -> the full instant the prose states for it, e.g. issued ->
+    # 2024-05-14T09:15:00+02:00. Read only to satisfy a `.contains('<date>')` step
+    # with the value the same feature states, instead of with the bare substring.
+    timestamps: dict[str, str] = dataclasses.field(default_factory=dict)
     citations: list[str] = dataclasses.field(default_factory=list)
 
 
@@ -351,6 +382,90 @@ def equalish(have, want) -> bool:
     return have == want
 
 
+def conflicts(node, conds: list[str], ctx: Ctx) -> bool:
+    """Whether `node` disagrees with anything `conds` states. Pure; never mutates.
+
+    This is the complement of satisfies() for the undecided middle: a node that
+    already satisfies the selector does not conflict with it, and neither does one
+    that is merely *silent* where the selector states a value. Only a node carrying
+    a different value conflicts.
+
+    The distinction decides, in navigate(), between completing an existing list
+    entry and appending a second one. Getting it wrong is not cosmetic. The ICU
+    Extended pressure features assert
+
+        component.count() = 3
+        component.where(code.coding.where(code = '8480-6' and system =
+            'http://loinc.org' and version = '2.81').exists()).exists()
+
+    against a package example whose three components carry those very LOINC codes
+    without a `version`. Read as "no component satisfies this, so append one", the
+    three selectors produce three further components and a body with six, failing
+    the count assertion in the same feature - the specification contradicting
+    itself, which is never the reading to take. Read as "exactly one component
+    disagrees with nothing here, so it is the component this is about", the
+    `version` is written into the coding that already carries the code.
+
+    Silence is not agreement, so this is not used to decide whether an assertion
+    holds - satisfies() does that, unchanged. It is used only to choose *where* to
+    write, and only when exactly one candidate is non-conflicting; two are
+    ambiguous and the caller falls back to appending.
+    """
+    if isinstance(node, list):
+        # One entry that can be completed means the selector is about that entry.
+        # An empty list conflicts with nothing: its entry is still to be created.
+        return bool(node) and all(conflicts(item, conds, ctx) for item in node)
+    if not isinstance(node, dict):
+        return True
+    for term in conds:
+        inner = None
+        if term.endswith(".exists()"):
+            inner = term[:-len(".exists()")]
+        elif term.endswith(".empty().not()"):
+            inner = term[:-len(".empty().not()")]
+        if inner is not None:
+            segments = parse_chain(inner)
+            if not segments:
+                return True
+            # A trailing `where` has to be recursed into rather than merely looked
+            # up. `code.coding.where(...)` selecting nothing says nothing about
+            # agreement: it is the case where the coding exists and lacks exactly
+            # what the selector states - the case this function exists for.
+            if segments[-1].startswith("where(") and segments[-1].endswith(")"):
+                try:
+                    host = navigate(node, segments[:-1], ctx, create=False)
+                except Unsupported:
+                    return True
+                if host in (None, [], {}, ""):
+                    continue            # absent entirely: nothing to disagree with
+                sub = split_top_level(segments[-1][len("where("):-1], " and ")
+                if conflicts(host, sub, ctx):
+                    return True
+                continue
+            try:
+                navigate(node, segments, ctx, create=False)
+            except Unsupported:
+                return True
+            # An absent path is what `create` would fill in, not a disagreement.
+            continue
+        m = RE_TERM_EQ.match(term)
+        if not m:
+            return True
+        want = parse_literal(m)
+        try:
+            have = navigate(node, parse_chain(m.group("path")), ctx, create=False)
+        except Unsupported:
+            return True
+        if have is None:
+            continue
+        if isinstance(have, list):
+            if not any(equalish(h, want) for h in have):
+                return True
+        elif not equalish(have, want):
+            return True
+    return False
+
+
 def choice_key(name: str, conds: list[str]) -> str:
     """Name a choice element from the fields the feature asserts about it."""
     fields = set()
@@ -384,8 +499,18 @@ def navigate(node, segments: list[str], ctx: Ctx, create: bool, conds_ahead=()):
                 if match is None:
                     if not create:
                         return None
-                    match = {}
-                    cur.append(match)
+                    # Complete before appending, where that choice is forced: an
+                    # entry that disagrees with nothing the selector states, and the
+                    # only such entry, is the entry the selector is about. See
+                    # conflicts() for why appending instead makes a feature
+                    # contradict its own `count()` assertion.
+                    completable = [item for item in cur
+                                   if not conflicts(item, conds, ctx)]
+                    if len(completable) == 1:
+                        match = completable[0]
+                    else:
+                        match = {}
+                        cur.append(match)
                     enforce_conds(match, conds, ctx)
                 cur = match
             elif isinstance(cur, dict):
@@ -579,12 +704,43 @@ def enforce(doc: dict, expr: str, ctx: Ctx) -> list[str]:
                 raise Unsupported(f"{key} must contain {literal!r} but it is an "
                                   f"object, not a value - which of its parts is "
                                   f"meant is not determined by the feature")
+            # The value, like the type, is taken from the prose where the prose
+            # states one of which the asserted literal is a substring.
+            value = ctx.prose.timestamps.get(base.lower())
+            if value is None or literal not in value:
+                value = literal
             del parent[key]
-            parent[f"{base}{stated}"] = literal
+            parent[f"{base}{stated}"] = value
             ctx.used.append(f"{base} is a {stated} per the precondition prose, "
                             f"replacing the example's {key}")
-            return [f"{key} -> {base}{stated} = {literal}"]
-        if parent.get(key) != literal:
+            return [f"{key} -> {base}{stated} = {value}"]
+        current = parent.get(key)
+        # The step asserts a substring; the prose of the same feature states the
+        # whole value. Writing the substring satisfies the step and misstates the
+        # specification, and for an `instant` element the substring is not even a
+        # legal value: `Observation.issued` is an instant, so `2024-05-14` is
+        # rejected with "malformed 'instant'" while the prose's
+        # `2024-05-14T09:15:00+02:00` is accepted and contains it.
+        #
+        # Checked before the body's current value, not after: a body already
+        # carrying the bare literal satisfies the step, so a rule that stopped
+        # there would leave the wrong value in place and make the outcome depend
+        # on what the body happened to arrive with. As written, the tool converges
+        # on the same body from any starting point and running it twice is a no-op.
+        stated = ctx.prose.timestamps.get(head[-1].lower())
+        if stated is not None and literal in stated:
+            if current == stated:
+                return []
+            parent[key] = stated
+            ctx.used.append(f"{head[-1]} = {stated} from the precondition prose, "
+                            f"of which the asserted {literal!r} is a substring")
+            return [f"{key} = {stated}"]
+        if isinstance(current, str) and literal in current:
+            # Already satisfied, and the prose states nothing fuller. `contains` is
+            # a substring test, so narrowing the value to the bare literal would
+            # change a body that passes into a different body that also passes.
+            return []
+        if current != literal:
             parent[key] = literal
             return [f"{key} = {literal}"]
         return []
@@ -621,20 +777,37 @@ def load_contract(contract_dir: pathlib.Path, namespaces: set[str]) -> dict[str,
 def build_display_index(pkg_dirs: list[pathlib.Path]) -> dict[tuple[str, str], str]:
     """(code, system) -> display, as the pinned packages themselves give it.
 
-    Two sources, both the specification's own: any Coding occurring in a package
-    resource, and the `concept` list of any CodeSystem the packages ship. A pair
-    displayed two different ways is dropped rather than resolved, so a display is
-    only written where the specification is unambiguous.
-    """
-    seen: dict[tuple[str, str], set[str]] = {}
+    Two sources, both the specification's own, and not of equal standing:
 
-    def note(code, system, display) -> None:
+    `definitions`
+        the `concept` list of a CodeSystem the packages ship. This is the
+        specification *defining* the display of a code.
+    `usages`
+        any Coding occurring in a package resource - overwhelmingly in the example
+        instances. This is the specification *using* a code, which is weaker
+        evidence and not always careful: `hl7.fhir.r4.examples#4.0.1` writes
+        v3-ObservationInterpretation `N` as "normal" in Observation-blood-pressure
+        while the CodeSystem in `hl7.fhir.r4.core#4.0.1` defines it as "Normal".
+
+    A definition therefore wins over any number of usages, and usages are consulted
+    only for a code no shipped CodeSystem defines - which is the normal case here,
+    since LOINC and SNOMED CT are not redistributable and ship as usages only.
+    Within each source a pair displayed two different ways is dropped rather than
+    resolved, and an ambiguous definition drops the pair outright rather than
+    falling back to a usage: two CodeSystems disagreeing is not a question a usage
+    answers. A display is consequently only ever written where the specification is
+    unambiguous at the strongest level of evidence available for that code.
+    """
+    definitions: dict[tuple[str, str], set[str]] = {}
+    usages: dict[tuple[str, str], set[str]] = {}
+
+    def note(into, code, system, display) -> None:
         if isinstance(code, str) and isinstance(system, str) and isinstance(display, str):
-            seen.setdefault((code, system), set()).add(display)
+            into.setdefault((code, system), set()).add(display)
 
     def walk(node) -> None:
         if isinstance(node, dict):
-            note(node.get("code"), node.get("system"), node.get("display"))
+            note(usages, node.get("code"), node.get("system"), node.get("display"))
             for value in node.values():
                 walk(value)
         elif isinstance(node, list):
@@ -650,7 +823,7 @@ def build_display_index(pkg_dirs: list[pathlib.Path]) -> dict[tuple[str, str], s
             for concept in nodes or []:
                 if not isinstance(concept, dict):
                     continue
-                note(concept.get("code"), url, concept.get("display"))
+                note(definitions, concept.get("code"), url, concept.get("display"))
                 concepts(concept.get("concept"))
 
         concepts(doc.get("concept"))
@@ -667,11 +840,17 @@ def build_display_index(pkg_dirs: list[pathlib.Path]) -> dict[tuple[str, str], s
             if doc.get("resourceType") == "CodeSystem":
                 walk_codesystem(doc)
 
-    return {pair: next(iter(displays)) for pair, displays in seen.items()
-            if len(displays) == 1}
+    index = {pair: next(iter(displays)) for pair, displays in usages.items()
+             if len(displays) == 1}
+    for pair, displays in definitions.items():
+        if len(displays) == 1:
+            index[pair] = next(iter(displays))
+        else:
+            index.pop(pair, None)
+    return index
 
 
-# The three formulaic prose constructs, and nothing else. A value in parentheses
+# The formulaic prose constructs, and nothing else. A value in parentheses
 # such as `(can be configured with the property 'loinc-version')` is not a value.
 RE_PROSE_KV = re.compile(r"^[-*\s]*(?P<key>Code|Display|Unit|System|Value|Identifier)"
                          r":\s*(?P<value>.+?)\s*$")
@@ -691,6 +870,15 @@ PROSE_CHOICE_TYPES = {"date/time": "DateTime", "datetime": "DateTime",
                       "period": "Period", "quantity": "Quantity", "range": "Range"}
 RE_PROSE_VALUE_UNIT = re.compile(r"^(?P<num>-?\d+(?:[.,]\d+)?)\s+(?P<unit>\S+)$")
 RE_PROSE_PARENTHETICAL = re.compile(r"^\(.*\)$")
+# `* Issued: 2024-05-14T09:15:00+02:00`, and the value half of the choice-type line
+# above. A date alone is deliberately not matched: the point of reading these is to
+# recover the full instant the prose states where a step asserts only a substring of
+# it, and a date-only statement would recover nothing.
+RE_PROSE_KV_ANY = re.compile(r"^[-*\s]*(?P<key>[A-Z][A-Za-z/ ]*?)\s*:\s*(?P<value>.+?)\s*$")
+RE_PROSE_INSTANT = re.compile(
+    r"^\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])"
+    r"T(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?"
+    r"(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)?$")
 
 
 def module_systems(feature_root: pathlib.Path, rel_paths: list[str]) -> list[str]:
@@ -725,6 +913,7 @@ def mine_prose(feature_root: pathlib.Path, rel_paths: list[str]) -> Prose:
     systems: set[str] = set()
     identifiers: list[dict] = []
     choice_types: dict[str, set[str]] = {}
+    timestamps: dict[str, set[str]] = {}
     identifier_open = False
     citations: list[str] = []
 
@@ -744,6 +933,15 @@ def mine_prose(feature_root: pathlib.Path, rel_paths: list[str]) -> Prose:
                 kind = PROSE_CHOICE_TYPES[choice.group("kind").lower()]
                 choice_types.setdefault(base, set()).add(kind)
                 citations.append(f"{rel}:{number}  {base} is a {kind}")
+            # Any `* <Label>: <instant>` line. Keyed by the label's first word
+            # lowercased, which is the element name for both forms the features use:
+            # `Issued` -> issued, `Effective date/time` -> effective.
+            kv_any = RE_PROSE_KV_ANY.match(raw)
+            if kv_any and RE_PROSE_INSTANT.match(kv_any.group("value")):
+                element = kv_any.group("key").split()[0].lower()
+                timestamps.setdefault(element, set()).add(kv_any.group("value"))
+                citations.append(f"{rel}:{number}  {element} = "
+                                 f"{kv_any.group('value')}")
             # `* Identifier:` on its own line introduces a stated System/Value pair.
             if re.match(r"^[-*\s]*Identifier:\s*$", raw):
                 pending_identifier, pending_since = {}, number
@@ -811,8 +1009,26 @@ def mine_prose(feature_root: pathlib.Path, rel_paths: list[str]) -> Prose:
         module_identifier_systems=module_systems(feature_root, rel_paths),
         choice_types={b: next(iter(v)) for b, v in choice_types.items()
                       if len(v) == 1},
+        timestamps={e: next(iter(v)) for e, v in timestamps.items()
+                    if len(v) == 1},
         citations=citations,
     )
+
+
+# Every element FHIR R4 gives a Coding, plus the two every element may carry. A
+# Quantity also has `code` and `system`, and has no `display` at all, so matching on
+# code+system alone would write an element that does not exist into every asserted
+# measurement - rejected by the server as an unknown property, and rejected for the
+# right reason. Membership is checked against the whole node rather than by element
+# path because the walker has no schema; a node whose keys are all a Coding's keys
+# is a Coding.
+CODING_KEYS = frozenset({"system", "version", "code", "display", "userSelected",
+                         "id", "extension"})
+
+
+def is_coding(node: dict) -> bool:
+    """Whether a dict carrying `code` and `system` is a Coding and not a Quantity."""
+    return set(node) <= CODING_KEYS
 
 
 def fill_displays(doc, ctx: Ctx) -> list[str]:
@@ -823,7 +1039,7 @@ def fill_displays(doc, ctx: Ctx) -> list[str]:
         if isinstance(node, dict):
             code, system = node.get("code"), node.get("system")
             if (isinstance(code, str) and isinstance(system, str)
-                    and not node.get("display")):
+                    and not node.get("display") and is_coding(node)):
                 display = ctx.display_for(code, system)
                 if display is not None:
                     node["display"] = display

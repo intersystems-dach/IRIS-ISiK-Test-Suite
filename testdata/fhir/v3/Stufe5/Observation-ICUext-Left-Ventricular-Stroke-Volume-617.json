@@ -4,11 +4,6 @@
       {
         "code": "244385005",
         "display": "Entire left cardiac ventricle",
-        "system": "http://snomed.info/sct"
-      },
-      {
-        "code": "244385005",
-        "display": "Entire left cardiac ventricle",
         "system": "http://snomed.info/sct",
         "version": "http://snomed.info/sct/11000274103/version/20251115"
       }
@@ -30,21 +25,6 @@
       {
         "code": "90096001",
         "display": "Stroke volume",
-        "system": "http://snomed.info/sct"
-      },
-      {
-        "code": "20562-5",
-        "display": "Left ventricular Stroke volume",
-        "system": "http://loinc.org"
-      },
-      {
-        "code": "150408",
-        "display": "MDC_VOL_BLD_VENT_LEFT_STROKE",
-        "system": "urn:iso:std:iso:11073:10101"
-      },
-      {
-        "code": "90096001",
-        "display": "Stroke volume",
         "system": "http://snomed.info/sct",
         "version": "http://snomed.info/sct/11000274103/version/20251115"
       },
@@ -53,6 +33,11 @@
         "display": "Left ventricular Stroke volume",
         "system": "http://loinc.org",
         "version": "2.81"
+      },
+      {
+        "code": "150408",
+        "display": "MDC_VOL_BLD_VENT_LEFT_STROKE",
+        "system": "urn:iso:std:iso:11073:10101"
       }
     ]
   },

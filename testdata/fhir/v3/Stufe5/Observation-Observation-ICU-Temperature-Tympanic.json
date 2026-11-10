@@ -4,11 +4,6 @@
       {
         "code": "42859004",
         "display": "Tympanic membrane structure",
-        "system": "http://snomed.info/sct"
-      },
-      {
-        "code": "42859004",
-        "display": "Tympanic membrane structure",
         "system": "http://snomed.info/sct",
         "version": "http://snomed.info/sct/11000274103/version/20251115"
       }
@@ -30,27 +25,8 @@
       {
         "code": "8310-5",
         "display": "Körpertemperatur",
-        "system": "http://loinc.org"
-      },
-      {
-        "code": "415974002",
-        "display": "Körperkerntemperatur gemessen am Trommelfell",
-        "system": "http://snomed.info/sct"
-      },
-      {
-        "code": "8329-5",
-        "display": "Body temperature - Core",
-        "system": "http://loinc.org"
-      },
-      {
-        "code": "8333-7",
-        "display": "Tympanic membrane temperature",
-        "system": "http://loinc.org"
-      },
-      {
-        "code": "150392",
-        "display": "MDC_TEMP_TYMP",
-        "system": "urn:iso:std:iso:11073:10101"
+        "system": "http://loinc.org",
+        "version": "2.81"
       },
       {
         "code": "415974002",
@@ -59,22 +35,21 @@
         "version": "http://snomed.info/sct/11000274103/version/20251115"
       },
       {
-        "code": "8333-7",
-        "display": "Tympanic membrane temperature",
-        "system": "http://loinc.org",
-        "version": "2.81"
-      },
-      {
         "code": "8329-5",
         "display": "Body temperature - Core",
         "system": "http://loinc.org",
         "version": "2.81"
       },
       {
-        "code": "8310-5",
-        "display": "Körpertemperatur",
+        "code": "8333-7",
+        "display": "Tympanic membrane temperature",
         "system": "http://loinc.org",
         "version": "2.81"
+      },
+      {
+        "code": "150392",
+        "display": "MDC_TEMP_TYMP",
+        "system": "urn:iso:std:iso:11073:10101"
       }
     ]
   },

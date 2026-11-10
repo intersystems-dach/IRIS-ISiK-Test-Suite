@@ -4,11 +4,6 @@
       {
         "code": "34402009",
         "display": "Rectum structure",
-        "system": "http://snomed.info/sct"
-      },
-      {
-        "code": "34402009",
-        "display": "Rectum structure",
         "system": "http://snomed.info/sct",
         "version": "http://snomed.info/sct/11000274103/version/20251115"
       }
@@ -35,7 +30,8 @@
       {
         "code": "307047009",
         "display": "Rektaltemperatur",
-        "system": "http://snomed.info/sct"
+        "system": "http://snomed.info/sct",
+        "version": "http://snomed.info/sct/11000274103/version/20251115"
       },
       {
         "code": "8329-5",
@@ -45,24 +41,13 @@
       {
         "code": "8332-9",
         "display": "Rectal temperature",
-        "system": "http://loinc.org"
+        "system": "http://loinc.org",
+        "version": "2.81"
       },
       {
         "code": "188420",
         "display": "Rectal temperature",
         "system": "urn:iso:std:iso:11073:10101"
-      },
-      {
-        "code": "307047009",
-        "display": "Rektaltemperatur",
-        "system": "http://snomed.info/sct",
-        "version": "http://snomed.info/sct/11000274103/version/20251115"
-      },
-      {
-        "code": "8332-9",
-        "display": "Rectal temperature",
-        "system": "http://loinc.org",
-        "version": "2.81"
       }
     ]
   },

@@ -14,30 +14,19 @@
     "coding": [
       {
         "code": "75367002",
-        "display": "Blood pressure",
-        "system": "http://snomed.info/sct"
+        "system": "http://snomed.info/sct",
+        "version": "http://snomed.info/sct/11000274103/version/20251115"
       },
       {
         "code": "276769008",
         "display": "Left ventricular pressure",
-        "system": "http://snomed.info/sct"
+        "system": "http://snomed.info/sct",
+        "version": "http://snomed.info/sct/11000274103/version/20251115"
       },
       {
         "code": "150100",
         "display": "MDC_PRESS_BLD_VENT_LEFT",
         "system": "urn:iso:std:iso:11073:10101"
-      },
-      {
-        "code": "75367002",
-        "display": "Blood pressure",
-        "system": "http://snomed.info/sct",
-        "version": "http://snomed.info/sct/11000274103/version/20251115"
-      },
-      {
-        "code": "276769008",
-        "display": "Left ventricular pressure",
-        "system": "http://snomed.info/sct",
-        "version": "http://snomed.info/sct/11000274103/version/20251115"
       }
     ]
   },
@@ -47,89 +36,7 @@
         "coding": [
           {
             "code": "8478-0",
-            "system": "http://loinc.org"
-          },
-          {
-            "code": "150103",
-            "display": "Mean left ventricular pressure",
-            "system": "urn:iso:std:iso:11073:10101"
-          },
-          {
-            "code": "8404-6",
-            "display": "Left ventricular Intrachamber mean pressure",
-            "system": "http://loinc.org"
-          }
-        ]
-      },
-      "valueQuantity": {
-        "code": "mm[Hg]",
-        "system": "http://unitsofmeasure.org",
-        "unit": "millimeter Mercury column",
-        "value": 40
-      }
-    },
-    {
-      "code": {
-        "coding": [
-          {
-            "code": "8480-6",
-            "system": "http://loinc.org"
-          },
-          {
-            "code": "150101",
-            "display": "Systolic left ventricular pressure",
-            "system": "urn:iso:std:iso:11073:10101"
-          },
-          {
-            "code": "8430-1",
-            "display": "Left ventricular Intrachamber systolic pressure",
-            "system": "http://loinc.org"
-          },
-          {
-            "code": "276780008",
-            "display": "Left ventricular systolic pressure",
-            "system": "http://snomed.info/sct"
-          }
-        ]
-      },
-      "valueQuantity": {
-        "code": "mm[Hg]",
-        "system": "http://unitsofmeasure.org",
-        "unit": "millimeter Mercury column",
-        "value": 120
-      }
-    },
-    {
-      "code": {
-        "coding": [
-          {
-            "code": "8462-4",
-            "system": "http://loinc.org"
-          },
-          {
-            "code": "150102",
-            "display": "Diastolic left ventricular pressure",
-            "system": "urn:iso:std:iso:11073:10101"
-          },
-          {
-            "code": "8375-8",
-            "display": "Left ventricular Intrachamber diastolic pressure",
-            "system": "http://loinc.org"
-          }
-        ]
-      },
-      "valueQuantity": {
-        "code": "mm[Hg]",
-        "system": "http://unitsofmeasure.org",
-        "unit": "millimeter Mercury column",
-        "value": 10
-      }
-    },
-    {
-      "code": {
-        "coding": [
-          {
-            "code": "8478-0",
+            "display": "Mean blood pressure",
             "system": "http://loinc.org",
             "version": "2.81"
           },
@@ -158,6 +65,7 @@
         "coding": [
           {
             "code": "8480-6",
+            "display": "Systolic blood pressure",
             "system": "http://loinc.org",
             "version": "2.81"
           },
@@ -192,6 +100,7 @@
         "coding": [
           {
             "code": "8462-4",
+            "display": "Diastolic blood pressure",
             "system": "http://loinc.org",
             "version": "2.81"
           },

@@ -15,11 +15,6 @@
       {
         "code": "8751-0",
         "display": "Left ventricular Cardiac index by Indicator dilution",
-        "system": "http://loinc.org"
-      },
-      {
-        "code": "8751-0",
-        "display": "Left ventricular Cardiac index by Indicator dilution",
         "system": "http://loinc.org",
         "version": "2.81"
       }

@@ -4,11 +4,6 @@
       {
         "code": "74281007",
         "display": "Myocardium structure",
-        "system": "http://snomed.info/sct"
-      },
-      {
-        "code": "74281007",
-        "display": "Myocardium structure",
         "system": "http://snomed.info/sct",
         "version": "http://snomed.info/sct/11000274103/version/20251115"
       }
@@ -29,24 +24,13 @@
     "coding": [
       {
         "code": "8310-5",
-        "display": "Körpertemperatur",
-        "system": "http://loinc.org"
+        "system": "http://loinc.org",
+        "version": "2.81"
       },
       {
         "code": "188500",
         "display": "Myocardial temperature",
         "system": "urn:iso:std:iso:11073:10101"
-      },
-      {
-        "code": "61009-7",
-        "display": "Myocardial temperature",
-        "system": "http://loinc.org"
-      },
-      {
-        "code": "8310-5",
-        "display": "Körpertemperatur",
-        "system": "http://loinc.org",
-        "version": "2.81"
       },
       {
         "code": "61009-7",

@@ -4,11 +4,6 @@
       {
         "code": "81040000",
         "display": "Pulmonary artery structure",
-        "system": "http://snomed.info/sct"
-      },
-      {
-        "code": "81040000",
-        "display": "Pulmonary artery structure",
         "system": "http://snomed.info/sct",
         "version": "http://snomed.info/sct/11000274103/version/20251115"
       }
@@ -29,27 +24,6 @@
     "coding": [
       {
         "code": "75367002",
-        "display": "Blood pressure",
-        "system": "http://snomed.info/sct"
-      },
-      {
-        "code": "250767002",
-        "display": "Pulmonary artery pressure",
-        "system": "http://snomed.info/sct"
-      },
-      {
-        "code": "76284-9",
-        "display": "Pulmonary artery Blood pressure",
-        "system": "http://loinc.org"
-      },
-      {
-        "code": "150044",
-        "display": "MDC_PRESS_BLD_ART_PULM",
-        "system": "urn:iso:std:iso:11073:10101"
-      },
-      {
-        "code": "75367002",
-        "display": "Blood pressure",
         "system": "http://snomed.info/sct",
         "version": "http://snomed.info/sct/11000274103/version/20251115"
       },
@@ -64,6 +38,11 @@
         "display": "Pulmonary artery Blood pressure",
         "system": "http://loinc.org",
         "version": "2.81"
+      },
+      {
+        "code": "150044",
+        "display": "MDC_PRESS_BLD_ART_PULM",
+        "system": "urn:iso:std:iso:11073:10101"
       }
     ]
   },
@@ -73,99 +52,7 @@
         "coding": [
           {
             "code": "8480-6",
-            "system": "http://loinc.org"
-          },
-          {
-            "code": "150045",
-            "display": "Systolic pulmonary arterial pressure",
-            "system": "urn:iso:std:iso:11073:10101"
-          },
-          {
-            "code": "8440-0",
-            "display": "Pulmonary artery Systolic blood pressure",
-            "system": "http://loinc.org"
-          },
-          {
-            "code": "250768007",
-            "display": "Pulmonary artery systolic pressure",
-            "system": "http://snomed.info/sct"
-          }
-        ]
-      },
-      "valueQuantity": {
-        "code": "mm[Hg]",
-        "system": "http://unitsofmeasure.org",
-        "unit": "millimeter Mercury column",
-        "value": 18
-      }
-    },
-    {
-      "code": {
-        "coding": [
-          {
-            "code": "8462-4",
-            "system": "http://loinc.org"
-          },
-          {
-            "code": "150046",
-            "display": "Diastolic pulmonary arterial pressure",
-            "system": "urn:iso:std:iso:11073:10101"
-          },
-          {
-            "code": "8385-7",
-            "display": "Pulmonary artery Diastolic blood pressure",
-            "system": "http://loinc.org"
-          },
-          {
-            "code": "250769004",
-            "display": "Pulmonary artery diastolic pressure",
-            "system": "http://snomed.info/sct"
-          }
-        ]
-      },
-      "valueQuantity": {
-        "code": "mm[Hg]",
-        "system": "http://unitsofmeasure.org",
-        "unit": "millimeter Mercury column",
-        "value": 8
-      }
-    },
-    {
-      "code": {
-        "coding": [
-          {
-            "code": "8478-0",
-            "system": "http://loinc.org"
-          },
-          {
-            "code": "150047",
-            "display": "Mean pulmonary arterial pressure",
-            "system": "urn:iso:std:iso:11073:10101"
-          },
-          {
-            "code": "8414-5",
-            "display": "Pulmonary artery Mean blood pressure",
-            "system": "http://loinc.org"
-          },
-          {
-            "code": "250770003",
-            "display": "Pulmonary artery mean pressure",
-            "system": "http://snomed.info/sct"
-          }
-        ]
-      },
-      "valueQuantity": {
-        "code": "mm[Hg]",
-        "system": "http://unitsofmeasure.org",
-        "unit": "millimeter Mercury column",
-        "value": 10
-      }
-    },
-    {
-      "code": {
-        "coding": [
-          {
-            "code": "8480-6",
+            "display": "Systolic blood pressure",
             "system": "http://loinc.org",
             "version": "2.81"
           },
@@ -200,6 +87,7 @@
         "coding": [
           {
             "code": "8462-4",
+            "display": "Diastolic blood pressure",
             "system": "http://loinc.org",
             "version": "2.81"
           },
@@ -234,6 +122,7 @@
         "coding": [
           {
             "code": "8478-0",
+            "display": "Mean blood pressure",
             "system": "http://loinc.org",
             "version": "2.81"
           },

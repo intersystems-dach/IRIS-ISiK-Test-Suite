@@ -4,11 +4,6 @@
       {
         "code": "123851003",
         "display": "Mouth region structure",
-        "system": "http://snomed.info/sct"
-      },
-      {
-        "code": "123851003",
-        "display": "Mouth region structure",
         "system": "http://snomed.info/sct",
         "version": "http://snomed.info/sct/11000274103/version/20251115"
       }
@@ -35,7 +30,8 @@
       {
         "code": "415945006",
         "display": "Orale Temperatur",
-        "system": "http://snomed.info/sct"
+        "system": "http://snomed.info/sct",
+        "version": "http://snomed.info/sct/11000274103/version/20251115"
       },
       {
         "code": "8329-5",
@@ -45,24 +41,13 @@
       {
         "code": "8331-1",
         "display": "Oral temperature",
-        "system": "http://loinc.org"
+        "system": "http://loinc.org",
+        "version": "2.81"
       },
       {
         "code": "188424",
         "display": "Oral temperature",
         "system": "urn:iso:std:iso:11073:10101"
-      },
-      {
-        "code": "415945006",
-        "display": "Orale Temperatur",
-        "system": "http://snomed.info/sct",
-        "version": "http://snomed.info/sct/11000274103/version/20251115"
-      },
-      {
-        "code": "8331-1",
-        "display": "Oral temperature",
-        "system": "http://loinc.org",
-        "version": "2.81"
       }
     ]
   },

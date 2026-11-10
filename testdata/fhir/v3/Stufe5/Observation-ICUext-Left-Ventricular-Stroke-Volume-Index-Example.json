@@ -15,11 +15,6 @@
       {
         "code": "8791-6",
         "display": "Left ventricular Stroke volume index by Indicator dilution",
-        "system": "http://loinc.org"
-      },
-      {
-        "code": "8791-6",
-        "display": "Left ventricular Stroke volume index by Indicator dilution",
         "system": "http://loinc.org",
         "version": "2.81"
       }

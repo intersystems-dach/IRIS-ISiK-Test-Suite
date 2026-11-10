@@ -14,32 +14,6 @@
     "coding": [
       {
         "code": "8310-5",
-        "display": "Körpertemperatur",
-        "system": "http://loinc.org"
-      },
-      {
-        "code": "1222808002",
-        "display": "Körperkerntemperatur im Blut gemessen",
-        "system": "http://snomed.info/sct"
-      },
-      {
-        "code": "8329-5",
-        "display": "Body temperature - Core",
-        "system": "http://loinc.org"
-      },
-      {
-        "code": "60834-9",
-        "display": "Körpertemperatur - gemessen im Blut",
-        "system": "http://loinc.org"
-      },
-      {
-        "code": "188436",
-        "display": "Blood temperature",
-        "system": "urn:iso:std:iso:11073:10101"
-      },
-      {
-        "code": "8310-5",
-        "display": "Körpertemperatur",
         "system": "http://loinc.org",
         "version": "2.81"
       },
@@ -60,6 +34,11 @@
         "display": "Körpertemperatur - gemessen im Blut",
         "system": "http://loinc.org",
         "version": "2.81"
+      },
+      {
+        "code": "188436",
+        "display": "Blood temperature",
+        "system": "urn:iso:std:iso:11073:10101"
       }
     ]
   },

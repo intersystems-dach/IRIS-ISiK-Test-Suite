@@ -21,24 +21,14 @@
       {
         "code": "1153592008",
         "display": "Weight for age percentile",
-        "system": "http://snomed.info/sct"
-      },
-      {
-        "code": "8336-0",
-        "display": "Körpergewicht [Perzentil] pro Alter",
-        "system": "http://loinc.org"
+        "system": "http://snomed.info/sct",
+        "version": "http://snomed.info/sct/11000274103/version/20251115"
       },
       {
         "code": "8336-0",
         "display": "Körpergewicht [Perzentil] pro Alter",
         "system": "http://loinc.org",
         "version": "2.81"
-      },
-      {
-        "code": "1153592008",
-        "display": "Weight for age percentile",
-        "system": "http://snomed.info/sct",
-        "version": "http://snomed.info/sct/11000274103/version/20251115"
       }
     ]
   },

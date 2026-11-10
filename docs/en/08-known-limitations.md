@@ -303,11 +303,14 @@ or fails on whether IRIS returns what the step demands, which is what the step
 would demand of any vendor. The defect is that the specification tells the vendor
 to prepare something else.
 
-### Three defects in this rig, surfaced by the same bump
+### Seven defects in this rig, surfaced by the same bump
 
 Recorded here because this is the class of thing a version bump is supposed to
-expose. All three are fixed. None changed a verdict in any round, and the reason
-is stated per defect rather than asserted once.
+expose. All seven are fixed. None changed a verdict in any round, and the reason
+is stated per defect rather than asserted once. Defects 1 to 3 are in the phase
+pipeline and were reached in that order, each stopping a round; defects 4 to 7 are
+in `reconcile_testdata.py`, the tool that brings the fabricated Level 5 bodies into
+line with the suite's assertions, and are grouped after them.
 
 **1. The base FHIR R4 package lost its only bundled payload.**
 `hl7.fhir.r4.core#4.0.1` is added to every level by `plan_packages.py` as an
@@ -377,6 +380,90 @@ out to be one the corpus already satisfies, and is recorded as a fifth site on
 `Encounter.subject -> Patient-Read-Example`. Against the 2.7.0 corpus the widened
 pattern enumerates the same 110 requirements as before, so no earlier round's
 validation is affected.
+
+**4. An asserted substring was written as the whole value.** A step of the form
+
+```
+And FHIR current response body evaluates the FHIRPath
+    "issued.toString().contains('2024-05-14')"
+```
+
+states a substring of the value, not the value. The reconciler wrote the literal
+itself, giving `"issued": "2024-05-14"`, which satisfies the step and is not a FHIR
+`instant`. Eight Labor Observations were rejected at the seed phase with `The value
+'2024-05-14' of Property 'issued' of Type 'Observation' is a malformed 'instant'`,
+which is where this was found — the round stopped before it could test anything.
+The rule now takes the value from the feature's own precondition prose (`* Issued:
+2024-05-14T09:15:00+02:00`) wherever the prose states one of which the asserted
+literal is a substring, and reports the assertion as one for a person wherever it
+does not. This is the sixth prose construct and the only one that overrides a value
+a step states, so it is deliberately narrow and, like the other five, every value
+is cited by file and line in `testdata/fhir/v3/PROSE-FACTS-Stufe5.txt`.
+
+The underlying error is worth naming, because it is the one error a tool like this
+must not make: it was satisfying steps rather than stating the specification. A
+body that satisfies every step and is not a valid instance measures nothing.
+
+**5. A `display` was written into a `Quantity`.** The rule that supplies a missing
+`display` from the pinned packages keyed on a node carrying `code` and `system` —
+which a `Coding` carries and so does a `Quantity`. It therefore produced
+`valueQuantity.display`, an element FHIR R4 does not define. The guard is now
+structural: a `code`/`system` node is treated as a `Coding` only if it carries no
+key outside the `Coding` element set. Never present in a committed corpus; it
+appeared only once the display index was widened (defect 7) to a package that
+defines UCUM unit texts.
+
+**6. A selector that matched nothing appended instead of completing, making a
+feature contradict itself.** `component.where(code.coding.where(code = '8480-6' and
+system = 'http://loinc.org' and version = '${icuextended.loinc-version}').exists())`
+was read as "no component satisfies this, so append one" against an ISiK package
+example whose three components carry those very LOINC codes without a `version`. The
+three pressure selectors therefore appended three further components, and the body
+carried six — against `component.count() = 3` asserted in the same feature, three
+lines above. Five ICU Extended bodies carried the extra components (left and right
+atrial, left and right ventricular, and pulmonary arterial pressure: 15 component
+entries where the features assert 5 × 3). The same reading duplicated `coding`
+entries wherever a feature asserted a `version` the package example did not carry,
+which is most of the corpus: regenerating it removes 193 of 546 `coding` entries
+and adds no element any assertion does not name.
+
+A reading on which a feature contradicts itself is never the reading to take. The
+navigator now distinguishes three states rather than two: an entry that *satisfies*
+the selector, an entry that *conflicts* with it, and an entry that is merely
+*silent* where the selector states a value. Where exactly one entry conflicts with
+nothing, that entry is the one the selector is about and the missing value is
+written into it; where two or more do, the choice is ambiguous and an entry is
+appended as before. Silence is not agreement, so this governs only *where* a value
+is written, never whether an assertion holds.
+
+Not caught by `assertion_check.py`, and that is a limitation of the checker, not an
+oversight: it classifies `count()` as `UNVERIFIED`, one of 271 assertions in that
+class for Stufe 5, because evaluating it requires a FHIRPath engine. The corpus
+consequently reported `EXACT 384/384 ELEMENT 680/680 LITERAL 509/509 satisfied` while
+five bodies failed an assertion in the features. What did report it was the
+reconciler's own `left for a human` list — `component.count() = 3; the body has 6` —
+which is why that list is printed rather than counted.
+
+**7. An example's usage of a code was treated as a definition of it.** The display
+index read every `Coding` in every pinned package, and dropped a `(code, system)`
+pair displayed two different ways. `hl7.fhir.r4.examples#4.0.1` — a declared
+dependency of `hl7.fhir.r4.core#4.0.1`, and so genuinely loaded by the endpoint —
+writes `v3-ObservationInterpretation` code `N` as `"normal"` in one Observation
+example, while the CodeSystem in `hl7.fhir.r4.core#4.0.1` defines it as `"Normal"`.
+The pair was therefore dropped as ambiguous, and seven Labor Observations could not
+be given the display `interpretation.coding.where(... and display.empty().not())`
+requires. The index now ranks its two sources: a `CodeSystem.concept.display` is the
+specification defining a display and wins over any number of usages; usages are
+consulted only for codes no shipped CodeSystem defines, which is the normal case
+here, since LOINC and SNOMED CT are not redistributable and appear in usages only.
+Two CodeSystems disagreeing drops the pair outright rather than falling back to a
+usage.
+
+This also removes an unstated dependence on *which* packages were passed to the
+tool: the committed corpus had been reconciled against one package, a later run
+against all of them, and the two gave different displays for the same code. The
+corpus is now regenerated by one command over the full planned package set, and a
+second pass over its own output changes nothing.
 
 ### In the ISiK packages rather than in the suite: same version, two definitions
 

@@ -4,11 +4,6 @@
       {
         "code": "26893007",
         "display": "Inguinal region structure",
-        "system": "http://snomed.info/sct"
-      },
-      {
-        "code": "26893007",
-        "display": "Inguinal region structure",
         "system": "http://snomed.info/sct",
         "version": "http://snomed.info/sct/11000274103/version/20251115"
       }
@@ -30,22 +25,8 @@
       {
         "code": "8310-5",
         "display": "Körpertemperatur",
-        "system": "http://loinc.org"
-      },
-      {
-        "code": "415929009",
-        "display": "Groin temperature",
-        "system": "http://snomed.info/sct"
-      },
-      {
-        "code": "8329-5",
-        "display": "Body temperature - Core",
-        "system": "http://loinc.org"
-      },
-      {
-        "code": "104063-3",
-        "display": "Body temperature - Groin",
-        "system": "http://loinc.org"
+        "system": "http://loinc.org",
+        "version": "2.81"
       },
       {
         "code": "415929009",
@@ -54,20 +35,14 @@
         "version": "http://snomed.info/sct/11000274103/version/20251115"
       },
       {
-        "code": "104063-3",
-        "display": "Body temperature - Groin",
-        "system": "http://loinc.org",
-        "version": "2.81"
-      },
-      {
         "code": "8329-5",
         "display": "Body temperature - Core",
         "system": "http://loinc.org",
         "version": "2.81"
       },
       {
-        "code": "8310-5",
-        "display": "Körpertemperatur",
+        "code": "104063-3",
+        "display": "Body temperature - Groin",
         "system": "http://loinc.org",
         "version": "2.81"
       }

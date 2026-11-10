@@ -131,6 +131,97 @@ extractor, and a reviewer can see at a glance which resources exist on our
 judgement. Each carries a `_provenance` comment naming the scenario that requires
 it; the key is stripped before the file is written, since it is not valid FHIR.
 
+### Fabrication, for the modules release 3.0.0 added
+
+The section above describes the authored corpus, which is how every body for test
+suite 2.x came to exist. Release 3.0.0 added four Level 5 modules — Connect, ICU
+Minimal, ICU Extended and Labor — whose contracts name 56 resources this repository
+had no body for, to be written against 132 `StructureDefinition`s. Hand-writing
+them would have made the rig's own test data the most likely cause of a failure in
+a round whose entire product is a statement about the SUT, so the 3.x corpus under
+`testdata/fhir/v3/Stufe5/` is *fabricated from the specification* by two tools, run
+in sequence, neither of which invents anything.
+
+**`derive_testdata.py` — the body comes from the specification's own examples.**
+`de.gematik.isik#5.1.3`, the package the 3.0.9 validator plugin validates against,
+ships 199 example instances under `examples/`. For 52 of the 56 resources exactly
+one of them claims a profile that `vendor/requirements.json` records as asserted for
+that resource, so the clinical content is the specification's. The match must be
+unique: no candidate and two candidates are both reported and skipped, because a
+choice between two examples is not one the feature files determine. Three things
+are changed and no others — `id`, `meta` and `text` are dropped (the renderer stamps
+the first two from `requirements.json`; the third is generated narrative carrying the
+example's own ids), and every `Reference.reference` is rewritten to the contract
+placeholder for *its location in the body*, from a table, never from the value it
+happens to hold. A location the table does not cover is a hard error naming the
+path, because leaving a package example's id in place would seed a dangling
+reference and the suite would report it as a SUT defect. Earlier packages ship no
+examples at all — `de.gematik.isik#5.1.2`, used by suite 2.7.0, contains none — so
+the tool is applicable from 5.1.3 onwards and says so rather than producing nothing.
+
+The remaining 4 of the 56 have no example claiming an asserted profile
+(`Encounter/ICUext-Department-Case-617`, `Patient/ICUext-PatientinMusterfrau-617`,
+`Patient/patient-id-not-in-context`, `Practitioner/ICUextPractitionerWalterIntensiv834`)
+and are authored. Three further bodies are named by no data key and carry a
+`_provenance` comment naming the scenario that requires them, exactly as `extra/`
+does for 2.x.
+
+**`reconcile_testdata.py` — the body is then brought into line with the
+assertions.** A published example satisfies the profile; it does not necessarily
+satisfy what a feature file asserts about this resource in this scenario — a LOINC
+`version`, a `display`, an `issued`, a particular `interpretation`. This tool writes
+exactly what the assertions in `vendor/requirements.json` determine and reports
+everything else, by name, as an item for a person. Three properties make its output
+usable as evidence:
+
+* **It writes only what is determined.** An assertion that states a value writes
+  that value. An assertion that requires an element to be non-empty without stating
+  its content writes nothing and is reported. Over the Stufe 5 corpus 5 assertions
+  are currently reported — all on
+  `MedicationStatement-MedicationStatement-Read-Rate-Example`, and all because the
+  assertion names no `where` to choose among entries the body already has.
+* **Where it reads the feature's prose, it cites it.** The precondition prose is
+  irregular, so only six formulaic constructs are read — the display of a code, the
+  unit of a UCUM code, the system of an identifier, an identifier stated outright,
+  the FHIR type the prose names for a choice element, and a timestamp of which a
+  step asserts a substring. A construct the resource's own features state two ways
+  is discarded rather than resolved, and every value taken this way is written with
+  its file and line to `testdata/fhir/v3/PROSE-FACTS-Stufe5.txt`, so each is
+  auditable against the suite text without re-running the tool.
+* **A display comes from a definition, not a usage.** `CodeSystem.concept.display`
+  in a pinned package outranks any number of `Coding.display` occurrences in that
+  package's examples; usages are consulted only for codes no shipped CodeSystem
+  defines, which covers LOINC and SNOMED CT, neither of which is redistributable.
+  A pair two CodeSystems display differently is left alone.
+
+Regenerating the corpus is one command per tool over the pinned package set, and a
+second reconcile pass over its own output changes nothing:
+
+```bash
+python3 scripts/lib/derive_testdata.py \
+    --requirements vendor/requirements.json --level Stufe5 \
+    --package 'vendor/packages/de.gematik.isik#5.1.3' \
+    --contract testdata/v3/Stufe5 \
+    --src testdata/fhir --src testdata/fhir/v3 \
+    --out testdata/fhir/v3/Stufe5
+
+python3 scripts/lib/reconcile_testdata.py \
+    --requirements vendor/requirements.json --level Stufe5 \
+    --contract testdata/v3/Stufe5 \
+    $(for d in vendor/packages/*/; do printf -- '--package %s ' "$d"; done) \
+    --features vendor/upstream/features \
+    --prose-facts testdata/fhir/v3/PROSE-FACTS-Stufe5.txt \
+    --dir testdata/fhir/v3/Stufe5
+```
+
+Both tools have produced defects of their own, four of which are recorded with their
+causes in [08-known-limitations.md](08-known-limitations.md). One of the four is
+worth repeating here, because it bounds what the checks in the next section prove:
+`assertion_check.py` classifies a `count()` assertion as `UNVERIFIED`, so a corpus
+can report every assertion satisfied while five bodies carry six components against
+`component.count() = 3`. That defect was found by this tool's own list of items left
+for a person, which is why that list is printed in full rather than counted.
+
 ### Checking, before any container starts
 
 Three host-side checks run in `make check`, and the first two also in `make seed`,

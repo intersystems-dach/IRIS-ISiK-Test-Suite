@@ -4,11 +4,6 @@
       {
         "code": "122495006",
         "display": "Thoracic spine structure",
-        "system": "http://snomed.info/sct"
-      },
-      {
-        "code": "122495006",
-        "display": "Thoracic spine structure",
         "system": "http://snomed.info/sct",
         "version": "http://snomed.info/sct/11000274103/version/20251115"
       }
@@ -30,22 +25,11 @@
       {
         "code": "364424001",
         "display": "Thoracic spine temperature",
-        "system": "http://snomed.info/sct"
-      },
-      {
-        "code": "8310-5",
-        "display": "Körpertemperatur",
-        "system": "http://loinc.org"
-      },
-      {
-        "code": "364424001",
-        "display": "Thoracic spine temperature",
         "system": "http://snomed.info/sct",
         "version": "http://snomed.info/sct/11000274103/version/20251115"
       },
       {
         "code": "8310-5",
-        "display": "Körpertemperatur",
         "system": "http://loinc.org",
         "version": "2.81"
       }

@@ -4,11 +4,6 @@
       {
         "code": "91470000",
         "display": "Axillary region structure",
-        "system": "http://snomed.info/sct"
-      },
-      {
-        "code": "91470000",
-        "display": "Axillary region structure",
         "system": "http://snomed.info/sct",
         "version": "http://snomed.info/sct/11000274103/version/20251115"
       }
@@ -30,27 +25,8 @@
       {
         "code": "8310-5",
         "display": "Körpertemperatur",
-        "system": "http://loinc.org"
-      },
-      {
-        "code": "415882003",
-        "display": "Axillary temperature",
-        "system": "http://snomed.info/sct"
-      },
-      {
-        "code": "8329-5",
-        "display": "Body temperature - Core",
-        "system": "http://loinc.org"
-      },
-      {
-        "code": "8328-7",
-        "display": "Axillary temperature",
-        "system": "http://loinc.org"
-      },
-      {
-        "code": "188452",
-        "display": "MDC_TEMP_AXILLA",
-        "system": "urn:iso:std:iso:11073:10101"
+        "system": "http://loinc.org",
+        "version": "2.81"
       },
       {
         "code": "415882003",
@@ -59,22 +35,21 @@
         "version": "http://snomed.info/sct/11000274103/version/20251115"
       },
       {
-        "code": "8328-7",
-        "display": "Axillary temperature",
-        "system": "http://loinc.org",
-        "version": "2.81"
-      },
-      {
         "code": "8329-5",
         "display": "Body temperature - Core",
         "system": "http://loinc.org",
         "version": "2.81"
       },
       {
-        "code": "8310-5",
-        "display": "Körpertemperatur",
+        "code": "8328-7",
+        "display": "Axillary temperature",
         "system": "http://loinc.org",
         "version": "2.81"
+      },
+      {
+        "code": "188452",
+        "display": "MDC_TEMP_AXILLA",
+        "system": "urn:iso:std:iso:11073:10101"
       }
     ]
   },

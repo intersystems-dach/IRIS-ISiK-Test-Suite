@@ -4,11 +4,6 @@
       {
         "code": "87878005",
         "display": "Left cardiac ventricular structure",
-        "system": "http://snomed.info/sct"
-      },
-      {
-        "code": "87878005",
-        "display": "Left cardiac ventricular structure",
         "system": "http://snomed.info/sct",
         "version": "http://snomed.info/sct/11000274103/version/20251115"
       }
@@ -30,21 +25,6 @@
       {
         "code": "54993008",
         "display": "Cardiac index",
-        "system": "http://snomed.info/sct"
-      },
-      {
-        "code": "75919-1",
-        "display": "Left ventricular Cardiac index",
-        "system": "http://loinc.org"
-      },
-      {
-        "code": "149772",
-        "display": "Cardiac index",
-        "system": "urn:iso:std:iso:11073:10101"
-      },
-      {
-        "code": "54993008",
-        "display": "Cardiac index",
         "system": "http://snomed.info/sct",
         "version": "http://snomed.info/sct/11000274103/version/20251115"
       },
@@ -53,6 +33,11 @@
         "display": "Left ventricular Cardiac index",
         "system": "http://loinc.org",
         "version": "2.81"
+      },
+      {
+        "code": "149772",
+        "display": "Cardiac index",
+        "system": "urn:iso:std:iso:11073:10101"
       }
     ]
   },

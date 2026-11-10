@@ -4,11 +4,6 @@
       {
         "code": "32849002",
         "display": "Esophageal structure",
-        "system": "http://snomed.info/sct"
-      },
-      {
-        "code": "32849002",
-        "display": "Esophageal structure",
         "system": "http://snomed.info/sct",
         "version": "http://snomed.info/sct/11000274103/version/20251115"
       }
@@ -29,32 +24,6 @@
     "coding": [
       {
         "code": "8310-5",
-        "display": "Körpertemperatur",
-        "system": "http://loinc.org"
-      },
-      {
-        "code": "431598003",
-        "display": "Körperkerntemperatur gemessen im Ösophagus",
-        "system": "http://snomed.info/sct"
-      },
-      {
-        "code": "8329-5",
-        "display": "Body temperature - Core",
-        "system": "http://loinc.org"
-      },
-      {
-        "code": "60836-4",
-        "display": "Esophageal temperature",
-        "system": "http://loinc.org"
-      },
-      {
-        "code": "150372",
-        "display": "MDC_TEMP_ESOPH",
-        "system": "urn:iso:std:iso:11073:10101"
-      },
-      {
-        "code": "8310-5",
-        "display": "Körpertemperatur",
         "system": "http://loinc.org",
         "version": "2.81"
       },
@@ -75,6 +44,11 @@
         "display": "Esophageal temperature",
         "system": "http://loinc.org",
         "version": "2.81"
+      },
+      {
+        "code": "150372",
+        "display": "MDC_TEMP_ESOPH",
+        "system": "urn:iso:std:iso:11073:10101"
       }
     ]
   },

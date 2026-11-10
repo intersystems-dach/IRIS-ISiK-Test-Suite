@@ -4,11 +4,6 @@
       {
         "code": "731998000",
         "display": "Entire intracranial structure",
-        "system": "http://snomed.info/sct"
-      },
-      {
-        "code": "731998000",
-        "display": "Entire intracranial structure",
         "system": "http://snomed.info/sct",
         "version": "http://snomed.info/sct/11000274103/version/20251115"
       }
@@ -30,21 +25,6 @@
       {
         "code": "250844005",
         "display": "Intracranial pressure",
-        "system": "http://snomed.info/sct"
-      },
-      {
-        "code": "60956-0",
-        "display": "Intracranial pressure (ICP)",
-        "system": "http://loinc.org"
-      },
-      {
-        "code": "153608",
-        "display": "Intracranial pressure",
-        "system": "urn:iso:std:iso:11073:10101"
-      },
-      {
-        "code": "250844005",
-        "display": "Intracranial pressure",
         "system": "http://snomed.info/sct",
         "version": "http://snomed.info/sct/11000274103/version/20251115"
       },
@@ -53,6 +33,11 @@
         "display": "Intracranial pressure (ICP)",
         "system": "http://loinc.org",
         "version": "2.81"
+      },
+      {
+        "code": "153608",
+        "display": "Intracranial pressure",
+        "system": "urn:iso:std:iso:11073:10101"
       }
     ]
   },

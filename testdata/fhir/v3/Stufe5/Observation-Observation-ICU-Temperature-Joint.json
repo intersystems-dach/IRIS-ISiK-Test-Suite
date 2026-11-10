@@ -4,11 +4,6 @@
       {
         "code": "39352004",
         "display": "Joint structure",
-        "system": "http://snomed.info/sct"
-      },
-      {
-        "code": "39352004",
-        "display": "Joint structure",
         "system": "http://snomed.info/sct",
         "version": "http://snomed.info/sct/11000274103/version/20251115"
       }
@@ -30,18 +25,13 @@
       {
         "code": "250124002",
         "display": "Joint temperature",
-        "system": "http://snomed.info/sct"
+        "system": "http://snomed.info/sct",
+        "version": "http://snomed.info/sct/11000274103/version/20251115"
       },
       {
         "code": "8310-5",
         "display": "Körpertemperatur",
         "system": "http://loinc.org"
-      },
-      {
-        "code": "250124002",
-        "display": "Joint temperature",
-        "system": "http://snomed.info/sct",
-        "version": "http://snomed.info/sct/11000274103/version/20251115"
       }
     ]
   },

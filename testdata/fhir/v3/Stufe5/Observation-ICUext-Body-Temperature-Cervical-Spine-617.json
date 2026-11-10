@@ -4,11 +4,6 @@
       {
         "code": "122494005",
         "display": "Structure of cervical vertebral column",
-        "system": "http://snomed.info/sct"
-      },
-      {
-        "code": "122494005",
-        "display": "Structure of cervical vertebral column",
         "system": "http://snomed.info/sct",
         "version": "http://snomed.info/sct/11000274103/version/20251115"
       }
@@ -30,22 +25,11 @@
       {
         "code": "364419004",
         "display": "Cervical spine temperature",
-        "system": "http://snomed.info/sct"
-      },
-      {
-        "code": "8310-5",
-        "display": "Körpertemperatur",
-        "system": "http://loinc.org"
-      },
-      {
-        "code": "364419004",
-        "display": "Cervical spine temperature",
         "system": "http://snomed.info/sct",
         "version": "http://snomed.info/sct/11000274103/version/20251115"
       },
       {
         "code": "8310-5",
-        "display": "Körpertemperatur",
         "system": "http://loinc.org",
         "version": "2.81"
       }

@@ -4,11 +4,6 @@
       {
         "code": "52795006",
         "display": "Forehead structure",
-        "system": "http://snomed.info/sct"
-      },
-      {
-        "code": "52795006",
-        "display": "Forehead structure",
         "system": "http://snomed.info/sct",
         "version": "http://snomed.info/sct/11000274103/version/20251115"
       }
@@ -27,16 +22,6 @@
   ],
   "code": {
     "coding": [
-      {
-        "code": "415922000",
-        "display": "Stirntemperatur",
-        "system": "http://snomed.info/sct"
-      },
-      {
-        "code": "8310-5",
-        "display": "Körpertemperatur",
-        "system": "http://loinc.org"
-      },
       {
         "code": "415922000",
         "display": "Stirntemperatur",
