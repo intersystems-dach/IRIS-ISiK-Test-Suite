@@ -19,7 +19,7 @@
         "coding": [
           {
             "system": "http://fhir.de/CodeSystem/identifier-type-de-basis",
-            "code": "GKV"
+            "code": "{{pattern.IdentifierKvid10.Identifier.type.coding.code}}"
           }
         ]
       },

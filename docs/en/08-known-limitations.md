@@ -303,18 +303,22 @@ or fails on whether IRIS returns what the step demands, which is what the step
 would demand of any vendor. The defect is that the specification tells the vendor
 to prepare something else.
 
-### Nine defects in this rig, surfaced by the same bump
+### Ten defects in this rig, surfaced by the same bump
 
 Recorded here because this is the class of thing a version bump is supposed to
-expose. All nine are fixed. Defects 1 to 8 changed no verdict in any round, and
-the reason is stated per defect rather than asserted once; defect 9 changed no
-verdict either, but it would have changed an attribution, which is the one thing
-this rig exists to get right, so its evidence is given in full. Defects 1 to 3 are
-in the phase pipeline and were reached in that order, each stopping a round;
-defects 4 to 8 are in `reconcile_testdata.py`, the tool that brings the fabricated
-Level 5 bodies into line with the suite's assertions, and are grouped after them.
-Defect 9 is in `search_reference_check.py`, the gate that decides whether an empty
-search result is the system's deficiency or ours.
+expose. All ten are fixed. Defects 1 to 8 changed no verdict in any round, and the
+reason is stated per defect rather than asserted once. Defects 9 and 10 are set
+apart: 9 would have charged a missing test resource to the product, and 10 did
+charge our own authoring to it and additionally moved one verdict between two
+rounds. Attribution is the one thing this rig exists to get right, so both carry
+their evidence in full.
+
+Defects 1 to 3 are in the phase pipeline and were reached in that order, each
+stopping a round; defects 4 to 8 are in `reconcile_testdata.py`, the tool that
+brings the fabricated Level 5 bodies into line with the suite's assertions, and are
+grouped after them. Defect 9 is in `search_reference_check.py`, the gate that
+decides whether an empty search result is the system's deficiency or ours, and
+defect 10 in the authored corpus and the build step that renders it per level.
 
 **1. The base FHIR R4 package lost its only bundled payload.**
 `hl7.fhir.r4.core#4.0.1` is added to every level by `plan_packages.py` as an
@@ -543,6 +547,57 @@ that would make a gate like this untrustworthy: query strings are form-encoded, 
 `telecom=030+1234567` is `030 1234567`, and decoding with `unquote` rather than
 `unquote_plus` reported a passing scenario as unsatisfied against a correctly
 seeded Patient.
+
+**10. One code, two levels, and the base profile changed it between them.**
+`http://fhir.de/StructureDefinition/identifier-kvid-10` fixes `Identifier.type` to
+`identifier-type-de-basis#GKV` in `de.basisprofil.r4#1.4.0`, which the Stufe 3
+endpoint pins, and to `#KVZ10` in `#1.5.4`, which Stufe 5 pins. Two bodies in
+`common/` carried the code as a literal, one of each:
+
+| Authored body | Code | Rejected in | Validator message |
+|---|---|---|---|
+| `Patient-Patient-Read-Example` | `GKV` | Stufe 5 | `Patient.identifier[1].type.coding.code`: `Value is 'GKV' but must be 'KVZ10'` |
+| `Coverage-Coverage-Read-Statutory-Example` | `KVZ10` | Stufe 3 | `Coverage.subscriber.identifier.type.coding.code`: `Value is 'KVZ10' but must be 'GKV'`, and `Unknown code … #KVZ10` |
+
+Each arrived in the official report as a profile non-conformance of the system
+under test, and neither is one: IRIS stored and returned the code this rig seeded.
+Counted on the verdict tables: round A carried eight such cases, two in Stufe 3
+from the `Coverage` body and six in Stufe 5 from the `Patient` body; round C
+carried five, charged as `PROFILE_NONCONFORMANCE` under GAP-006 and GAP-009
+before the cause was traced.
+
+The code is now written as
+`{{pattern.IdentifierKvid10.Identifier.type.coding.code}}` and resolved per level
+out of the `StructureDefinition` in that level's own pinned package — the same
+principle as `{{profile.Name}}`, extended from a canonical to a fixed value. A
+full body under `Stufe3/` and `Stufe5/` would have worked too, and was rejected:
+it duplicates 137 lines of the most heavily asserted resource in the corpus to
+vary one code, and the first drift between the two copies would surface as a
+conformance failure in one level only — which is the failure mode the build step
+exists to prevent, and which this defect is an instance of.
+
+Two guards, because a resolver that guesses is worse than a literal. A name
+defined more than once across the level's pins, at different canonicals or
+different versions, is refused rather than taken by directory order — both
+versions of `de.basisprofil.r4` are unpacked side by side, so order would decide
+the code. And a fixed value that repeats is refused rather than indexed at `[0]`.
+Measured: `1.4.0` pinned alone resolves `GKV`, `1.5.4` alone resolves `KVZ10`,
+both pinned together resolve nothing and say why.
+
+**This one changed a verdict, and it is the only one of the ten that did.** The
+scenario `Stufe5/Basis` *Search for Patients by Name, group by `_count`* failed in
+round A and passed in round C, and the first reading of that pair is a product
+improvement. It is not. The two rounds issued the identical request, `GET
+/Patient/?name=Graf&_count=20`, and both responses carried the same
+`Patient-Read-Example` with the same `GKV` identifier. The step validates one
+Patient out of the search bundle, and what changed is which: round A's bundle held
+two entries with `Patient-Read-Example` first, round C's held four with
+`ICUext-PatientinMusterfrau-617` — a fixture suite 3.0.9's ICU module required,
+and one that carries no insurance identifier at all — first. The suite's 3.0.9
+validator still rejects the same body in the same round: the identical message,
+naming `ISiKPatient|5.1.3`, stands against five other scenarios of round C. So the
+case did not change because the system under test changed, and recording it as a
+fix would have credited the product for a reordered search result.
 
 **The standing remedy for defects 5 and 8, recorded and not yet taken.** Both
 arise from the same source: `reconcile_testdata.py` holds its FHIR R4 structural

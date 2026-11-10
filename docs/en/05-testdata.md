@@ -95,7 +95,7 @@ kept in sync by hand would mean that the first time they drifted, the difference
 would surface as a conformance failure in one level only — which reads exactly
 like an IRIS gap.
 
-`build_testdata.py` resolves three things per level:
+`build_testdata.py` resolves four things per level:
 
 * **`meta.profile`** — stamped from `vendor/requirements.json`, i.e. from the
   profile the feature files actually assert on that resource in that level. Never
@@ -114,9 +114,20 @@ like an IRIS gap.
   stamp). The claim is worth making rather than omitting, because IRIS `$validate`
   runs over the seed corpus before every round — so a profile claim becomes a real
   check of our own authoring.
+* **`{{pattern.<Profile>.<element>}}`** — resolved to the code this level's
+  package set fixes at that element, read out of the StructureDefinition itself.
+  For a code the two levels' base profiles disagree on, this is what keeps one
+  shared body valid in both. `identifier-kvid-10` fixes `Identifier.type` to
+  `identifier-type-de-basis#GKV` in `de.basisprofil.r4#1.4.0` (Stufe 3's pin) and
+  to `#KVZ10` in `#1.5.4` (Stufe 5's pin), so a literal is wrong in one level
+  whichever one is written — and the resulting failure arrives as a profile
+  non-conformance of the SUT. See defect 10 in
+  [08-known-limitations.md](08-known-limitations.md) for the measurement. A name
+  the level's pins define more than once, and a fixed value that repeats, are both
+  refused rather than resolved by order.
 
-Where the levels genuinely disagree — `CodeSystem-Read-Example.name` is
-`testkatalog` in Stufe 3 and `Test Catalog` in Stufe 5 — a full body under
+Where the levels genuinely disagree in substance — `CodeSystem-Read-Example.name`
+is `testkatalog` in Stufe 3 and `Test Catalog` in Stufe 5 — a full body under
 `Stufe3/` or `Stufe5/` overrides `common/` for that level only.
 
 **`extra/` is separate on purpose.** Those bodies have materially weaker

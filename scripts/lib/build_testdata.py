@@ -51,8 +51,34 @@ So a resource is authored once in `common/`, and this script renders it per leve
                     before every round, so a profile claim turns into a real check
                     of our own authoring.
 
-Where the levels genuinely disagree - `CodeSystem-Read-Example.name` is
-"testkatalog" in Stufe 3 and "Test Catalog" in Stufe 5 - a full body in
+  {{pattern.<Profile>.<element>}}  resolved to the code that *this level's* package
+                    set fixes at that element, read out of the StructureDefinition
+                    itself. For a code the two levels' base profiles disagree on,
+                    this is what keeps one shared body correct in both.
+
+                    The case it exists for, measured in rounds A and C:
+                    `http://fhir.de/StructureDefinition/identifier-kvid-10` fixes
+                    `Identifier.type` to `identifier-type-de-basis#GKV` in
+                    `de.basisprofil.r4#1.4.0`, which Stufe 3 pins, and to `#KVZ10`
+                    in `#1.5.4`, which Stufe 5 pins. A level-neutral body can
+                    therefore carry only one of the two, and the reference
+                    validator rejects it in the other level - `Value is 'GKV' but
+                    must be 'KVZ10'` on `Patient.identifier[1].type.coding.code`
+                    in Stufe 5, `Value is 'KVZ10' but must be 'GKV'` on
+                    `Coverage.subscriber.identifier.type.coding.code` in Stufe 3.
+                    Both arrived as profile non-conformances of the SUT, and
+                    neither is one: IRIS returned the code we seeded.
+
+                    Writing the code as `{{pattern.IdentifierKvid10.Identifier.
+                    type.coding.code}}` resolves it per level from the package
+                    that level is actually validated against. The alternative,
+                    a full body under `Stufe3/` and `Stufe5/`, would duplicate
+                    137 lines of Patient to vary one code - and reintroduce for
+                    the most heavily asserted resource in the corpus exactly the
+                    drift this build step exists to prevent.
+
+Where the levels genuinely disagree in substance - `CodeSystem-Read-Example.name`
+is "testkatalog" in Stufe 3 and "Test Catalog" in Stufe 5 - a full body in
 `Stufe3/` or `Stufe5/` overrides `common/` for that level only.
 
 Resources no data key names
@@ -127,10 +153,18 @@ REPO = Path(__file__).resolve().parents[2]
 # because 3.0.0 replaced the single `data` baseKey with one per module. The shape
 # is the same as feature_parser.DATA_KEY_PATTERN, which matches the `${...}` form
 # the feature files use; the two are deliberately not shared, because this one
-# must NOT match `{{profile.Name}}`, whose dot-separated right-hand side would
-# otherwise be read as a test-data key.
-RE_PLACEHOLDER = re.compile(r"\{\{(?!profile\.)([A-Za-z0-9_]+\.[A-Za-z0-9_.-]+)\}\}")
+# must NOT match `{{profile.Name}}` or `{{pattern.Name.element}}`, whose
+# dot-separated right-hand sides would otherwise be read as a test-data key.
+RE_PLACEHOLDER = re.compile(
+    r"\{\{(?!profile\.|pattern\.)([A-Za-z0-9_]+\.[A-Za-z0-9_.-]+)\}\}")
 RE_PROFILE = re.compile(r"\{\{profile\.([A-Za-z0-9_-]+)\}\}")
+# `{{pattern.<StructureDefinition name>.<element path>[.<field>]}}`. The element
+# path is FHIR's own, rooted at the type the profile constrains, and may be
+# followed by the field wanted inside the fixed value - `Identifier.type` plus
+# `coding.code`. Which part is which is not decided here but in
+# resolve_pattern(), by the longest element path the profile actually declares.
+RE_PATTERN = re.compile(
+    r"\{\{pattern\.([A-Za-z0-9_-]+)\.([A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)+)\}\}")
 
 # The prefix that marks a package as ISiK's own. Profile canonicals are resolved
 # only out of these, never out of the base profiles or the terminology packages
@@ -186,6 +220,161 @@ def profile_index(packages_dir: Path, prefixes: tuple[str, ...]) -> dict[str, st
             if doc.get("resourceType") == "StructureDefinition" and doc.get("name"):
                 out.setdefault(doc["name"], doc["url"])
     return out
+
+
+def level_pins(plan_path: Path, level: str) -> tuple[str, ...]:
+    """Every package pin on this level's endpoint, as `<name>#<version>`.
+
+    Distinct from level_packages(), which keeps only the ISiK packages because a
+    profile canonical may come from nowhere else. A fixed code may: the one this
+    exists for is in `de.basisprofil.r4`. The version is kept rather than stripped
+    because both levels' pins are unpacked side by side under vendor/packages, and
+    `de.basisprofil.r4` is exactly the package whose two versions disagree.
+    """
+    if not plan_path.is_file():
+        return ()
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    bucket = (plan.get("endpoints") or {}).get(level.lower()) or {}
+    return tuple(sorted(set(bucket.get("packages") or [])))
+
+
+def package_id(dir_name: str) -> str:
+    """Directory name -> `<name>#<version>`, for comparison against a plan pin.
+
+    Both spellings occur under vendor/packages depending on which fetch route
+    unpacked the package - `de.basisprofil.r4#1.5.4` and `de.basisprofil.r4-1.5.4`
+    - and the plan states pins in the first form.
+    """
+    m = re.match(r"^(?P<name>.+?)[-#](?P<version>\d[\w.+-]*)$", dir_name)
+    return f"{m['name']}#{m['version']}" if m else dir_name
+
+
+def resolve_pattern(doc: dict, tail: str) -> tuple[str | None, str | None]:
+    """The fixed value `doc` declares at `tail`, or (None, why not).
+
+    `tail` is an element path optionally followed by a field inside the fixed
+    value. The split is decided by the profile: the longest declared element path
+    that is a prefix of `tail` wins, and what remains addresses the value. So
+    `Identifier.type.coding.code` resolves against the `patternCodeableConcept`
+    on `Identifier.type` when that is where the profile states it, and would
+    resolve against a `patternCode` on `Identifier.type.coding.code` if a profile
+    stated it there instead - the caller does not have to know which.
+
+    A repetition with more than one entry is refused rather than indexed: the
+    placeholder's purpose is to state one code, and picking the first would be a
+    guess, seeded into a request, charged to the SUT when the scenario fails.
+    """
+    elements = ((doc.get("snapshot") or doc.get("differential") or {})
+                .get("element") or [])
+    best: tuple[str, dict] | None = None
+    for el in elements:
+        path = el.get("path") or ""
+        if tail == path or tail.startswith(path + "."):
+            if best is None or len(path) > len(best[0]):
+                best = (path, el)
+    if best is None:
+        return None, f"declares no element on the path to {tail!r}"
+    path, el = best
+    rest = tail[len(path):].lstrip(".")
+
+    # `fixed[x]` and `pattern[x]` are the two spellings of the same statement; a
+    # profile uses one or the other per element, never both.
+    values = [v for k, v in sorted(el.items())
+              if k.startswith(("fixed", "pattern"))]
+    if not values:
+        return None, f"declares no fixed or pattern value at {path!r}"
+    primitives = [v for v in values if not isinstance(v, (dict, list))]
+    composites = [v for v in values if isinstance(v, (dict, list))]
+    if not rest:
+        if not primitives:
+            return None, (f"the fixed value at {path!r} is a composite; name the "
+                          f"field wanted inside it")
+        return str(primitives[0]), None
+    if not composites:
+        return None, (f"the fixed value at {path!r} is a primitive, so it has no "
+                      f"{rest!r}")
+    node = composites[0]
+    for step in rest.split("."):
+        if isinstance(node, list):
+            if len(node) != 1:
+                return None, (f"the fixed value at {path!r} repeats {len(node)} "
+                              f"times before {step!r}; exactly one is required "
+                              f"for the code to be unambiguous")
+            node = node[0]
+        if not isinstance(node, dict) or step not in node:
+            return None, f"the fixed value at {path!r} has no {rest!r}"
+        node = node[step]
+    if isinstance(node, list):
+        if len(node) != 1:
+            return None, (f"{tail} resolves to {len(node)} values; exactly one is "
+                          f"required")
+        node = node[0]
+    if isinstance(node, (dict, list)):
+        return None, f"{tail} resolves to a structure, not a single value"
+    return str(node), None
+
+
+def pattern_resolver(packages_dir: Path, pins: tuple[str, ...]):
+    """A `(name, tail) -> (value, why not)` resolver over this level's pins.
+
+    Indexed by StructureDefinition name over every pinned package, not only the
+    ISiK ones, and over every `*.json` in the package rather than the
+    `StructureDefinition-*.json` files alone: `de.basisprofil.r4#1.4.0` ships the
+    profile this exists for as `Profile-identifier-kvid10.json`, so a filename
+    glob would silently find nothing and leave the placeholder unresolved.
+
+    A name two pinned packages define differently is indexed as ambiguous rather
+    than resolved by sort order. Identity is the canonical *and* the version,
+    because the case that matters here is one canonical at two versions:
+    `identifier-kvid-10` is `1.4.0` and `1.5.4` of the same URL, unpacked side by
+    side, and those are the two that disagree. One level pins only one of them, so
+    this is a guard against a malformed plan rather than an expected state - but a
+    guard that failed silently would pick a code by directory order.
+    """
+    index: dict[str, Path | None] = {}
+    seen: dict[str, tuple[str, str]] = {}
+    if packages_dir.is_dir() and pins:
+        wanted = set(pins)
+        for pkg_dir in sorted(packages_dir.iterdir()):
+            if not pkg_dir.is_dir() or package_id(pkg_dir.name) not in wanted:
+                continue
+            root = pkg_dir / "package" if (pkg_dir / "package").is_dir() else pkg_dir
+            for path in sorted(root.glob("*.json")):
+                try:
+                    doc = json.loads(path.read_text(encoding="utf-8"))
+                except (json.JSONDecodeError, UnicodeDecodeError, OSError):
+                    continue
+                if not isinstance(doc, dict):
+                    continue
+                if doc.get("resourceType") != "StructureDefinition":
+                    continue
+                name, url = doc.get("name"), doc.get("url")
+                if not name or not url:
+                    continue
+                identity = (url, str(doc.get("version") or ""))
+                if name in seen and seen[name] != identity:
+                    index[name] = None
+                    continue
+                seen.setdefault(name, identity)
+                index.setdefault(name, path)
+    cache: dict[Path, dict] = {}
+
+    def resolve(name: str, tail: str) -> tuple[str | None, str | None]:
+        if name not in index:
+            return None, (f"no StructureDefinition named {name!r} in this level's "
+                          f"pinned packages")
+        path = index[name]
+        if path is None:
+            return None, (f"{name!r} is defined more than once, at different "
+                          f"canonicals or versions, in this level's pinned "
+                          f"packages")
+        if path not in cache:
+            cache[path] = json.loads(path.read_text(encoding="utf-8"))
+        value, why = resolve_pattern(cache[path], tail)
+        return value, None if value is not None else f"{name} {why}"
+
+    resolve.count = len(index)  # type: ignore[attr-defined]
+    return resolve
 
 
 def load_contract(level: str, req: dict) -> dict[str, str]:
@@ -247,8 +436,10 @@ def row_namespaces(row: dict) -> set[str]:
 def substitute(node, contract: dict[str, str], profiles: dict[str, str],
                unresolved: set[str], legacy: dict[str, set[str]] | None = None,
                ambiguous: set[str] | None = None,
-               ns_scope: set[str] | None = None):
-    """Replace every {{<ns>.<key>}} / {{profile.Name}}, recording what did not resolve.
+               ns_scope: set[str] | None = None,
+               patterns=None):
+    """Replace every {{<ns>.<key>}} / {{profile.Name}} / {{pattern.Name.element}},
+    recording what did not resolve.
 
     Qualified lookup first: the placeholder names a namespace and a key, and under
     the generation the body was authored for that is an exact contract key.
@@ -284,11 +475,11 @@ def substitute(node, contract: dict[str, str], profiles: dict[str, str],
     """
     if isinstance(node, dict):
         return {k: substitute(v, contract, profiles, unresolved, legacy,
-                              ambiguous, ns_scope)
+                              ambiguous, ns_scope, patterns)
                 for k, v in node.items()}
     if isinstance(node, list):
         return [substitute(v, contract, profiles, unresolved, legacy,
-                           ambiguous, ns_scope)
+                           ambiguous, ns_scope, patterns)
                 for v in node]
     if isinstance(node, str):
         def data_repl(m):
@@ -318,7 +509,20 @@ def substitute(node, contract: dict[str, str], profiles: dict[str, str],
                 return m.group(0)
             return profiles[name]
 
-        return RE_PROFILE.sub(profile_repl, RE_PLACEHOLDER.sub(data_repl, node))
+        def pattern_repl(m):
+            name, tail = m.group(1), m.group(2)
+            if patterns is None:
+                unresolved.add(f"pattern.{name}.{tail} (no packages indexed)")
+                return m.group(0)
+            value, why = patterns(name, tail)
+            if value is None:
+                unresolved.add(f"pattern.{name}.{tail} ({why})")
+                return m.group(0)
+            return value
+
+        return RE_PATTERN.sub(
+            pattern_repl,
+            RE_PROFILE.sub(profile_repl, RE_PLACEHOLDER.sub(data_repl, node)))
     return node
 
 
@@ -380,6 +584,16 @@ def main() -> int:
         legacy = legacy_index(contract)
         pkgs = level_packages(args.package_plan, level)
         profiles = profile_index(args.packages, pkgs)
+        pins = level_pins(args.package_plan, level)
+        patterns = pattern_resolver(args.packages, pins)
+        if not getattr(patterns, "count", 0):
+            # Same two causes as for {{profile.*}} below, reported the same way.
+            # Separate because the scope differs: a fixed code is resolved out of
+            # every pinned package, so this can be empty while profiles is not.
+            print(f"  note: no StructureDefinition found under {args.packages} "
+                  f"for {level}'s {len(pins)} pinned package(s) - "
+                  f"{{{{pattern.*}}}} cannot be resolved "
+                  f"(run `make packages` first)")
         if not profiles:
             # Two distinct causes, and naming the wrong one costs an operator a
             # long detour: either the plan does not say which ISiK packages this
@@ -441,7 +655,7 @@ def main() -> int:
             unresolved: set[str] = set()
             ambiguous: set[str] = set()
             doc = substitute(doc, contract, profiles, unresolved, legacy,
-                             ambiguous, row_namespaces(r))
+                             ambiguous, row_namespaces(r), patterns)
             if ambiguous:
                 problems.append(
                     f"  {src.name}: ambiguous legacy key(s) "
@@ -499,7 +713,8 @@ def main() -> int:
                 continue
             unresolved = set()
             ambiguous = set()
-            doc = substitute(doc, contract, profiles, unresolved, legacy, ambiguous)
+            doc = substitute(doc, contract, profiles, unresolved, legacy, ambiguous,
+                             None, patterns)
             if ambiguous:
                 problems.append(
                     f"  {src.name}: ambiguous legacy key(s) "
