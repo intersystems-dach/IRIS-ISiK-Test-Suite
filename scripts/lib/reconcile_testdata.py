@@ -187,6 +187,28 @@ LIST_ELEMENTS = {"coding", "component", "referenceRange", "note", "identifier",
 LIST_ELEMENTS_BY_TYPE = {"DiagnosticReport": {"specimen"}}
 SCALAR_ELEMENTS_BY_TYPE = {"Observation": {"specimen"}}
 
+# Cardinality also depends on the element one level up, not only on the resource.
+# `identifier` is 0..* on every resource in scope and 0..1 inside a `Reference`, so
+# `specimen.identifier.where(...)` must create an object where `identifier.where(...)`
+# creates a list entry. Writing a list produced eight bodies IRIS rejected at the
+# seed phase with "Property 'identifier' of Type 'Reference' cannot be an Array".
+#
+# The element names below are the ones a Stufe 5 assertion navigates *into* and that
+# R4 defines as `Reference` on the resource carrying them: the four locations
+# `derive_testdata.REFERENCE_KEYS` rewrites, which is where this corpus's references
+# are, plus `Observation.specimen`. It is deliberately not a FHIR-wide table of
+# Reference-valued elements - `performer` is a Reference on Observation and a
+# BackboneElement on MedicationAdministration, and a list that got such a name wrong
+# would mis-shape a child element rather than fail - so it names only what is needed
+# and verified. See docs/en/08-known-limitations.md on reading this from the R4 base
+# definitions instead, as choice_type_check.py already does.
+REFERENCE_ELEMENTS = {"specimen"} | {
+    path.rsplit(".", 1)[-1].removesuffix("[]") for path in REFERENCE_KEYS}
+
+# The children R4 gives a `Reference`. All are 0..1 or a scalar; `extension` is the
+# only list a Reference carries and is handled by LIST_ELEMENTS.
+REFERENCE_CHILDREN = {"reference", "type", "identifier", "display"}
+
 # Date and time elements that are *not* FHIR choice elements, so a feature naming
 # one names a key that may simply be absent and can be created. From the R4 base
 # definitions; an element not listed here and not present in the body is reported.
@@ -277,7 +299,11 @@ class Ctx:
                 self.used.append(f"display of {code!r} from the precondition prose")
         return found
 
-    def is_list(self, name: str) -> bool:
+    def is_list(self, name: str, parent: str | None = None) -> bool:
+        # The element one level up decides first, where it decides at all: inside a
+        # Reference every child is 0..1 (see REFERENCE_ELEMENTS).
+        if parent in REFERENCE_ELEMENTS and name in REFERENCE_CHILDREN:
+            return False
         if name in SCALAR_ELEMENTS_BY_TYPE.get(self.resource_type, ()):
             return False
         return (name in LIST_ELEMENTS
@@ -480,13 +506,19 @@ def choice_key(name: str, conds: list[str]) -> str:
                       f"fields ({', '.join(sorted(fields))}) name no FHIR type")
 
 
-def navigate(node, segments: list[str], ctx: Ctx, create: bool, conds_ahead=()):
+def navigate(node, segments: list[str], ctx: Ctx, create: bool, conds_ahead=(),
+             parent: str | None = None):
     """Walk a chain of names and `where(...)` selectors.
 
     With `create` false this is a lookup returning None where the path is absent.
     With `create` true, a missing name is created and a `where` that selects
     nothing appends an element built from its own conditions - which is the sense
     in which a feature's `exists()` is read as a requirement.
+
+    `parent` is the element `node` itself sits at, where the caller knows it. It is
+    what lets the cardinality of a child be decided by its container as well as by
+    the resource - see Ctx.is_list. A caller that does not know it passes nothing,
+    and a chain walked from the resource root never needs to.
     """
     cur = node
     for index, segment in enumerate(segments):
@@ -511,13 +543,13 @@ def navigate(node, segments: list[str], ctx: Ctx, create: bool, conds_ahead=()):
                     else:
                         match = {}
                         cur.append(match)
-                    enforce_conds(match, conds, ctx)
+                    enforce_conds(match, conds, ctx, at=parent)
                 cur = match
             elif isinstance(cur, dict):
                 if not satisfies(cur, conds, ctx):
                     if not create:
                         return None
-                    enforce_conds(cur, conds, ctx)
+                    enforce_conds(cur, conds, ctx, at=parent)
                 # else: the single object already satisfies the selector
             else:
                 return None
@@ -554,7 +586,7 @@ def navigate(node, segments: list[str], ctx: Ctx, create: bool, conds_ahead=()):
             if segment in NON_CHOICE_DATETIME:
                 key = segment
                 cur[key] = None
-            elif ctx.is_list(segment):
+            elif ctx.is_list(segment, parent):
                 key = segment
                 cur[key] = []
             elif (segment in CHOICE_ELEMENTS and index + 1 < len(segments)
@@ -569,12 +601,18 @@ def navigate(node, segments: list[str], ctx: Ctx, create: bool, conds_ahead=()):
             else:
                 key = segment
                 cur[key] = {}
+        parent = segment
         cur = cur[key]
     return cur
 
 
-def enforce_conds(node: dict, conds: list[str], ctx: Ctx) -> list[str]:
-    """Write every scalar equality of `conds` into `node`; recurse into nested terms."""
+def enforce_conds(node: dict, conds: list[str], ctx: Ctx,
+                  at: str | None = None) -> list[str]:
+    """Write every scalar equality of `conds` into `node`; recurse into nested terms.
+
+    `at` is the element `node` itself sits at, passed on to navigate() so a child's
+    cardinality can be decided by its container. See Ctx.is_list.
+    """
     written: list[str] = []
     for term in conds:
         # Before the generic `.exists()` below, which would otherwise shadow it: a
@@ -604,7 +642,7 @@ def enforce_conds(node: dict, conds: list[str], ctx: Ctx) -> list[str]:
         if term.endswith(".exists()"):
             inner = term[:-len(".exists()")]
             segments = parse_chain(inner)
-            target = navigate(node, segments, ctx, create=True)
+            target = navigate(node, segments, ctx, create=True, parent=at)
             if target in (None, {}, []) and not segments[-1].startswith("where("):
                 raise Unsupported(f"{inner} must exist and the feature states no "
                                   f"value for it")
@@ -612,7 +650,7 @@ def enforce_conds(node: dict, conds: list[str], ctx: Ctx) -> list[str]:
         if term.endswith(".empty().not()"):
             inner = term[:-len(".empty().not()")]
             segments = parse_chain(inner)
-            if navigate(node, segments, ctx, create=False) in (None, [], {}, ""):
+            if navigate(node, segments, ctx, create=False, parent=at) in (None, [], {}, ""):
                 # The one such requirement the ISiK features raise is on a coding's
                 # display, which the specification itself supplies (see Displays).
                 if segments == ["display"]:
@@ -632,7 +670,7 @@ def enforce_conds(node: dict, conds: list[str], ctx: Ctx) -> list[str]:
             raise Unsupported(term)
         want = parse_literal(m)
         segments = parse_chain(m.group("path"))
-        parent = (navigate(node, segments[:-1], ctx, create=True,
+        parent = (navigate(node, segments[:-1], ctx, create=True, parent=at,
                            conds_ahead=conds) if len(segments) > 1 else node)
         if isinstance(parent, list):
             # An empty list is one this walk has just created, so the entry the

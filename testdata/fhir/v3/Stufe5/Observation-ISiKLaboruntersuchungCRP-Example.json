@@ -75,12 +75,10 @@
   ],
   "resourceType": "Observation",
   "specimen": {
-    "identifier": [
-      {
-        "system": "https://example.org/fhir/sid/proben",
-        "value": "PRB-2024-1001"
-      }
-    ]
+    "identifier": {
+      "system": "https://example.org/fhir/sid/proben",
+      "value": "PRB-2024-1001"
+    }
   },
   "status": "final",
   "subject": {
