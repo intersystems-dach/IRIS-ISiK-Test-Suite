@@ -542,6 +542,11 @@ it `extensible` to `http://hl7.org/fhir/ValueSet/risk-probability`, whose
 CodeSystem is the one the suite's criterion names. The seeded resource validates
 against the profile with no error-severity issue.
 
+The round that carried this change and nothing else joins all 1 234 of its cases
+with the round before it: 0 regressions, one case newly passing — the scenario
+above — and no other module's failure count moved
+(`new round 20261110/results/comparison-C-vs-D.json`).
+
 One false positive of the first implementation is recorded because it is the kind
 that would make a gate like this untrustworthy: query strings are form-encoded, so
 `telecom=030+1234567` is `030 1234567`, and decoding with `unquote` rather than
@@ -583,6 +588,13 @@ versions of `de.basisprofil.r4` are unpacked side by side, so order would decide
 the code. And a fixed value that repeats is refused rather than indexed at `[0]`.
 Measured: `1.4.0` pinned alone resolves `GKV`, `1.5.4` alone resolves `KVZ10`,
 both pinned together resolve nothing and say why.
+
+The round that carried this change and nothing else joins all 1 234 of its cases
+with the round before it: 0 regressions, five cases newly passing — exactly the
+five charged under GAP-006 and GAP-009 — and no other module's failure count
+moved (`new round 20261110/results/comparison-D-vs-E.json`). That round's own
+reconciliation charges 59 cases to the system under test, which is the count the
+preceding round reached only once this cause had been traced by hand.
 
 **This one changed a verdict, and it is the only one of the ten that did.** The
 scenario `Stufe5/Basis` *Search for Patients by Name, group by `_count`* failed in
