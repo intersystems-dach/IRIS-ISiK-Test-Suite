@@ -54,6 +54,46 @@ _UNSUPPORTED = ("Background:", "Rule:", "Scenario Template:")
 _STEP_KEYWORDS = ("Given ", "When ", "Then ", "And ", "But ", "* ")
 
 
+# The escapes Gherkin defines inside a table cell. `\|` is the interesting one:
+# it is how a cell carries the pipe that otherwise ends it, and the suite writes
+# it in all ten of its token criteria of the form `system|code` - e.g.
+# `| ${data.tag-system}\|${data.tag-value} |`. Splitting on every pipe turns that
+# one cell into two and leaves the backslash on the first, which reads as a tag
+# system with a trailing `\` and a code that has wandered into the next column.
+# `\d` appears too (`| 4\d\d |`, a status-code regex) and is not an escape, so an
+# unknown escape is kept verbatim rather than having its backslash eaten.
+_CELL_ESCAPES = {"|": "|", "n": "\n", "\\": "\\"}
+
+
+def _split_row(line: str) -> list[str]:
+    """The cells of one Gherkin table row, honouring the cell escapes."""
+    cells: list[str] = []
+    buf: list[str] = []
+    line = line.strip()
+    i = 1 if line.startswith("|") else 0
+    while i < len(line):
+        ch = line[i]
+        if ch == "\\" and i + 1 < len(line):
+            nxt = line[i + 1]
+            buf.append(_CELL_ESCAPES.get(nxt, "\\" + nxt))
+            i += 2
+            continue
+        if ch == "|":
+            cells.append("".join(buf).strip())
+            buf = []
+            i += 1
+            continue
+        buf.append(ch)
+        i += 1
+    tail = "".join(buf).strip()
+    if tail:
+        # A row whose final cell is not closed by a delimiter. The suite always
+        # closes its rows; the cell is kept rather than dropped so that a
+        # malformed row shows up as its contents and not as a column short.
+        cells.append(tail)
+    return cells
+
+
 @dataclass
 class Step:
     keyword: str
@@ -293,7 +333,7 @@ def parse_feature(path: Path, root: Path) -> Feature:
             continue
 
         if stripped.startswith("|"):
-            cells = [c.strip() for c in stripped.strip("|").split("|")]
+            cells = _split_row(stripped)
             if current_examples is not None:
                 if not current_examples.header:
                     current_examples.header = cells

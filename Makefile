@@ -79,7 +79,7 @@ RUN_ID ?= run-$(shell date -u +%Y%m%dT%H%M%SZ)
 export RUN_ID
 
 .PHONY: help provision preflight resolve packages up seed \
-        test test-stufe3 test-stufe5 report gap-report \
+        test test-stufe3 test-stufe5 report gap-report compare \
         manual all status credentials logs shell-iris check clean destroy
 
 # -----------------------------------------------------------------------------
@@ -164,6 +164,13 @@ report: ## Extract the official reports verbatim + generate the cited results an
 
 gap-report: ## Generate the standalone developer gap analysis (English, per failure)
 	@$(SCRIPTS)/80-gap-report.sh
+
+# Not part of `make all`: a comparison needs a second round, and which round
+# that is, is a judgement about what the figure is meant to show (the previous
+# release, the previous suite version, the previous rig fix) rather than
+# something this Makefile can pick.
+compare: ## Join two rounds: BASELINE=<run-id|path> [CANDIDATE=<run-id|path>]
+	@$(SCRIPTS)/85-compare-rounds.sh
 
 # --- Composite --------------------------------------------------------------
 

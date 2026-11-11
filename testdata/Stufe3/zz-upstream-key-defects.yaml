@@ -20,9 +20,16 @@
 # docs/en/05-testdata.md as an upstream test-suite defect, and none of them is
 # counted as an IRIS gap.
 #
-# Every alias points at the value of an existing upstream key. Nothing here
-# invents a resource: the referenced instances are the ones the upstream keys
-# already require, so no additional test data is needed.
+# No entry here invents a resource: every key that names an instance points at
+# an instance the upstream keys already require, so no additional test data is
+# needed. Two kinds of entry appear:
+#
+#   (a) an alias for a key an upstream feature file references but upstream's
+#       own testdata leaves undefined (practitioner-id, below);
+#   (b) a value the Stufe 3 contract leaves undefined although the Stufe 3
+#       profiles require the corresponding element to be present in a body that
+#       both levels share (atc-code-version, below). Without it the shared body
+#       would have to carry a literal, and the two levels would silently drift.
 # =============================================================================
 
 # Stufe3/Basis/Practitioner-Search.feature:53
@@ -38,3 +45,15 @@
 #   official report contains a literal "${data....}" string, which an inspector
 #   would reasonably read as a broken harness.
 practitioner-id: Practitioner-Read-Example
+
+# ISiKATCCoding fixes Coding.system to http://fhir.de/CodeSystem/bfarm/atc and
+# requires Coding.version (min 1). The Stufe 5 contract defines
+# `atc-code-version` (medikation.yaml) and its Stufe 5 feature files reference
+# it; the Stufe 3 contract defines no equivalent, although ISiKATCCoding is
+# profiled identically for Stufe 3 and the Stufe 3 bodies already carry the
+# value as a literal. 2021 is the ATC release the Stufe 3 bodies were authored
+# against, and it is the literal present in
+# Stufe3/Medication-Medication-Read-Extended-Example.json and
+# Stufe3/MedicationRequest-MedicationRequest-Read-Extended-Example.json. No
+# Stufe 3 assertion reads the value; only its presence is validated.
+atc-code-version: "2021"

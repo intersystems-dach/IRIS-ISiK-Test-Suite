@@ -18,6 +18,10 @@
       },
       "system": "https://test.krankenhaus.de/fhir/sid/patientennummer",
       "value": "P-0005"
+    },
+    {
+      "system": "{{data.patient-update-cancellation-identifier-system}}",
+      "value": "{{data.patient-update-cancellation-identifier-value}}"
     }
   ],
   "active": true,

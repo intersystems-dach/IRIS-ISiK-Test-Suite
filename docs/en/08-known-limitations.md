@@ -313,6 +313,12 @@ charge our own authoring to it and additionally moved one verdict between two
 rounds. Attribution is the one thing this rig exists to get right, so both carry
 their evidence in full.
 
+Ten further defects, 11 to 20, were found afterwards by auditing this rig against
+the rounds it had already produced rather than by the bump, and are recorded in
+the two sections that follow this one: 11 to 13 in the derived documents, 14 to
+20 in the test data and in the attribution that is supposed to keep a defect in
+the test data out of the product's gap count.
+
 Defects 1 to 3 are in the phase pipeline and were reached in that order, each
 stopping a round; defects 4 to 8 are in `reconcile_testdata.py`, the tool that
 brings the fabricated Level 5 bodies into line with the suite's assertions, and are
@@ -633,6 +639,717 @@ of a round already under way; a change of that reach must be made with the corpu
 diffed element by element against the current one, not while a round is waiting on
 it. The two container-aware tables added for defect 8 are therefore an interim
 narrowing and are marked as such in the source.
+
+### Three further defects, found by auditing the rig against its own rounds
+
+Defects 1 to 10 were surfaced by the suite bump: each stopped a round or changed a
+figure in one. These three were not. They were found by reading the rig's own
+output against the artefacts it had already archived, after the rounds were
+complete, and all three are in the **derived** documents — `analysis/results.md`,
+`GAP-ANALYSIS.md` and the attribution index they are joined through. None of them
+can alter an official report: those archives are written by the suite inside its
+own container and are only copied by this rig. Where a derived figure and an
+official one disagree, the official one is correct and the derived document has a
+bug, which is the rule under which all three were found.
+
+All three are fixed. Two changed a reported figure and one did not; which is
+which is stated per defect.
+
+**11. One case in every Stufe 5 round that the pinned suite never selected.**
+Each of the five rounds reported one more Stufe 5 case than its own tag
+expression selects: 896 against 895 in rounds A and B3, 1 234 against 1 233 in
+rounds C, D and E. The discrepancy was recorded as a non-blocking
+`scopeMismatch` anomaly in `analysis/results.md` and carried forward unexplained.
+
+The cause is two upstream behaviours meeting. ISiK splits its Stufe 5 outlines
+into a selected and an `@Optional` `Examples:` block — measured on 2.7.0, 32 of
+the 47 Stufe 5 outlines in scope carry at least one block the level's tag
+expression excludes, 69 excluded rows in total, while Stufe 3 has none — and
+Serenity writes the *whole* `dataTable` into the outcome regardless of which
+blocks the run selected; and
+Serenity 5.3.10's basename collision (recorded above) duplicates steps between
+two features that share a basename. A duplicated step is attributed to an
+`Examples:` row by matching the parameter values in its own title, and for one
+step the only row it matched was in a block the level's tag expression excludes:
+`_tag` is row 2 of the selected block of `Stufe5/Basis/AllergyIntolerance-Search`
+and the first row of the `@Optional` block of
+`Stufe5/Medikation/AllergyIntolerance-Search`. The result was a phantom case —
+and it **passed**, so the error ran in the direction that flatters the product.
+
+The 2026-08-07 baseline round reported 895 correctly, from the same counting
+logic: `git` shows the port to 3.0.9 changed which levels this tool iterates and
+nothing about how it attributes a step to a row. What differed is the input.
+Serenity duplicated **10** steps in the baseline round and **11** in round A —
+`serenity-summary.json` reports 905 cases against 906 — and of round A's eleven,
+exactly one matches only an excluded row, where of the baseline's ten, none does.
+The defect was therefore latent in every round and visible only in a round whose
+report happened to carry that particular duplicate, which is the worst property a
+counting defect can have: it does not reproduce on demand.
+
+`excluded_example_rows()` in `scripts/lib/results_report.py` now attributes each
+`dataTable` row to an `Examples:` block by line number, evaluates the level's
+compiled tag expression against that block's effective tags, and makes rows from
+unselected blocks ineligible as match targets. It guards against guessing: if
+every block's row count does not come out exactly, it excludes nothing rather
+than attribute rows it does not understand. The `foreignExampleStep` anomaly
+detail now states, for such a step, that the only row it matches is in a block
+this level does not select, so the scenario cannot have run it.
+
+Measured by re-deriving round A from its archived bundle: Stufe 3 unchanged at
+506 of 506; Stufe 5 now 895 cases — 783 asserting, 112 precondition — of which
+839 passed and 56 failed, against the official report's own `casesExecuted: 895`
+and `casesAssertive: 783`. A key-level diff of the per-case verdicts shows
+exactly one case removed, the `_tag` phantom at line 46, and **no verdict changed
+anywhere**. Serenity's own 906 still reconciles as 895 plus the 11
+`foreignExampleStep` outcomes, so the blocking `totalsDisagree` check still
+balances.
+
+`scopeMismatch` is also split by direction, because it was non-blocking in both
+and the two directions are not alike. A run that reports *fewer* cases than the
+tag expression selects is legitimate — a narrowed debugging run does exactly
+that — and keeps `scopeMismatch`. A run that reports *more* is never legitimate,
+and now emits `scopeExcess`, which is in the exit-status blocking set. The
+asymmetry is deliberate and is stated in `docs/en/06-execution.md` next to the
+blocking set itself.
+
+**12. A failure this rig authored, charged to the product, with no channel able
+to see it.** Defect 10's eight round-A cases reached the official report as a
+profile non-conformance of the system under test, and the gap report had no means
+to say otherwise: all eight were categorised `PROFILE_NONCONFORMANCE` and counted
+against the product until the cause was traced by hand. Both of the generator's
+existing test-data channels are structurally blind to this class, and it is worth
+stating why, because neither blindness is a bug in itself:
+
+* **the HTTP channel cannot see it.** These are Tiger `TGR` validation steps,
+  which Serenity records with no `restQuery`; `failure.http` is `null` on all
+  eight. There is no status, no request and no response body to reason from.
+* **the seed channel cannot see it either.** `provenance/seed/<Level>.json`
+  records a pre-run `$validate`, but that validator is *the SUT's own*. On round A
+  it reported `validationErrors: 0` across all 58 Stufe 3 and 73 Stufe 5 seeded
+  resources. A build that does not enforce a profile cannot flag data that
+  violates it — and whether it enforces the profile is precisely the condition
+  under test, so this channel's silence carries no information here.
+
+The question itself has one honest answer: a rejected value is the product's
+fault only if the product returned something other than what it was given. That
+is answerable from an artefact written *before* the run, so a sixth evidence
+source was added. `scripts/70-collect-report.sh` now archives the rendered
+instances of each level, `build/fhir/<Level>/`, into `provenance/corpus/<Level>/`;
+`gap_report.py` parses `location=…,message=Value is 'X' but must be 'Y'` out of
+the reference validator's message, resolves the dotted element path — including
+`[n]` subscripts — in every staged instance of that resource type at that level,
+and re-attributes to `TEST_DATA_DEFECT` only when a staged instance carries the
+rejected value **and** no staged resource of that type carries the required one.
+The entry prints both columns, so the join can be checked rather than trusted.
+
+Measured on round A's archived report with the matching pre-fix render staged as
+its corpus: 86 failing cases resolve to 32 findings, 30 charged to the system
+under test and 2 — eight cases, six in Stufe 5 from the `Patient` body and two in
+Stufe 3 from the `Coverage` body — charged to this project. Before the change the
+same bundle produced 33 findings, all 33 charged to the product. Negative
+control: round E, executed with defect 10's per-level resolution in place,
+carries no value-mismatch message at all, so there is nothing to re-attribute and
+nothing is.
+
+Two notes kept because each cost a wrong answer once:
+
+* the obvious pattern is wrong. `ValidationMessage\[[^]]*\]` stops at the `]`
+  inside `location=Patient.identifier[1].type.coding.code` and matches 2 of the 8
+  occurrences — the two bracket-free `Coverage` ones — which reads as a much
+  smaller problem than it is. The location character class must admit brackets.
+* one rejected element is reported once per profile that pins it. The `Patient`
+  case is reported twice, by `identifier-kvid-10` and by `ISiKPatient`: 12
+  message occurrences across 6 cases. The `(element, rejected, required)` triple
+  is therefore deduplicated before the join, so that the evidence table shows one
+  row of evidence rather than two, and so that the confirmation is not weighted
+  by how many profiles happen to pin the same element.
+
+A boundary, stated rather than hidden: `provenance/corpus/` is archived from this
+change forward. The rounds A to E bundles do not contain it, so re-deriving their
+gap reports re-attributes nothing unless the matching render is staged into them
+by hand — which is what the measurement above did, in a scratch copy, and not in
+the archived bundle. The official reports in those bundles are untouched either
+way.
+
+**13. The attribution index asserted a measurement it was in no position to
+make.** `WRITE_VALIDATION_GAP`'s `irisLocus` in `gap-analysis/build_index.py`
+stated a property of build 2026.2.0.221.0's write path. `index.json` is built by
+`make packages`, before any container is started and with no SUT reachable, and
+it is then joined against whichever round's results it is handed — so that
+sentence would be reproduced verbatim in the gap report of every later build,
+including a build in which it is false. This defect changed no figure in any
+round; it put an unsupported sentence in a document whose entire value is that
+every sentence in it is supported.
+
+The locus now names the subsystem and the setting a developer would open — the
+interactions strategy's Add/Update path and the endpoint's configured
+`ResourceValidation` setting — states that `$validate` is a separate code path
+whose result does not settle this one, and points at a two-request probe to be
+run against the round's own endpoint and recorded beside it. The probe is
+specified in `docs/en/07-reports.md`, together with the rule that makes it
+necessary: a measurement from an earlier build must not be reported as a property
+of a later one. The `why` text of the first `responseCodeRules` entry is narrowed
+the same way, to what the case establishes rather than what it suggests.
+
+Both of these are strings in the index, so they take effect when `index.json` is
+next rebuilt by `make packages`. A bundle whose index predates this change
+reproduces the old text, which is correct behaviour — the report quotes the index
+the round was joined against, and the index carries its own build timestamp in the
+report header for exactly this reason.
+
+### Seven further defects, found by auditing the corpus against the suite's own validator
+
+Defects 11 to 13 are in the documents this rig derives. These seven are one level
+deeper: six are in the test data itself, or in the attribution that exists to keep
+a defect in the test data out of the product's gap count, and the seventh is in
+how the gap report writes its own output.
+
+They were found by putting one question to the round of record: of the 79 failing
+cases it charged to the system under test, how many would have failed whatever the
+product did? The question is answerable because that round archived the rendered
+corpus it seeded (`provenance/corpus/`), so the bodies the suite's validator
+rejected can be read rather than reconstructed. The measured answer is **21 of
+79**, in six distinct fixture defects. None of them is in the official reports,
+which record what the suite observed and are correct; all of them are in the
+interpretation this rig put on those reports.
+
+All seven are fixed. The fixture fixes change what a round observes and therefore
+take effect only in a round executed after them; the attribution fixes re-derive
+from an archived bundle, and the measurements below were taken that way.
+
+**14. One of our fixtures was dragged into four other scenarios' search
+results.** Four Stufe 5 scenarios search `Encounter?location=Location/Location-Read-Example`
+and then validate the result Bundle against core FHIR. The suite's contract names
+that ward for the in-progress Encounter and for the Medikation Encounter, but our
+in-progress Encounter was placed only in room `Z001`, so the single Encounter the
+server could return at that ward was the **planned** one — the one resource in the
+corpus that carries `http://hl7.org/fhir/5.0/StructureDefinition/extension-Encounter.plannedStartDate`,
+which a FHIR R4 core validation rejects as `invalid Version '5.0'`. Every one of
+those searches therefore returned exactly the body that cannot pass the step that
+follows it. Reported as GAP-006 of the round of record, 3 cases, category
+`PROFILE_NONCONFORMANCE`, charged to the product.
+
+The fix is in the fixtures and is described element by element in
+[05-testdata.md](05-testdata.md): the in-progress Encounter now occupies the
+searched ward by literal reference and the room by identifier only, which keeps
+`location.location.reference` single-valued for the four `all(...)` assertions
+that walk it, and the planned Encounter was moved to `Location-Example`, which
+gained the `standortnummer` identifier its ward slice requires. What cannot be
+separated this way is the planned Encounter's patient, class and type: the suite
+requires all three to collide with other searches, and that residue is defect 18
+below.
+
+**15. Five authored bodies that the product accepted and the suite's own
+validator rejects.** The remaining 18 of the 21 cases are five independent
+content defects in bodies this project authors, each of which made a scenario
+fail for a reason no implementation could have avoided:
+
+| Rejected by the reference validator | Our body | Cases |
+|---|---|---:|
+| `Unknown code 'http://fhir.de/CodeSystem/KontaktDiagnoseProzedur#hauptdiagnose'`, and with it `Encounter.diagnosis.use.coding:Diagnosetyp: minimum required = 1` | the in-progress Encounter's `diagnosis.use` coding | 8 |
+| `Practitioner.name.text: minimum required = 1` and `Unknown code 'urn:oid:1.2.276.0.76.5.514#010'` | the Practitioner fixture carried neither the name text nor a resolvable qualification code | 3 |
+| `ValueSet.expansion.contains.version: minimum required = 1` | the ValueSet fixture's expansion, which this project authors in full, gave no `version` on any of its seven entries | 4 |
+| `MedicationStatement.effective[x]: minimum required = 1` | 2 of the 4 staged MedicationStatement bodies carried no `effective` element | 2 |
+| `Coding.version: minimum required = 1 (from … ISiKATCCoding)` | the MedicationAdministration body's ATC coding carried no `version` | 1 |
+
+Every one of these was accepted by the system under test's own `$validate`
+operation during stage 5 of seeding, over all 131 bodies, with 0 errors. That is
+the measurement that settles what the seed step's `$validate` is worth as an
+oracle for our own data: nothing. It is the artefact under test being asked
+whether the test data is correct.
+
+All five are corrected in `testdata/fhir/`, and the corrections are held in place
+by defect 19's preflight rather than by vigilance: the current corpus validates
+clean against the suite's own validator, 123 of 129 bodies checked and 0 invalid.
+
+**16. The attribution reached a verdict on one of the three ways the validator
+says no.** Defect 12 gave `gap_report.py` the ability to prove that a rejected
+*value* came from our corpus. It could not read the other two things the
+reference validator says: that a required element is **absent**, and that a
+**code cannot be resolved**. Both were left with the product, and the cardinality
+veto that defect 12 installed actively suppressed the absent-element case.
+
+`corpus_evidence()` now resolves all three shapes, and absence is decided by
+`absence_verdict()`, which is a three-way verdict rather than a predicate:
+
+* **ours** — no staged resource of that type carries the element, so no response
+  could have carried it whatever the product did;
+* **the product's** — *every* staged resource of that type carries it, so
+  whichever one the scenario read had the element and something between the
+  stored resource and the wire dropped it;
+* **indeterminate** — the location names a profile slice, or the level staged no
+  resource of that type, or only some staged resources carry it. A `TGR`
+  validation step records no request path, so the instance the scenario read
+  cannot be identified, and a corpus that supports neither verdict must say so.
+
+Conservative in both directions, and the blockers are printed rather than
+implied: nothing is attributed to this project unless some finding is positively
+ours, and nothing is attributed if any finding is positively the product's, if a
+cardinality phrase this module cannot parse is also present, or if a
+`but only found 0` clause escaped the pattern.
+
+Measured by re-deriving the round of record from its archived bundle: 79 failing
+cases resolve to 29 findings, 25 charged to the system under test and 4 — 15
+cases — to this project, against the published 30 findings with all 79 cases
+charged to the product. The four are the first three rows of defect 15's table;
+the remaining two rows are defect 17.
+
+**17. Two blind spots that remain, stated rather than closed.** Of defect 15's
+five fixture defects, two are invisible to the attribution even now, and both
+cases stay with the product in the re-derived report — which is the correct
+behaviour for an unexplained rejection, and also an over-charge of 3 cases that
+only a human reading of the corpus caught:
+
+* `MedicationStatement.effective[x]` was carried by 2 of 4 staged bodies, so the
+  verdict is `indeterminate`. The failing step is a `TGR` validation with no
+  request path; the instance the scenario read is not recoverable from the
+  official report.
+* `Coding.version` is rooted in a FHIR **datatype**, not a resource type: the
+  message attributes it to `ISiKATCCoding`, whose `type` is `Coding`. There is no
+  staged resource to join it to. The report now says exactly that, derived from
+  the attribution index's `profileElements[...]["type"]`, in place of the earlier
+  "the level staged no Coding" — which was true, and read as a statement about
+  this corpus rather than about the shape of the message. The verdict is
+  unchanged; what changed is that the sentence is now defensible.
+
+**18. Scenarios that no implementation can pass were charged to the product.**
+Three extensions from FHIR R5 are required by Stufe 5 feature files and defined
+only by an ISiK package for FHIR R4, so a body that satisfies the scenario
+requiring one cannot survive the core validation the same suite applies to a
+Bundle containing it. `build_index.py` now inventories them from the two
+artefacts that prove the contradiction — the feature line that requires the URL
+and the package that defines it — and `index.json` carries the result:
+
+| Extension URL | Required by | Defined by |
+|---|---|---|
+| `…/extension-Encounter.plannedStartDate` | `Stufe5/Basis/Encounter-Read-Planned.feature:52`, `Stufe5/ICU/VitalSignMinimal/Encounter-Read-Planned.feature:53` | `de.gematik.isik#5.1.3` |
+| `…/extension-Appointment.replaces` | `Stufe5/Terminplanung/Appointment-Read.feature:44` | `de.gematik.isik#5.1.3` |
+| `…/extension-Schedule.name` | `Stufe5/Terminplanung/Schedule-Read.feature:41` | `de.gematik.isik#5.1.3` |
+
+(Measured on the 3.0.9 index; the 2.7.0 corpus states the same requirement at
+`Stufe3/Basis/Encounter-Read-Planned.feature:48` and
+`Stufe5/Basis/Encounter-Read-Planned.feature:51`.)
+
+A failure the index can trace to such a URL is now categorised
+`UPSTREAM_SUITE_CONFLICT`, which joins `TEST_DATA_DEFECT` and
+`ENVIRONMENT_PREREQUISITE` in `NOT_SUT_CATEGORIES`: excluded from the headline
+count, reported in its own section of the gap report, with `irisLocus: none` and
+a stated feature of "not determinable — the scenario tests two incompatible
+requirements at once". The category is deliberately narrow. It is applied only
+when the index lists the URL with a requiring feature line **and** a defining
+package, so a scenario is never excused by this rig on the strength of its own
+failure message.
+
+**19. The preflight could not see the fabricated bodies.** Stage 4 of seeding
+validates the rendered corpus with the suite's own reference validator, which is
+the only oracle independent of both the product and this project's opinion of its
+own data — and it read each body's `meta.profile` to decide what to validate it
+against. A fabricated body carries no `meta.profile`, because stage 1 stamps that
+element only where the feature files state the profile; the scenario passes the
+profile URL to the validation step instead. So the bodies with the least
+provenance — the ones this project invented — were exactly the ones the check
+skipped.
+
+The profile is not in the body, but it is in the suite. The requirements corpus
+records, per fixture, which profiles the in-scope scenarios assert against it, so
+`validate_corpus.sh` now derives a `<Level>/<ResourceType>/<id> → profiles` map
+from it and `CorpusValidator` validates a profileless body against that. The key
+carries the level deliberately: the same fixture id is asserted against the v3
+profile under Stufe 3 and the v5 profile under Stufe 5, and validating a Stufe 3
+body against the Stufe 5 profile would manufacture a defect. A body that no
+in-scope scenario asserts any profile against is reported as
+`no-profile-asserted` rather than as a skip — the difference being that the first
+is a checked statement about the suite and the second was an assumption.
+
+Measured on the 3.0.9 corpus: 129 bodies, 6 carry no `meta.profile`
+(`Appointment-Replaced-Example`, `Device-Read-Example`, three ICU extension
+fixtures and `patient-id-not-in-context`), the map holds 101 fixtures, and it
+asserts no profile against any of the 6. So nothing was in fact left unchecked by
+the old skip in this corpus — which is now a measurement rather than a hope, and
+the number to watch when the next fabricated fixture is added.
+
+**20. Redirecting the gap report's Markdown left its JSON in the published
+bundle.** `gap_report.py --run-dir <bundle> --out-md /tmp/…` is how this report is
+re-derived against an archived round for a measurement — every figure in defects
+16 and 17 above was taken that way. `--out-json` defaulted to the run directory
+independently of `--out-md`, so a re-derivation wrote one half of a published
+pair: the bundle then held a Markdown document generated by one version of the
+code and a JSON document generated by another. It happened to the round of
+record while this section was being written; the file was restored byte-for-byte
+from the round's own slim archive, which is why both forms are archived.
+
+Redirecting one output now redirects both unless both are named. The published
+`gap-analysis.json` of the round of record was verified identical to the archived
+copy after restoration, and its reconciliation still reads 30 entries over 79
+cases — the figures the published Markdown states.
+
+### Three further defects, found by running the repaired rig
+
+**21. The report volume is shared between suite versions, and whichever image
+wrote it last owns its contents.** The suite image's entrypoint is
+
+```
+sh -c "rm -rf $REPORT_DIR/* ; mvn clean verify … || true ; mv -v $APP_HOME/target/*report.zip $REPORT_DIR/"
+```
+
+with `REPORT_DIR=/app/report` backed by the named volume `isik-tiger-report`, out
+of which `60-run-tests.sh` copies the archives. Both halves of that line run as
+the image's own user, and the two releases this project runs do not share one:
+`2.7.0` runs as root, `3.0.9` as an unprivileged user. A volume last written under
+2.7.0 therefore holds root-owned files in a directory a 3.0.9 run can neither
+unlink nor write to, so the clear at the start fails and the `mv` at the end
+fails — each printing one line into a container log of some tens of thousands.
+The run then completes normally and **the volume still holds the previous round's
+archives**, which this rig copies out and certifies.
+
+Every downstream check passed, because a stale report is a structurally valid
+report: the zips open, their records parse, the hashes recorded in `run.json`
+match the files on disk, and the reconciliation balances. The round carried
+another round's result under its own run id, its own `run.json`, and its own
+provenance.
+
+It happened to `run-20261111T105824Z` (3.0.9, Stufe 5), run directly after a
+2.7.0 round. Measured: the archived zips were stamped `2026-11-11T08:45:33Z`
+against a run that started `10:58:24Z`, all 628 outcome records in them were
+timestamped `2026-11-11T08`, and the container log opens with
+`rm: can't remove '/app/report/debug-report.zip': Permission denied`. The
+archives Maven actually wrote were still in `/app/target` inside the exited
+container, stamped `11:37:01Z`, and were recovered intact — 917 outcome records,
+`test-report.zip` 2,106,638 bytes, `debug-report.zip` 154,939,065 bytes. The
+round's `run.json` records the recovery, the superseded hashes and the superseded
+record count, so the substitution is on the face of the bundle.
+
+Two things were wrong and both are fixed. The volume is now emptied by a
+throwaway root container before each level — making its prior ownership
+irrelevant — and left group- and world-writable so the next run's user can write
+into it whichever image that run uses. And the archive is now checked against the
+clock: Maven writes the archives at the very end of a level, so a genuine archive
+is always newer than that level's start and a carried-over one is always older by
+at least a level. Section 4a of `60-run-tests.sh` asserts exactly that, and where
+it fires it first tries to replace the stale copy from `/app/target` in the
+exited container rather than discard a completed forty-minute run. It fails the
+level only if that recovery does not produce a fresh archive, and it deletes
+nothing.
+
+The remedy is the clear; the assertion is the proof. Neither alone would be
+enough: the clear can be defeated by any future image that runs as a third user,
+and the assertion cannot distinguish a stale archive from no archive at all
+without it.
+
+**Every published round was then audited against the same failure**, by comparing
+each level's archive mtime and the record timestamps inside it with the run window
+in its own `run.json`. Rounds A, B3, C, D, E and F are all internally consistent:
+each archive falls inside its own run's window. No published figure is affected by
+this defect, and the only round that was is the one named above, which is
+republished from the recovered archives.
+
+**22. The gap report's closing summary kept its own copy of a list the generator
+owns.** `80-gap-report.sh` prints a one-line work summary after the generator
+runs, and to say how many findings are the product's it needed to know which
+categories are not. It held that list literally — and held two of the three
+entries, missing `UPSTREAM_SUITE_CONFLICT`. On the round of record it therefore
+printed 21 findings against the product where the report said 20.
+
+No document was affected: the generator writes every number in
+`GAP-ANALYSIS.md` and `gap-analysis.json` from `NOT_SUT_CATEGORIES` itself, and
+the shell line is console output only. It was also caught by the script's own
+cross-check against `reconciliation.irisGapEntries`, which printed a warning
+naming both numbers and saying which to believe — which is how it was found.
+That is the check working as designed, but a check that fires on every run is a
+defect, not a safeguard.
+
+The list is a property of the generator, so the generator now states it:
+`gap_report.py` publishes it as `reconciliation.notSutCategories` and the shell
+reads it from the document it has just written. The cross-check stays, and now
+means something stronger — both numbers are derived from one list in one file, so
+a disagreement means the document is internally inconsistent rather than that the
+wrapper is out of date.
+
+The same summary also reported findings and cases in one parenthetical, in the
+form `18 distinct finding(s) (16 SUT, 2 not the SUT's: 0 test-data, 0
+suite-conflict and 7 unmet-precondition case(s))`, where the three trailing
+numbers are cases and read as though they decomposed the two before them. Findings
+are now counted on one line and cases on the next, each in its own unit.
+
+**23. A second Practitioner fixture carried the same two content defects as the
+first.** `testdata/fhir/v3/Stufe5/Practitioner-ICUextPractitionerWalterIntensiv834.json`
+was missing `Practitioner.name.text`, which `ti-practitioner|1.1.1` requires
+(`min: 1`), and carried qualification code `010` in
+`urn:oid:1.2.276.0.76.5.514`, which the validation module cannot resolve. Both are
+the defects corrected in `Practitioner-Practitioner-Read-Example.json` under
+defect 15 above, and the correction here is the same: the `text` element is
+populated and the code is `011001` (`FA Allgemeinmedizin`), which the same module
+demonstrably resolves.
+
+It was the extended preflight of defect 19 that found it — the ICU extension
+fixtures are three of the six bodies that carry no `meta.profile`, so the old
+`meta.profile`-driven check had never read this one at all. That is the second
+fixture of the same family to be corrected, which is the argument for the
+preflight rather than for a case-by-case fix.
+
+**It changed no verdict.** The 3.0.9 Stufe 5 round reported zero
+`TEST_DATA_DEFECT` cases; the ICU module's two failing cases are a
+CapabilityStatement search-parameter declaration (`GAP-002`) and a search-result
+assertion (`GAP-008`); and no finding in the round mentions
+`Practitioner.name.text`, a qualification code, or this fixture's id. The fixture
+was latent — invalid as fabricated, read by no assertion that could see the
+difference — which is why the round was not re-run for it.
+
+### Two further defects, found by taking the repaired rig back to 2.7.0
+
+Both were found by the first 2.7.0 round run after the 3.0.9 work, and neither
+could have been found by a 3.x round: release 3.0.0 removed ISiK Stufe 3 from the
+suite, so a 3.x round exercises exactly half of what these two concern.
+
+**24. The renderer could not read this project's own test-data overlay.** A body
+authored once for both levels resolves `{{data.<key>}}` against the contract, and
+`load_contract()` builds that contract out of `vendor/requirements.json` — out of
+the keys the suite's *feature files* reference. That is the right and deliberately
+sole source for every key the suite defines, but it cannot see a key the suite
+references nowhere, and this project's `zz-upstream-key-defects*.yaml` overlays
+define precisely those: keys an upstream feature file references but upstream's
+own test data leaves undefined, and values a level's contract omits although its
+profiles require the element.
+
+The suite reads those overlays — `30-render-config.sh` lists them last in
+`additionalConfigurationFiles`, so they can only add — and resolves
+`${data.<key>}` in a Gherkin step from them. The renderer could not, so the same
+placeholder in the same file was a value at one level and a hard failure at the
+other: `{{data.atc-code-version}}` resolved under Stufe 5, whose own
+`medikation.yaml` happens to define the key, and did not resolve under Stufe 3,
+where only the overlay does. Seven bodies failed to render and the round could
+not start. The overlay entry's own stated purpose is that without it the shared
+body has to carry a literal and the two levels silently drift — so the renderer's
+inability to read it was a hole in that mechanism rather than a missing feature.
+
+`load_overlay()` now reads the overlays as the *rendered configuration for this
+round* names them, rather than from a list kept in the renderer: the
+configuration is the authoritative statement of what the suite will load and
+under which `baseKey`, and reading it is what makes the two contracts the same
+set by construction. Only entries whose filename marks them as this project's are
+read, and the result is merged *under* `requirements.json`, so every key the
+suite documents still comes from the suite. Measured on 2.7.0: exactly one key is
+contributed, `data.atc-code-version` at Stufe 3, and none at Stufe 5.
+
+**25. A definition the validator could not resolve was charged to this project's
+test data.** The ISiK packages define several extensions under canonicals of the
+form `http://hl7.org/fhir/5.0/StructureDefinition/extension-Encounter.plannedStartDate`,
+and the ISiK Encounter profiles slice `Encounter.extension` on them. The
+validator does not resolve such a canonical out of the package that defines it —
+it reads the `hl7.org/fhir/<version>/` authority as a cross-version reference —
+and so reports, per slice:
+
+```
+Slicing cannot be evaluated: Problem with use of resolve() - profile
+[CanonicalType[http://hl7.org/fhir/5.0/StructureDefinition/extension-Encounter.plannedStartDate]]
+on Encounter.extension:plannedStartDate could not be resolved (@char 1)
+```
+
+Stage 4 counted that as an error and failed the seed, naming
+`Stufe3/Encounter-Encounter-Read-Appointment-Example.json` as a body that does
+not satisfy the profile it claims. It does satisfy it. The body carries one
+extension, `Aufnahmegrund`, and no planned date at all; the message fires on any
+body carrying any extension validated against such a profile, and it is the
+validator stating that *it* could not resolve a definition the *profile* points
+at. Both modules that could judge this body ship the definition —
+`StructureDefinition-PlannedStartDate.json`, inside
+`de.gematik.isik-basismodul-3.1.1.tgz` — so it is present and still not
+resolvable, which is what makes this the packages' and the validator's
+interaction rather than anyone's content. No body this project could author would
+remove the message.
+
+Such a message is now counted and reported separately, under `unresolvable` in
+`corpus-validation.json` and as a `NOTE` line rather than an `INVALID` line, and
+it does not make a body invalid. It is reported rather than filtered, because the
+count is the thing to watch if a future package set does resolve these canonicals
+— at that point they become real validation results again. Measured on the 2.7.0
+corpus: 131 bodies, 0 invalid, 1 body with 2 unresolvable slice definitions.
+
+The same root cause already had a run-time counterpart. `suite_conflict_verdict()`
+recognised the instance-side form of it — `Extension url '…' is not valid (invalid
+Version '5.0')`, which is the core R4 validator refusing the extension a body
+carries — and classified a scenario failing on it as `UPSTREAM_SUITE_CONFLICT` on
+positive evidence from the index: the canonical has to be one the suite's own
+feature files assert *and* one a package this round loaded defines. It now
+recognises the profile-side form on the same evidence. The two thresholds differ
+on purpose: at run time the question is whether to charge the product, and a
+message is not evidence enough for that; in stage 4 the question is only whether
+to charge this project's data, and a message that makes no claim about the body
+cannot.
+
+### One further defect, found by asking who could re-derive a published figure
+
+**26. The one statement a release decision turns on was produced outside the
+rig.** Every figure in this project's documents is required to trace to an
+artefact (`07-reports.md`), and the generators that produce them are part of the
+rig, checked by `make check`, invoked by a `make` target and documented under
+`docs/`. For the figures *within* a round that held: the results analysis cites
+the official report case by case, and the gap analysis joins that analysis. The
+comparison *between* two rounds did not. "Nothing that passed before fails now"
+is not visible in either round's archives — it is a join over both — and the
+generator that made that join lived beside the round's documents, as
+`compare-rounds.py` in the round folder, called by hand.
+
+It was a careful program, not a scratch one, and its figures were right. The
+defect is where it lived. A tool outside `scripts/` is in no `make` target, is
+not reached by the repository's self-check, is absent from `docs/`, is not
+installed on a lab host by `make provision`, and — because the round folders are
+untracked evidence rather than source — would not be found by whoever runs the
+next round. The number that decides whether a release ships was the only number
+in this project whose generator a reader could not get to from the repository.
+
+`scripts/lib/compare_rounds.py` is that generator, moved into the rig and
+reached by `make compare BASELINE=<run-id> CANDIDATE=<run-id>`. It reproduces
+all nine published comparisons from the archived bundles: the counts, the
+per-level totals, and the regression and newly-passing entries one for one.
+Nothing published was wrong, which is why this entry is in the rig's defect list
+and not in any round's.
+
+Three properties were carried over from the round-folder script, because each
+exists to stop a wrong number rather than to tidy the code:
+
+* **Scenario Outline rows are matched across suite versions by their parameter
+  bindings, not by their index.** Removing one executed row shifts every index
+  below it, and an index join then compares each shifted row against a different
+  test. That is not hypothetical: between 2.7.0 and 3.0.9 the
+  `Observation-Search` outline moved its `_tag` and `subject` rows into an
+  `@Optional` block, and an index join fabricated a regression at
+  `combo-code-value-quantity` with a matching fix at `component-code` out of one
+  unchanged failure. This was re-measured while moving the tool: joining 2.7.0
+  against 3.0.9 by index reports 2 regressions and 2 fixes where the binding
+  join reports 1 and 1.
+* **An Examples row whose bindings the analysis does not record is fatal under
+  that key, never silently joined by position.** A positional fallback for a
+  subset of rows is worse than one for all rows, because the failure would be
+  invisible.
+* **A repeated join key is fatal.** If a key does not identify a case uniquely
+  within one round, the join would compare one round's case against an arbitrary
+  one of the other's.
+
+Two properties are new, and the second is the one presentational difference from
+the hand-made files:
+
+* The output is written into the candidate's bundle and recorded in its
+  `analysis/MANIFEST.txt`, so archiving the round archives the comparison with
+  it, and an inspector verifying the bundle does not find an unlisted file.
+* **Only levels both rounds ran are compared**, and a `levels` field records
+  which. A Stufe-5-only round is comparable with a two-level round, on Stufe 5.
+  Where that case arose, the hand-made file reported the baseline's full totals
+  and listed its 506 Stufe 3 cases in `onlyInBaseline`; counting a difference in
+  scope as 506 absent cases reads like a mass regression. Every count quoted in
+  a document is identical under both conventions.
+
+The cost of the weaker cross-version key is stated rather than hidden, as it was
+before: a scenario the newer suite renamed, or an Examples row whose parameters
+it changed, appears in `onlyInBaseline` and `onlyInCandidate` instead of in the
+comparison, and those two lists are how a reader sees how many cases a
+cross-version comparison does not cover.
+
+### Two further defects, found by asking which criteria the gate never sees
+
+**27. The corpus gate read only one of the suite's two search shapes.** A search
+scenario that asserts `entry.resource.count() > 0` is a requirement on the seed
+data, and `search_reference_check.py` exists to hold the corpus to those
+requirements before a container starts. It mined them from the query string of a
+`Get FHIR resource at "…?a=1&b=2"` step. The suite has a second shape — `Post
+FHIR search request to "…/_search" … with parameters:`, which carries the
+criteria in a Gherkin table — and the pattern that recognises a search of a
+collection cannot match it, because the type is followed by `/_search"` rather
+than by `?` or `"`. 41 steps in the pinned 2.7.0 tree take that shape. Not one
+of their criteria was ever checked.
+
+Nine of the 41 search by `_tag`, and eight of those nine are `@Optional` and so
+outside the certification selection. One is not:
+`Stufe5/Basis/Observation-Statuses-Search.feature:63`
+searches `Observation` by `_tag` and requires the result to be non-empty. No
+seeded `Observation` carried any `meta.tag` — only an `Appointment` and a
+`DocumentReference` did — so the system under test answered with an empty bundle,
+which is the correct answer to that query against that corpus, and the round
+recorded a failure against the product. It did so in round G (1 case, GAP-012)
+and in round H (2 cases, because 2.7.0 also has
+`Stufe5/Vitalparameter/Observation-Search.feature:49` mandatory where 3.0.9 has
+it `@Optional`). Both rounds were re-run after the remedy; neither is published.
+
+Two things had to change for the gate to see it. The step shape is now mined by
+`RE_SEARCH_POST` and `table_query()`, which converts the table into the query
+string the suite will send. And `_tag` had to become resolvable at all: the
+parameters every resource has are defined once with base `Resource` and an
+expression rooted there, so the per-type lookup `(Observation, _tag)` could never
+hit, and the criterion was reported as "not modelled" — counted honestly, but not
+checked. `token_path()` now falls back to the `Resource`-based definition.
+
+The remedy in the corpus is one `meta.tag`, on
+`testdata/fhir/Stufe5/Observation-Arterial-Blood-Pressure-Read-Example.json`;
+that fixture and no other because 2.7.0's mandatory site searches `_tag`
+together with `_id` and then requires that id in the bundle. With it, Stufe 5
+reports 47 of 47 criteria satisfied.
+
+**28. A Gherkin table cell was split on the pipe it was escaping.** The parser
+split a table row on every `|`. In Gherkin a cell carries a literal pipe as
+`\|`, and the suite writes exactly that in all ten of its table-borne token
+criteria — `| ${data.tag-system}\|${data.tag-value} | ${data.search-count} |` is
+two cells, not three.
+
+This defect was latent for as long as defect 27 existed: nothing read those
+tables, so nothing was wrong with the way they were read. Fixing 27 made it live
+in the same hour, and the first run of the repaired gate is what exposed it. It
+reported three unsatisfied criteria instead of one. Two were its own: a `_tag`
+whose value stopped at `common-meta-tag-de\` with the code displaced into the
+next column, and a `Patient?identifier=http://fhir.de/sid/gkv/kvid-10\` reported
+as unsatisfied while the check's own evidence line printed the seeded `Patient`
+carrying that very system. A check that prints what it found alongside what it
+wanted is why that took one reading rather than one round.
+
+`_split_row()` now honours `\|`, `\n` and `\\`, and keeps any other escape
+verbatim — `| 4\d\d |`, a status-code regex in an Examples column, must not lose
+its backslashes. Nothing else moved: rebuilding `vendor/requirements.json` across
+both levels gives the same 506 and 895 executed cases, the same 432 and 783
+asserting cases, and not one of its 220 features with a changed count.
+
+### One further defect, found by asking what a crash proves
+
+**29. A step that crashed was counted as a product failure.** The gap report
+classifies a failing case by what the failure says. One failure in round G says
+nothing at all: `java.lang.NullPointerException`, `Cannot invoke
+"String.replaceAll(String, String)" because the return value of
+"org.hl7.fhir.r4.utils.FHIRPathEngine.convertToString(org.hl7.fhir.r4.model.Base)"
+is null`. That is the test suite's own expression engine failing to evaluate,
+not a comparison of an expectation against a response, so the case establishes
+neither a pass nor a failure of the system under test. It was nonetheless
+charged to the product, which claimed more than the record carries.
+
+What the step asserts is that the bundle contains a given `Medication`, and the
+response did contain it. The response also contained a second entry — an
+error-severity `OperationOutcome`, correctly marked `search.mode = outcome` and
+carrying no `fullUrl`, which is how FHIR says a server reports a problem with a
+search it did execute. Three sibling scenarios in the same feature run the
+identical step against bundles with no such entry
+(`Stufe5/Medikation/Medication-Search.feature`, by `ingredient-code`, by
+`lot-number`, by `status`); all three pass. The one scenario whose response
+carries the outcome entry is the one that crashed. The step cannot read a
+conformant searchset.
+
+`suite_crash_verdict()` now settles such a case ahead of every other rule, on
+two signals that have to agree: the error type is a `NullPointerException`, and
+the message names the method whose return value was null as one belonging to the
+suite or to a library it evaluates with (`org.hl7.fhir`, `de.gematik`,
+`net.serenitybdd`, `net.thucydides`, `io.cucumber`). An exception that names the
+*response* as the thing it could not handle — a parse failure on an empty body,
+which is defect GAP-015's signature and a real statement about the product — is
+left to the ordinary classification. The category it lands in,
+`UPSTREAM_SUITE_CONFLICT`, is excluded from the gap count; its label is now
+"Test suite defect" rather than "Test suite contradicts itself", which described
+only the one instance known when it was written.
+
+The reason text points the reader at the exchange anyway, because this one holds
+a product finding that the crash obscured: the search was
+`Medication?ingredient.code=V03AB23&_id=…`, the answer was HTTP 200 with the
+requested resource, and the self link records the executed search as
+`Medication?_count=100&_id=…` — the chained criterion was not honoured, and the
+`OperationOutcome` says a type modifier is required because `ingredient` can
+reference either `Substance` or `Medication`. That behaviour belongs in the
+report; this case's failure does not. On round G the rule fires exactly once: 42
+failing cases, 41 of them the product's.
 
 ### In the ISiK packages rather than in the suite: same version, two definitions
 

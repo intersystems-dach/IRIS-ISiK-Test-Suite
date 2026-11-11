@@ -234,6 +234,46 @@ for stale in "${PROJECT}-testsuite-stufe3" "${PROJECT}-testsuite-stufe5" \
   fi
 done
 
+# The report volume is emptied here, as root, instead of relying on the image
+# entrypoint's `rm -rf $REPORT_DIR/*`.
+#
+# That rm runs as the image's own user, and the two suite versions this project
+# runs do not share one: the 2.7.0 image runs as root, the 3.0.9 image as an
+# unprivileged user. A volume last written under 2.7.0 therefore holds
+# root-owned files in a directory an unprivileged 3.0.9 run can neither unlink
+# nor write, so BOTH halves of the entrypoint fail - the clear at the start and
+# the `mv` of the new archives at the end - and each failure prints one line
+# into a log tens of thousands of lines long. The run then completes normally
+# and leaves the PREVIOUS run's archives in place, which section 4 copies out
+# and section 4b certifies as intact, because a stale report is a valid report.
+# That happened on 2026-11-11 to run-20261111T105824Z, whose archive carried the
+# Stufe 5 report of the 2.7.0 round that preceded it.
+#
+# Clearing as root makes the volume's prior ownership irrelevant, and the
+# directory is left group- and world-writable so the next run's user can write
+# its archives into it whichever image that run uses. The freshness assertion in
+# section 4a is the check that this worked; this is only the remedy.
+step "Emptying the report volume"
+if docker run --rm --user 0:0 -v "${VOLUME}:/report" \
+     --entrypoint sh "${TESTSUITE_IMAGE}:${TESTSUITE_VERSION}" \
+     -c 'rm -rf /report/* /report/.[!.]* /report/..?* 2>/dev/null; chmod 0777 /report; ls -A /report' \
+     >/tmp/.isik-report-volume.$$ 2>&1; then
+  if [[ -s /tmp/.isik-report-volume.$$ ]]; then
+    warn "the report volume ${VOLUME} is not empty after clearing it:
+  $(tr '\n' ' ' </tmp/.isik-report-volume.$$)
+  The run continues, and the freshness check after it will fail if these files
+  are what ends up being archived."
+  else
+    log "report volume ${VOLUME} is empty"
+  fi
+else
+  warn "could not empty the report volume ${VOLUME}:
+  $(tr '\n' ' ' </tmp/.isik-report-volume.$$)
+  The run continues; the freshness check after it is what decides whether the
+  archive belongs to this run."
+fi
+rm -f /tmp/.isik-report-volume.$$
+
 # -----------------------------------------------------------------------------
 # 3. Run
 # -----------------------------------------------------------------------------
@@ -382,6 +422,68 @@ else
   else
     warn "could not create a helper container to read ${VOLUME}"
   fi
+fi
+
+# -----------------------------------------------------------------------------
+# 4a. Does the archive belong to THIS run?
+# -----------------------------------------------------------------------------
+# An archive copied out of the report volume is only evidence of this run if this
+# run wrote it. The entrypoint's `mv` into $REPORT_DIR can fail - see section 2
+# for the ownership reason - and when it does, the volume still holds the
+# previous run's archives: same names, same shape, intact, and a full level older.
+# Everything downstream then reads a report of a different round against this
+# round's seeded corpus, which is worse than having no report at all, because the
+# mismatch surfaces as conformance findings against the system under test.
+#
+# The test is the archive's modification time against the moment this run
+# started. Maven writes the archives in its post-integration-test phase, at the
+# very end of the run, so a genuine archive is always newer than the start; a
+# carried-over one is always older, by at least the duration of a level.
+#
+# Where the entrypoint's `mv` failed, the archives Maven wrote are still in
+# /app/target inside the exited container ($APP_HOME in the image), so the stale copy is replaced
+# from there rather than throwing a completed 40-minute run away.
+stale_zips=()
+shopt -s nullglob
+for z in "${OFFICIAL_DIR}"/*.zip; do
+  if [[ "$(stat -c %Y "$z")" -lt "$started_epoch" ]]; then
+    stale_zips+=("$(basename "$z")")
+  fi
+done
+shopt -u nullglob
+
+if (( ${#stale_zips[@]} > 0 )); then
+  warn "the report volume held an archive older than this run: ${stale_zips[*]}
+  The suite's entrypoint could not move this run's archives into ${VOLUME}.
+  Recovering them from ${CONTAINER}:/app/target instead."
+  if docker cp "${CONTAINER}:/app/target" - 2>/dev/null \
+       | tar -x -C "$OFFICIAL_DIR" --strip-components=1 --wildcards \
+             'target/*report*.zip' 2>/dev/null; then
+    log "recovered the archives Maven wrote from ${CONTAINER}"
+  else
+    warn "could not read /app/target from ${CONTAINER}"
+  fi
+  # Re-check. A recovery that did not replace every stale archive leaves a
+  # mixture of two rounds in one directory, which must stop the round.
+  still=()
+  shopt -s nullglob
+  for z in "${OFFICIAL_DIR}"/*.zip; do
+    if [[ "$(stat -c %Y "$z")" -lt "$started_epoch" ]]; then
+      still+=("$(basename "$z")")
+    fi
+  done
+  shopt -u nullglob
+  if (( ${#still[@]} > 0 )); then
+    die "the archive in ${ARCHIVE_DIR#$REPO_ROOT/}/official does not belong to this run: ${still[*]}
+  These files predate ${STARTED_AT}, so they are a previous round's report, and
+  recovery from the container did not replace them. Nothing has been deleted;
+  the scenarios ran and the container log in run.log is this run's. To salvage
+  the run, copy \$APP_HOME/target/*report.zip out of ${CONTAINER} by hand, then
+  re-run 'make report RUN_ID=$(run_id)'. Do not report on what is there now."
+  fi
+  ok "every archive is newer than this run's start (recovered)"
+else
+  ok "every archive is newer than this run's start"
 fi
 
 # Classify what arrived. The archive names come from the upstream Maven assembly

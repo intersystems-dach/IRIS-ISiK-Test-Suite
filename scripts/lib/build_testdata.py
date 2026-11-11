@@ -394,6 +394,73 @@ def load_contract(level: str, req: dict) -> dict[str, str]:
     return out
 
 
+OVERLAY_GLOB = "zz-upstream-key-defects"
+
+
+def load_overlay(level: str, config_dir: Path, staged: Path) -> dict[str, str]:
+    """Qualified `<ns>.<key>` -> value, from this project's own overlay files.
+
+    load_contract() above reads the contract out of `requirements.json`, i.e. out
+    of the keys the suite's *feature files* reference. That is the right source
+    for every key the suite defines, and it is deliberately the only source for
+    them - but it cannot see a key the suite references nowhere.
+
+    This project's `zz-upstream-key-defects*.yaml` overlays define exactly those:
+    keys an upstream feature file references but upstream's own test data leaves
+    undefined, and values a level's contract omits although its profiles require
+    the element. The suite loads them - `30-render-config.sh` lists them last in
+    `additionalConfigurationFiles`, so they can only add - and it resolves
+    `${data.<key>}` in a Gherkin step from them.
+
+    A fabricated body could not. `{{data.atc-code-version}}` in a body shared by
+    both levels resolved under Stufe 5, whose own `medikation.yaml` happens to
+    define the key, and did not resolve under Stufe 3, where only the overlay
+    does - so the same placeholder in the same file was a value at one level and
+    an unresolved-placeholder failure at the other. The overlay mechanism's own
+    documented purpose is that the alternative is a literal in the body and a
+    silent drift between levels, which makes the renderer's inability to read it
+    a hole in that mechanism rather than a missing feature.
+
+    The files are read as the *rendered configuration for this round* names them,
+    not from a list kept here: the configuration is the authoritative statement of
+    what the suite will load and under which `baseKey`, and reading it is what
+    makes the renderer's contract and the suite's contract the same set by
+    construction. Only entries whose filename matches OVERLAY_GLOB are read -
+    those are this project's, and the configuration marks each `[DEVIATION]`.
+    Every upstream file stays out of this, so every key `requirements.json`
+    documents still comes from `requirements.json`, which the caller enforces by
+    merging this result *under* the contract.
+
+    Returns an empty mapping when the configuration has not been rendered yet, so
+    that `--check-only` on a clean tree still works; a placeholder that needed an
+    overlay key then reports unresolved, exactly as before.
+    """
+    cfg_path = config_dir / f"tiger-isik-{level.lower()}.yaml"
+    if not cfg_path.is_file():
+        return {}
+    try:
+        import yaml
+    except ImportError:                                  # pragma: no cover
+        return {}
+    cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+    out: dict[str, str] = {}
+    for entry in cfg.get("additionalConfigurationFiles") or []:
+        name = entry.get("filename") or ""
+        base = entry.get("baseKey")
+        if not base or OVERLAY_GLOB not in Path(name).name:
+            continue
+        # The configuration names the file as the container sees it
+        # (`testdata/<Level>/<file>`); on the host the staged copy is the same
+        # path under run/testdata/, which is the copy the suite is given.
+        src = staged / Path(name).relative_to("testdata")
+        if not src.is_file():
+            continue
+        for key, value in (yaml.safe_load(src.read_text(encoding="utf-8")) or {}).items():
+            if value not in (None, ""):
+                out[f"{base}.{key}"] = str(value)
+    return out
+
+
 LEGACY_NS = "data"
 
 
@@ -544,6 +611,12 @@ def main() -> int:
     ap.add_argument("--package-plan", type=Path,
                     default=REPO / "vendor" / "package-plan.json",
                     help="which ISiK packages back each endpoint")
+    ap.add_argument("--suite-config", type=Path, default=REPO / "run" / "tiger",
+                    help="the rendered Tiger configuration directory, read for "
+                         "the test-data overlay files it declares")
+    ap.add_argument("--staged-testdata", type=Path,
+                    default=REPO / "run" / "testdata",
+                    help="the staged test-data contract tree the suite is given")
     ap.add_argument("--check-only", action="store_true",
                     help="report what would be built, write nothing")
     ap.add_argument("--allow-incomplete", action="store_true",
@@ -581,6 +654,15 @@ def main() -> int:
     rc = 0
     for level in levels:
         contract = load_contract(level, req)
+        # Merged *under* the contract, so requirements.json wins every key it
+        # documents and the overlay can only add - the same precedence the Tiger
+        # configuration gives these files by listing them last.
+        overlay = load_overlay(level, args.suite_config, args.staged_testdata)
+        added = {k: v for k, v in overlay.items() if k not in contract}
+        if added:
+            contract = {**added, **contract}
+            print(f"  {level}: {len(added)} key(s) from this project's test-data "
+                  f"overlay: {', '.join(sorted(added))}")
         legacy = legacy_index(contract)
         pkgs = level_packages(args.package_plan, level)
         profiles = profile_index(args.packages, pkgs)

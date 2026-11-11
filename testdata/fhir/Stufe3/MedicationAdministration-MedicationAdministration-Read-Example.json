@@ -53,5 +53,10 @@
       "system": "http://unitsofmeasure.org",
       "code": "1"
     }
-  }
+  },
+  "reasonReference": [
+    {
+      "reference": "Condition/{{data.medication-condition-id}}"
+    }
+  ]
 }

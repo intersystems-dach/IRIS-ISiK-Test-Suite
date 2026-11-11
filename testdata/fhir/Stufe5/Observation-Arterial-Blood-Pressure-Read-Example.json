@@ -1,5 +1,14 @@
 {
   "resourceType": "Observation",
+  "meta": {
+    "tag": [
+      {
+        "system": "{{data.tag-system}}",
+        "code": "{{data.tag-value}}",
+        "display": "Externally created data"
+      }
+    ]
+  },
   "status": "final",
   "category": [
     {

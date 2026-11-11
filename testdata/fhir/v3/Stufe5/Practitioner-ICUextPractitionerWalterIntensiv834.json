@@ -89,6 +89,7 @@
       "given": [
         "Walter"
       ],
+      "text": "Walter Musterarzt",
       "use": "official"
     }
   ],
@@ -97,7 +98,7 @@
       "code": {
         "coding": [
           {
-            "code": "010",
+            "code": "011001",
             "display": "FA Allgemeinmedizin",
             "system": "urn:oid:1.2.276.0.76.5.514"
           }

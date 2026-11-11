@@ -26,6 +26,13 @@
   "dosageInstruction": [
     {
       "text": "1 Brausetablette morgens",
+      "timing": {
+        "repeat": {
+          "when": [
+            "MORN"
+          ]
+        }
+      },
       "doseAndRate": [
         {
           "doseQuantity": {

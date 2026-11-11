@@ -10,6 +10,7 @@
     "coding": [
       {
         "system": "http://fhir.de/CodeSystem/bfarm/atc",
+        "version": "{{data.atc-code-version}}",
         "code": "V03AB23",
         "display": "Acetylcystein"
       }

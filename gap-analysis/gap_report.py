@@ -50,7 +50,9 @@ be inflated by anything the product did not do:
 
   * a failure caused by this project's own seeded data, proven from
     `provenance/seed/<Level>.json` (the pre-run `$validate` and read-back
-    records);
+    records) or from `provenance/corpus/<Level>/` (the value the reference
+    validator rejected is the value this project staged, and no staged resource
+    of that type carries the one the profile requires);
   * a failure whose scenario states a precondition this deployment did not meet,
     proven from the request the official report records (see PREREQUISITE_RULES
     in build_index.py). Test suite release 3.0.0 added a module - Connect - whose
@@ -103,12 +105,18 @@ from build_index import (CATEGORIES, PREREQUISITE_RULES,               # noqa: E
 MAX_BODY = 700          # characters of a response body quoted in an entry
 MAX_SCENARIOS = 12      # affected scenarios listed before "... and N more"
 
-# The two categories that are not the product's: a defect in this project's own
-# test data, and a case whose stated precondition this deployment did not meet.
-# Both are reported in full, in their own appendix, and both are kept out of the
-# gap count - a count that mixes them in overstates the work and, worse, attributes
-# to the product something it did not do.
-NOT_SUT_CATEGORIES = ("TEST_DATA_DEFECT", "ENVIRONMENT_PREREQUISITE")
+# The three categories that are not the product's: a defect in this project's own
+# test data, a case whose stated precondition this deployment did not meet, and a
+# case the pinned test suite itself contradicts. All are reported in full, in their
+# own appendix, and all are kept out of the gap count - a count that mixes them in
+# overstates the work and, worse, attributes to the product something it did not do.
+#
+# This tuple is published into gap-analysis.json as
+# `reconciliation.notSutCategories` so that no other tool has to keep its own copy.
+# 80-gap-report.sh used to, and on 2026-11-11 its copy was one category short, so
+# its closing line charged the product with 21 findings where the report said 20.
+NOT_SUT_CATEGORIES = ("TEST_DATA_DEFECT", "ENVIRONMENT_PREREQUISITE",
+                      "UPSTREAM_SUITE_CONFLICT")
 
 
 # =============================================================================
@@ -818,6 +826,32 @@ def attribute(index: dict, category: str, cls: dict, sub: dict | None,
         out["expected"] = "the resource the scenario needs exists and is conformant"
         return out
 
+    # --- suite self-contradiction, or a suite crash --------------------------
+    if category == "UPSTREAM_SUITE_CONFLICT":
+        # Two ways a case can fail on the suite rather than on the response, and
+        # they need different words: one scenario asks for incompatible things,
+        # the other asks for something reasonable and then crashes on the answer.
+        if suite_crash_verdict(failure):
+            out["mechanism"] = "the test suite's own step implementation"
+            out["feature"] = ("not determinable — the step raised an exception "
+                              "before it compared anything")
+            out["expected"] = ("a verdict on the response; the step produced an "
+                               "exception instead, so the case states neither a "
+                               "pass nor a failure of the SUT")
+            out["irisLocus"] = (
+                "none, and not determinable from this case: the step never "
+                "evaluated the response. The exchange itself may still be worth "
+                "reading — a response the suite crashed on is not thereby a "
+                "correct one — but nothing in this case localises a defect in "
+                "the product.")
+            return out
+        out["mechanism"] = "the test suite's own requirements, which conflict"
+        out["feature"] = "not determinable — the scenario tests two "
+        out["feature"] += "incompatible requirements at once"
+        out["expected"] = ("no response satisfies both steps, so the scenario "
+                           "states nothing about the SUT")
+        return out
+
     out["mechanism"] = "unclassified"
     out["expected"] = "see the quoted step"
     return out
@@ -858,6 +892,454 @@ def load_seed(run_dir: Path) -> dict[str, dict]:
                     entry["assertionFailures"][(rtype, rid)] = bad
         out[level] = entry
     return out
+
+
+# A single element the reference validator rejected, with the value it found and
+# the value the profile requires. The validator writes these inside the
+# "Issues: [ValidationMessage[...]]" tail of a pattern-mismatch error, e.g.
+#
+#   location=Patient.identifier[1].type.coding.code,message=Value is 'GKV' but
+#   must be 'KVZ10'
+#
+# The location is matched with its indices, which is why the character class
+# carries brackets: a pattern that stopped at the first "]" matches only the
+# locations that happen to have no index, which is 2 of the 8 occurrences
+# measured on the round of record - the other 6 are inside `identifier[1]`.
+RE_VALUE_MISMATCH = re.compile(
+    r"location=(?P<loc>[A-Za-z][A-Za-z0-9_.\[\]]*),message=Value is "
+    r"'(?P<actual>[^']*)' but must be '(?P<want>[^']*)'")
+
+# An element the profile requires and the validated body did not carry, e.g.
+#
+#   Practitioner.name.text: minimum required = 1, but only found 0
+#   Encounter.diagnosis.use.coding:Diagnosetyp: minimum required = 1, but only found 0
+#
+# The location may name a slice (`...coding:Diagnosetyp`), which is why ":" is in
+# the character class: a slice is reported by its name, and whether an element
+# belongs to it cannot be decided without the profile - see absence_verdict().
+#
+# The trailing `(from <canonical>|<version>)` names the profile that pins the
+# element, and is captured because the location alone does not say what it is
+# rooted in: `Coding.version` is rooted in the type ISiKATCCoding constrains, not
+# in a resource, and the join below can only be made on a resource type.
+RE_ABSENT_ELEMENT = re.compile(
+    r"(?P<loc>[A-Z][A-Za-z0-9_.\[\]:-]*): minimum required = (?P<min>\d+), "
+    r"but only found 0"
+    r"(?:\s*\(from (?P<from>[^|)\s]+)[^)]*\))?")
+
+# A code the validation module could not resolve in the system it was given, e.g.
+#
+#   Unknown code 'urn:oid:1.2.276.0.76.5.514#010'
+#
+# Carries no element path, so the join is over every Coding in the staged corpus
+# of the level - see coding_pairs().
+RE_UNKNOWN_CODE = re.compile(
+    r"Unknown code '(?P<system>[^'#\s]+)#(?P<code>[^'\s]+)'")
+
+# Cardinality-class wording this module does NOT parse into a finding. Its
+# presence leaves a rejection partly unexplained, so it blocks the attribution
+# below rather than being ignored: an element that went missing between the
+# stored resource and the wire is the SUT's side of the line, and a phrase we
+# cannot resolve against the corpus must not be assumed to be ours.
+# `minimum required ... but only found 0` is deliberately absent from this
+# pattern - RE_ABSENT_ELEMENT accounts for it.
+RE_CARDINALITY_UNPARSED = re.compile(
+    r"[Mm]issing required|Unable to find|element is required")
+
+
+def load_corpus(run_dir: Path) -> dict[str, dict]:
+    """level -> {(ResourceType, id): {"file": name, "body": resource}}.
+
+    The rendered instances this round seeded, as archived by 70-collect-report.sh
+    at `provenance/corpus/<Level>/`. Absent from bundles produced before that
+    directory was archived, which is why every reader of this treats "no corpus"
+    as "no evidence" rather than as an empty corpus.
+    """
+    out: dict[str, dict] = {}
+    root = run_dir / "provenance" / "corpus"
+    for level_dir in sorted(root.glob("*")) if root.is_dir() else []:
+        if not level_dir.is_dir():
+            continue
+        entry: dict = {}
+        for path in sorted(level_dir.glob("*.json")):
+            body = load_json(path, f"staged resource {path.name}", required=False)
+            if isinstance(body, dict) and body.get("resourceType") and body.get("id"):
+                entry[(body["resourceType"], body["id"])] = {
+                    "file": path.name, "body": body}
+        out[level_dir.name] = entry
+    return out
+
+
+def element_values(body: dict, path: str) -> list:
+    """Every value the dotted FHIR element path selects in one resource.
+
+    Accepts the form the reference validator writes: the resource type, then
+    element names, each optionally subscripted - `Patient.identifier[1].type.
+    coding.code`. An un-subscripted name over a list selects every member, so a
+    rejected value is found wherever in the list it sits; the resource type is
+    verified rather than skipped, because a message about `Patient.identifier`
+    must not be resolved against a `Coverage`.
+
+    `name[x]` is the FHIR choice-element form, and it is NOT an index: the
+    validator writes `MedicationStatement.effective[x]` for an element whose
+    instances are named `effectiveDateTime` or `effectivePeriod`. Resolving it as
+    a literal key would find nothing in a body that carries the element, and
+    absence_verdict() would then report a staged element as absent - attributing
+    to this project's data a defect it does not have. So `[x]` selects every key
+    that is the base name followed by a capitalised type suffix, which is the
+    naming rule FHIR itself defines for a choice.
+    """
+    parts = path.split(".")
+    if not parts or parts[0] != body.get("resourceType"):
+        return []
+    nodes: list = [body]
+    for part in parts[1:]:
+        name, _, idx = part.partition("[")
+        want = int(idx[:-1]) if idx[-1:] == "]" and idx[:-1].isdigit() else None
+        choice = idx[:-1] == "x"
+        nxt = []
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            if choice:
+                keys = [k for k in node
+                        if k == name or (k.startswith(name)
+                                         and len(k) > len(name)
+                                         and k[len(name)].isupper())]
+            else:
+                keys = [name] if name in node else []
+            for k in keys:
+                value = node.get(k)
+                if isinstance(value, list):
+                    if want is None:
+                        nxt.extend(value)
+                    elif want < len(value):
+                        nxt.append(value[want])
+                elif value is not None and want in (None, 0):
+                    nxt.append(value)
+        nodes = nxt
+        if not nodes:
+            return []
+    return nodes
+
+
+def strip_slices(path: str) -> str:
+    """`Encounter.diagnosis.use.coding:Diagnosetyp` -> `Encounter.diagnosis.use.coding`."""
+    return ".".join(part.split(":", 1)[0] for part in path.split("."))
+
+
+def coding_pairs(node, found: set[tuple[str, str]] | None = None
+                 ) -> set[tuple[str, str]]:
+    """Every (system, code) pair anywhere in one resource.
+
+    A Coding is recognised structurally - any object carrying both `system` and
+    `code` - rather than by the element it sits in, because the validator's
+    "Unknown code" message names neither the element nor the resource type, and
+    the same pair may be staged under `coding`, `valueCoding`, `type.coding` or a
+    contained resource.
+    """
+    if found is None:
+        found = set()
+    if isinstance(node, dict):
+        sys_, code = node.get("system"), node.get("code")
+        if isinstance(sys_, str) and isinstance(code, str):
+            found.add((sys_, code))
+        for value in node.values():
+            coding_pairs(value, found)
+    elif isinstance(node, list):
+        for value in node:
+            coding_pairs(value, found)
+    return found
+
+
+def absence_verdict(staged: dict, loc: str, index: dict | None = None,
+                    source: str | None = None) -> tuple[str, str, list[str]]:
+    """Who is answerable for an element the validator found absent.
+
+    Three outcomes, and the distinction between them is the whole point:
+
+      * `ours`  - no staged resource of that type carries the element at all, so
+                  the response could not have carried it whatever the SUT did.
+                  This is the case the cardinality veto used to suppress, which
+                  cost 8 of round F's 79 charged cases.
+      * `sut`   - EVERY staged resource of that type carries it. Then whichever
+                  one the scenario read had the element, so something between the
+                  stored resource and the wire dropped it: the product's side of
+                  the line, and it must stay there.
+      * `indeterminate` - the location names a slice, the level staged no
+                  resource of that type, or only some staged resources of that
+                  type carry the element.
+
+    The last of those three is the reason this is a three-way verdict rather than
+    a predicate. A `TGR` validation step records no request path (see
+    corpus_evidence), so the instance the scenario read cannot be identified; if
+    2 of 4 staged MedicationStatement resources carry `effective[x]`, the corpus
+    supports neither verdict and says so. Slice membership is likewise decided by
+    the profile's discriminator, which this report does not load, so a present
+    parent element is not evidence either way.
+
+    `source` is the profile the message attributes the rejection to, and `index`
+    the attribution index. They are used for one thing: a location rooted in a
+    FHIR datatype rather than a resource type - `Coding.version`, from a profile
+    whose `type` is `Coding` - cannot be joined against a corpus of resources at
+    all, and reporting that as "the level staged no Coding" is true but reads as
+    a statement about this corpus rather than about the shape of the message.
+    """
+    rtype = loc.split(".")[0].split(":", 1)[0]
+    ours = [rec for rec in staged.values()
+            if rec["body"].get("resourceType") == rtype]
+    if not ours:
+        constrains = ((index or {}).get("profileElements", {})
+                      .get(source or "", {}).get("type"))
+        if constrains == rtype:
+            name = (index or {}).get("profileElements", {}) \
+                .get(source or "", {}).get("name", source)
+            return "indeterminate", (
+                f"`{loc}` is rooted in `{rtype}`, the type `{name}` constrains, "
+                f"not in a resource type; this report joins a location to the "
+                f"staged resource it names, and this message names none"), []
+        return "indeterminate", (
+            f"the level staged no {rtype}, so the corpus says nothing about this "
+            f"element"), []
+    if ":" in loc:
+        return "indeterminate", (
+            f"`{loc}` names a profile slice; whether a staged element belongs to "
+            f"it is decided by the slice discriminator, which this report does "
+            f"not evaluate"), []
+    plain = strip_slices(loc)
+    carrying = [rec["file"] for rec in ours if element_values(rec["body"], plain)]
+    if len(carrying) == len(ours):
+        return "sut", (
+            f"all {len(ours)} staged {rtype} resource(s) carry `{plain}`, so "
+            f"whichever one this scenario read had the element before the SUT "
+            f"was given it"), carrying
+    if carrying:
+        return "indeterminate", (
+            f"{len(carrying)} of {len(ours)} staged {rtype} resource(s) carry "
+            f"`{plain}`, and the failing step records no request path, so which "
+            f"instance was read cannot be established"), carrying
+    return "ours", (
+        f"none of the {len(ours)} staged {rtype} resource(s) carries `{plain}`, "
+        f"so no response to this request could have satisfied the profile"), []
+
+
+def corpus_evidence(corpus: dict, level: str, message: str | None,
+                    index: dict | None = None) -> dict | None:
+    """Positive evidence that the value the validator rejected is the value we staged.
+
+    The question this answers is the only one that separates a product defect
+    from a defect of ours on a profile-validation failure: the test suite
+    validates what it read back from the SUT, so a rejected element is the
+    product's fault **only if the product returned something other than what it
+    was given**. The staged corpus is in the bundle, so that comparison is
+    arithmetic rather than opinion.
+
+    Why this exists next to test_data_evidence() rather than inside it. That
+    function identifies the resource from the failing request's path and asks the
+    seed step whether the write, the read-back or the pre-run `$validate` already
+    objected. Neither channel reaches this class of defect:
+
+      * a Tiger `TGR` validation step records no `restQuery` at all, so there is
+        no path to identify a resource from - `http` is null on all 8 cases of
+        this shape in the round of record;
+      * the pre-run `$validate` is the *SUT's* `$validate`. On the round of
+        record it reported 0 errors over all 131 seeded resources, including the
+        resources whose content the suite's own validator then rejected, so it
+        cannot be the check that catches our authoring.
+
+    The join is therefore the resource *type* named by the validator's location
+    and the staged corpus of the level, not one instance: if every staged
+    resource of that type carries the rejected value at that element and none
+    carries the required one, no reading of this corpus could have satisfied the
+    assertion, whatever the SUT did with it.
+
+    Three message shapes are resolved against the corpus, which between them
+    account for every profile-validation rejection measured in rounds A to F:
+
+      * a value the profile pins to something else (RE_VALUE_MISMATCH);
+      * a required element the body did not carry at all (RE_ABSENT_ELEMENT) -
+        see absence_verdict() for why a present element flips the attribution
+        back to the product rather than merely failing to support it;
+      * a code the module could not resolve (RE_UNKNOWN_CODE), joined over every
+        Coding in the level's corpus because the message names no element.
+
+    Conservative in both directions. Returns None unless at least one shape
+    matched; attributes nothing unless some finding is positively ours; and
+    attributes nothing if any finding is positively the product's, if a
+    cardinality phrase this module cannot parse is also present, or if a
+    `but only found 0` clause escaped RE_ABSENT_ELEMENT - in each of those cases
+    part of the rejection is unexplained, and an unexplained rejection stays with
+    the SUT.
+    """
+    if not message:
+        return None
+    staged = corpus.get(level) or {}
+    if not staged:
+        return None
+    findings = []
+    # One rejected element is reported once per profile that pins it: the
+    # measured Patient case carries the same
+    # `Patient.identifier[1].type.coding.code` mismatch twice, from
+    # identifier-kvid-10 and from ISiKPatient. The join below would produce the
+    # identical row twice, which reads as two pieces of evidence rather than
+    # one, so the triple is deduplicated here and not in the renderer - it also
+    # keeps `confirmed` from being weighted by how many profiles happen to pin
+    # the same element.
+    seen = set()
+    for m in RE_VALUE_MISMATCH.finditer(message):
+        loc, actual, want = m.group("loc"), m.group("actual"), m.group("want")
+        if (loc, actual, want) in seen:
+            continue
+        seen.add((loc, actual, want))
+        rtype = loc.split(".")[0]
+        ours = [(rec, element_values(rec["body"], loc))
+                for rec in staged.values()
+                if rec["body"].get("resourceType") == rtype]
+        ours = [(rec, vals) for rec, vals in ours if vals]
+        if not ours:
+            continue
+        carry = [rec["file"] for rec, vals in ours if actual in [str(v) for v in vals]]
+        satisfy = [rec["file"] for rec, vals in ours if want in [str(v) for v in vals]]
+        if satisfy:
+            verdict, detail = "sut", (
+                f"a staged {rtype} carries the required value, so the SUT "
+                f"returned something other than what it was given")
+        elif carry:
+            verdict, detail = "ours", (
+                f"the rejected value is the one this project staged, and no "
+                f"staged {rtype} carries the required one")
+        else:
+            verdict, detail = "indeterminate", (
+                f"no staged {rtype} carries either value at this element")
+        findings.append({
+            "kind": "value-mismatch",
+            "element": loc,
+            "rejected": actual,
+            "required": want,
+            "stagedFilesCarryingRejected": carry,
+            "stagedFilesCarryingRequired": satisfy,
+            "verdict": verdict,
+            "detail": detail,
+            "confirmed": verdict == "ours",
+        })
+
+    # Absent required elements. Deduplicated by location: the ValueSet case of
+    # round F reports the same `expansion.contains.version` seven times, once per
+    # expansion entry, and seven identical rows read as seven findings.
+    absent_seen = set()
+    absent_clauses = 0
+    for m in RE_ABSENT_ELEMENT.finditer(message):
+        loc = m.group("loc")
+        absent_clauses += 1
+        if loc in absent_seen:
+            continue
+        absent_seen.add(loc)
+        verdict, detail, carrying = absence_verdict(
+            staged, loc, index, m.group("from"))
+        findings.append({
+            "kind": "absent-element",
+            "element": loc,
+            "rejected": "(element absent)",
+            "required": f"minimum {m.group('min')}",
+            "stagedFilesCarryingRejected": [],
+            "stagedFilesCarryingRequired": carrying,
+            "verdict": verdict,
+            "detail": detail,
+            "confirmed": verdict == "ours",
+        })
+
+    # Unresolvable codes. The corpus is searched structurally, so a pair staged
+    # anywhere in any resource of the level counts: the message gives no element
+    # to narrow it to, and a code the module cannot resolve is ours as soon as it
+    # is shown to have come from us.
+    code_seen = set()
+    for m in RE_UNKNOWN_CODE.finditer(message):
+        pair = (m.group("system"), m.group("code"))
+        if pair in code_seen:
+            continue
+        code_seen.add(pair)
+        carrying = sorted(rec["file"] for rec in staged.values()
+                          if pair in coding_pairs(rec["body"]))
+        if carrying:
+            verdict, detail = "ours", (
+                f"{len(carrying)} staged resource(s) carry this code, so the "
+                f"code the module could not resolve is one this project chose")
+        else:
+            verdict, detail = "indeterminate", (
+                "no staged resource of this level carries this code")
+        findings.append({
+            "kind": "unknown-code",
+            "element": "(code, element not reported)",
+            "rejected": f"{pair[0]}#{pair[1]}",
+            "required": "a code the validation module can resolve",
+            "stagedFilesCarryingRejected": carrying,
+            "stagedFilesCarryingRequired": [],
+            "verdict": verdict,
+            "detail": detail,
+            "confirmed": verdict == "ours",
+        })
+
+    if not findings:
+        return None
+
+    # Everything that leaves part of the rejection unaccounted for. Each of these
+    # is a reason to leave the case with the SUT, and each is recorded so that an
+    # unconfirmed verdict can be read rather than guessed at.
+    blockers = []
+    if any(f["verdict"] == "sut" for f in findings):
+        blockers.append("at least one rejected element was staged correctly, so "
+                        "the response differs from what the SUT was given")
+    if RE_CARDINALITY_UNPARSED.search(message):
+        blockers.append("the message carries cardinality wording this report does "
+                        "not resolve against the corpus")
+    # Every `but only found` clause has to have become a finding. The comparison
+    # is against the number of clauses matched, not the number of distinct
+    # locations: one location is legitimately reported once per offending
+    # occurrence - the ValueSet case of round F reports the same
+    # `expansion.contains.version` seven times, once per expansion entry.
+    # A `but only found 1` clause (an element present but too few) matches
+    # neither pattern and is caught here rather than passed over.
+    if message.count("but only found") > absent_clauses:
+        blockers.append("a 'but only found' clause was not parsed into a "
+                        "finding, so part of the rejection is unexplained")
+    if not any(f["verdict"] == "ours" for f in findings):
+        blockers.append("no finding is positively attributable to the staged corpus")
+
+    return {
+        "level": level,
+        "findings": findings,
+        "blockers": blockers,
+        "confirmed": not blockers,
+        "source": f"provenance/corpus/{level}/",
+    }
+
+
+def corpus_reason(corpus_ev: dict) -> str:
+    """The one-sentence reason an entry carries when the corpus explains it.
+
+    Written from the findings that are positively ours, in the shape the entry's
+    reader needs: what the validator rejected, and why the staged corpus settles
+    who it belongs to. The remaining findings stay visible in the entry's
+    evidence table rather than being summarised away.
+    """
+    ours = [f for f in corpus_ev["findings"] if f["verdict"] == "ours"]
+    lead = ours[0]
+    if lead["kind"] == "absent-element":
+        head = (f"the element the reference validator found missing, "
+                f"`{lead['element']}`, is carried by no resource this project "
+                f"staged")
+    elif lead["kind"] == "unknown-code":
+        head = (f"the code the validation module could not resolve, "
+                f"`{lead['rejected']}`, is one this project staged")
+    else:
+        head = (f"the value the reference validator rejected at "
+                f"`{lead['element']}` - {lead['rejected']!r}, where the profile "
+                f"requires {lead['required']!r} - is the value this project "
+                f"staged, and no staged resource of that type carries the "
+                f"required one")
+    more = (f", and so are the other {len(ours) - 1} rejected element(s) in this "
+            f"message" if len(ours) > 1 else "")
+    return f"{head}{more}. The SUT returned what it was given"
 
 
 def test_data_evidence(seed: dict, level: str, http: dict | None) -> dict | None:
@@ -1036,6 +1518,133 @@ def prerequisite_verdict(resolved: str, tokens_unresolved: bool
     return None
 
 
+# The core validator's refusal of an extension URL that names another FHIR
+# version, e.g. `Extension url 'http://hl7.org/fhir/5.0/StructureDefinition/
+# extension-Encounter.plannedStartDate' is not valid (invalid Version '5.0')`.
+RE_INVALID_VERSION_EXTENSION = re.compile(
+    r"Extension url '(?P<url>http://hl7\.org/fhir/\d+\.\d+/StructureDefinition/"
+    r"extension-[A-Za-z0-9_.-]+)' is not valid \(invalid Version")
+
+# The same canonical refused from the other side. Where the message above is the
+# validator reading the *instance* and refusing the extension it carries, this one
+# is the validator reading the *profile* and failing to resolve a slice definition
+# the profile points at:
+#
+#   Slicing cannot be evaluated: Problem with use of resolve() - profile
+#   [CanonicalType[http://hl7.org/fhir/5.0/StructureDefinition/
+#   extension-Encounter.plannedStartDate]] on Encounter.extension:plannedStartDate
+#   could not be resolved (@char 1)
+#
+# One root cause, two appearances: a canonical under `hl7.org/fhir/<version>/` is
+# intercepted as a cross-version reference rather than looked up in the package
+# that defines it. The second form does not depend on the instance at all - it
+# fires on any body with an extension validated against a profile that slices on
+# one of these - so it is if anything the clearer statement that no response could
+# have passed.
+RE_UNRESOLVABLE_SLICE_EXTENSION = re.compile(
+    r"profile \[CanonicalType\[(?P<url>http://hl7\.org/fhir/\d+\.\d+/"
+    r"StructureDefinition/extension-[A-Za-z0-9_.-]+)\]\][^\n]*could not be resolved")
+
+
+# A null dereference raised *inside* the machinery that evaluates a step, rather
+# than a comparison of expectation against response, e.g.
+#
+#   Cannot invoke "String.replaceAll(String, String)" because the return value of
+#   "org.hl7.fhir.r4.utils.FHIRPathEngine.convertToString(org.hl7.fhir.r4.model.
+#   Base)" is null
+#
+# The package of the method whose return value was null is what makes this
+# readable: these are the suite's own libraries, so the exception says that the
+# step failed to evaluate, not that the response failed to match.
+RE_SUITE_NULL_DEREF = re.compile(
+    r'Cannot invoke "[^"]+" because the return value of '
+    r'"(?P<method>(?:org\.hl7\.fhir|de\.gematik|net\.serenitybdd|net\.thucydides'
+    r'|io\.cucumber)\.[^"(]+)\([^"]*\) ?" is null')
+
+
+def suite_crash_verdict(failure: dict) -> tuple[str, str, str] | None:
+    """Whether the step crashed instead of reaching a verdict on the response.
+
+    A step states something about the SUT by comparing an expectation with a
+    response. When the recorded failure is instead an exception raised while
+    evaluating that expectation, no comparison took place, and the case cannot be
+    read as the SUT having failed the assertion - nor as having passed it. The
+    record simply does not say, and a count that charges the case to the product
+    claims more than the evidence carries.
+
+    Deliberately narrow, on two signals that have to agree: the error type is
+    `NullPointerException`, and the message names the method whose return value
+    was null as one belonging to the suite or to a library it evaluates with. An
+    exception that names the *response* as the thing it could not handle - a
+    parse failure on an empty body, say - is a statement about the response and
+    is left to the ordinary classification.
+
+    What the response did contain is still worth reading, which is why the reason
+    points at it: the exchange this rule first fired on carries an entirely
+    separate, product-side finding in its own self link.
+    """
+    if "NullPointerException" not in (failure.get("errorType") or ""):
+        return None
+    m = RE_SUITE_NULL_DEREF.search(failure.get("message") or "")
+    if not m:
+        return None
+    http = failure.get("http") or {}
+    where = ""
+    if http.get("statusCode"):
+        # No trailing full stop: the reason is rendered with one appended.
+        where = (f". The SUT answered {http['statusCode']} to "
+                 f"{http.get('method')} {http.get('path')}; read that exchange "
+                 "to see whether it holds a finding of its own")
+    return "UPSTREAM_SUITE_CONFLICT", (
+        f"the step raised `NullPointerException` inside the suite's own "
+        f"evaluation - `{m.group('method')}` returned null where the suite "
+        "dereferenced it - so it never compared an expectation against the "
+        "response, and the case establishes neither a pass nor a failure of the "
+        "SUT" + where
+    ), f"suite-null-dereference:{m.group('method')}"
+
+
+def suite_conflict_verdict(index: dict, message: str | None
+                           ) -> tuple[str, str, str] | None:
+    """Whether the suite rejected content the suite itself requires.
+
+    Positive evidence from the index, never from the message alone: the URL the
+    validation step refused has to be one the suite's own feature files assert AND
+    one a package this round loaded defines. When both hold, no response could
+    have satisfied both steps, so the case states nothing about the SUT and
+    nothing about this project's data - see
+    build_index.index_cross_version_extensions().
+    """
+    if not message:
+        return None
+    known = index.get("suiteRequiredCrossVersionExtensions") or {}
+    for rx, how in ((RE_INVALID_VERSION_EXTENSION, "instance"),
+                    (RE_UNRESOLVABLE_SLICE_EXTENSION, "profile")):
+        for m in rx.finditer(message):
+            url = m.group("url")
+            rec = known.get(url)
+            if not rec or not rec.get("requiredBy") or not rec.get("definedBy"):
+                continue
+            first = rec["requiredBy"][0]
+            where = (
+                "The step that failed validates the body against core FHIR R4, "
+                "which refuses any extension URL naming another version, so no "
+                "response could satisfy both steps"
+                if how == "instance" else
+                "The step that failed could not resolve that definition while "
+                "evaluating the slicing of the profile it validated against, so "
+                "the verdict is about the profile's own dependencies and no "
+                "response body could have changed it"
+            )
+            return "UPSTREAM_SUITE_CONFLICT", (
+                f"the extension `{url}` is required by the suite's own feature "
+                f"`{first['feature']}` at line {first['line']}, and is defined by "
+                f"{', '.join(sorted(set(rec['definedBy'])))} - the package set "
+                f"this round validated against. {where}"
+            ), f"cross-version-extension:{url}"
+    return None
+
+
 def truncate(text: str, limit: int = MAX_BODY) -> str:
     text = (text or "").strip()
     if len(text) <= limit:
@@ -1091,7 +1700,7 @@ def root_cause_key(category: str, attribution: dict, failure: dict,
 # Analysis
 # =============================================================================
 
-def analyse(results: dict, index: dict, seed: dict, run_dir: Path,
+def analyse(results: dict, index: dict, seed: dict, corpus: dict, run_dir: Path,
             reqs: dict | None) -> dict:
     groups: dict[tuple, dict] = {}
     per_level: dict[str, dict] = {}
@@ -1168,16 +1777,37 @@ def analyse(results: dict, index: dict, seed: dict, run_dir: Path,
                 resolved_requests.get(
                     (case.get("report") or {}).get("outcomeJson") or "", ""),
                 tokens_unresolved)
-            if prereq:
+            # Initialised per case, not left to carry over: both are recorded on
+            # the group below, and a prerequisite-categorised case used to be
+            # given whichever evidence the previous iteration happened to hold.
+            # The suite-internal conflict is settled first, and ahead of both
+            # overrides below: when two steps of the suite require incompatible
+            # things of one body, neither the product's behaviour nor the staged
+            # corpus is the thing that decided the outcome.
+            # A step that crashed is settled first of all: it reached no verdict,
+            # so none of the overrides below - which all reason about what the
+            # verdict means - has anything to work from.
+            conflict = (suite_crash_verdict(failure)
+                        or suite_conflict_verdict(index, failure.get("message")))
+            evidence = None
+            corpus_ev = None
+            if conflict:
+                category, reason, prereq_rule = conflict
+            elif prereq:
                 category, reason, prereq_rule = prereq
             else:
                 prereq_rule = None
                 # Test-data override, on positive evidence only.
                 evidence = test_data_evidence(seed, level, failure.get("http"))
+                corpus_ev = corpus_evidence(corpus, level,
+                                            failure.get("message"), index)
                 if evidence and category != "RESPONSE_FORMAT":
                     category, reason = "TEST_DATA_DEFECT", (
                         f"the seed step already recorded a defect on "
                         f"{evidence['resourceType']}/{evidence['id']}")
+                elif (corpus_ev and corpus_ev["confirmed"]
+                        and category not in ("RESPONSE_FORMAT",) + NOT_SUT_CATEGORIES):
+                    category, reason = "TEST_DATA_DEFECT", corpus_reason(corpus_ev)
                 elif category == "TEST_DATA_DEFECT" and not evidence:
                     warnings.append(
                         f"{case.get('feature')}:{case.get('featureLine')} was "
@@ -1202,7 +1832,12 @@ def analyse(results: dict, index: dict, seed: dict, run_dir: Path,
                     "packages": attribution["packages"],
                     "expected": attribution["expected"],
                     "notes": attribution["notes"],
-                    "irisLocus": (CATEGORIES.get(category) or {}).get("irisLocus"),
+                    # Per category, unless the attribution has something more
+                    # specific: the category text has to describe every instance
+                    # it covers, and one of them is a crash with no locus at all.
+                    "irisLocus": (attribution.get("irisLocus")
+                                  or (CATEGORIES.get(category) or {}
+                                      ).get("irisLocus")),
                     "gherkinStep": gherkin,
                     "substep": substep,
                     "stepKind": cls.get("kind"),
@@ -1211,6 +1846,7 @@ def analyse(results: dict, index: dict, seed: dict, run_dir: Path,
                     "message": failure.get("message"),
                     "http": failure.get("http"),
                     "testDataEvidence": evidence,
+                    "corpusEvidence": corpus_ev,
                     "levels": [],
                     "modules": [],
                     "occurrences": [],
@@ -1250,7 +1886,8 @@ def analyse(results: dict, index: dict, seed: dict, run_dir: Path,
         ["UNSUPPORTED_OPERATION", "CAPABILITY_STATEMENT_GAP", "MISSING_SEARCH_PARAM",
          "PROFILE_NONCONFORMANCE", "WRITE_VALIDATION_GAP", "SEARCH_SEMANTICS",
          "REFERENCE_INTEGRITY", "AUTHORIZATION_SCOPE", "RESPONSE_FORMAT",
-         "UNCLASSIFIED", "TEST_DATA_DEFECT", "ENVIRONMENT_PREREQUISITE"])}
+         "UNCLASSIFIED", "TEST_DATA_DEFECT", "UPSTREAM_SUITE_CONFLICT",
+         "ENVIRONMENT_PREREQUISITE"])}
     entries = sorted(groups.values(),
                      key=lambda g: (order.get(g["category"], 99),
                                     -len(g["occurrences"]),
@@ -1271,14 +1908,17 @@ def analyse(results: dict, index: dict, seed: dict, run_dir: Path,
             by_cat[c] = by_cat.get(c, 0) + n
     data_defects = by_cat.get("TEST_DATA_DEFECT", 0)
     prerequisites = by_cat.get("ENVIRONMENT_PREREQUISITE", 0)
+    conflicts = by_cat.get("UPSTREAM_SUITE_CONFLICT", 0)
     recon = {
         "officialFailedCases": official_failed,
         "failureRecordsAnalysed": seen,
         "categorised": sum(by_cat.values()),
         "byCategory": by_cat,
+        "notSutCategories": list(NOT_SUT_CATEGORIES),
         "testDataDefects": data_defects,
         "environmentPrerequisites": prerequisites,
-        "irisGapCases": seen - data_defects - prerequisites,
+        "upstreamSuiteConflicts": conflicts,
+        "irisGapCases": seen - data_defects - prerequisites - conflicts,
         "entries": len(entries),
         "irisGapEntries": sum(1 for e in entries
                               if e["category"] not in NOT_SUT_CATEGORIES),
@@ -1341,6 +1981,8 @@ CAT_TITLE = {
     "REFERENCE_INTEGRITY": "Reference integrity",
     "AUTHORIZATION_SCOPE": "SMART-on-FHIR scope enforcement",
     "TEST_DATA_DEFECT": "Test data defect (ours, not IRIS)",
+    "UPSTREAM_SUITE_CONFLICT": "Test suite defect (neither IRIS nor our test "
+                               "data)",
     "ENVIRONMENT_PREREQUISITE": "Precondition not met by this environment "
                                 "(neither IRIS nor our test data)",
     "UNCLASSIFIED": "Unclassified",
@@ -1376,6 +2018,8 @@ def render(results: dict, index: dict, analysis: dict, run_dir: Path,
     data_entries = [e for e in entries if e["category"] == "TEST_DATA_DEFECT"]
     prereq_entries = [e for e in entries
                       if e["category"] == "ENVIRONMENT_PREREQUISITE"]
+    conflict_entries = [e for e in entries
+                        if e["category"] == "UPSTREAM_SUITE_CONFLICT"]
     src = results.get("source") or {}
     out: list[str] = []
     w = out.append
@@ -1433,9 +2077,12 @@ def render(results: dict, index: dict, analysis: dict, run_dir: Path,
         w(f"**{recon['irisGapCases']} failing test case(s) attributable to the SUT, "
           f"collapsing to {len(iris_entries)} distinct defect(s).** "
           f"{recon['testDataDefects']} further failure(s) are defects in this "
-          f"project's own test data and "
+          f"project's own test data, "
+          f"{recon['upstreamSuiteConflicts']} failed on the test suite itself - "
+          f"it either required two incompatible things of one body or raised an "
+          f"exception instead of reaching a verdict - and "
           f"{recon['environmentPrerequisites']} failed on a precondition this "
-          "deployment did not meet; both are excluded from that count and "
+          "deployment did not meet; all three are excluded from that count and "
           "reported in §5.")
         w("")
         if recon["dedupRatio"]:
@@ -1501,10 +2148,11 @@ def render(results: dict, index: dict, analysis: dict, run_dir: Path,
     # --- how to read ---------------------------------------------------------
     w("## 3 How each entry was derived")
     w("")
-    w("The category is decided from four sources, in order of increasing evidence: "
+    w("The category is decided from five sources, in order of increasing evidence: "
       "the Gherkin step's shape, the request the assertion was made about, the "
       "HTTP status the SUT returned, and — only for test data defects — the "
-      "pre-run seed records. Each entry states which one decided it.")
+      "pre-run seed records and the staged corpus this round rendered. Each entry "
+      "states which one decided it.")
     w("")
     w("The supplying FHIR package is derived, not annotated. Profile assertions "
       "resolve through the canonical URL to the package that declares that "
@@ -1533,17 +2181,45 @@ def render(results: dict, index: dict, analysis: dict, run_dir: Path,
     if not data_entries:
         w("None. No failure in this run is attributable to this project's test "
           "data: the seed step's pre-run `$validate` and read-back records show no "
-          "defect on any resource a failing scenario touched.")
+          "defect on any resource a failing scenario touched, and no value the "
+          "reference validator rejected is a value the staged corpus carries.")
         w("")
     else:
         w("These failures were caused by this project's own seeded test data. Each "
-          "is proven from the seed step's records, which were written *before* the "
-          "test run. They are excluded from the gap count in §1 and are this "
+          "is proven from an artefact written *before* the test run — the seed "
+          "step's records, or the staged corpus in `provenance/corpus/`, which "
+          "shows that the value the reference validator rejected is the value this "
+          "project supplied and that no staged resource of that type carried the "
+          "required one. They are excluded from the gap count in §1 and are this "
           "project's work, not the product's.")
         w("")
         for e in data_entries:
             render_entry(w, e, index)
-    w("### 5.2 Preconditions this deployment did not meet")
+    w("### 5.2 Cases the test suite cannot pass")
+    w("")
+    if not conflict_entries:
+        w("None. Every failing case in this run states a requirement the suite "
+          "itself is consistent about.")
+        w("")
+    else:
+        w("These cases failed on the suite rather than on the response, in one of "
+          "two ways. Either two steps of the same scenario require opposite "
+          "things, so no implementation could have passed them — the "
+          "contradiction is shown from the suite's own artefacts, the feature "
+          "file that asserts the content and the loaded package that defines it, "
+          "against the step that rejects it, and is recorded in `index.json`'s "
+          "`suiteRequiredCrossVersionExtensions`. Or the step raised an "
+          "exception inside the suite's own evaluation and so never compared an "
+          "expectation against the response; the attribution names the method "
+          "that failed. They are excluded from the gap count in §1 because they "
+          "can neither convict the product nor acquit it, and they are not this "
+          "project's to fix either: the remedy lies with the suite's publisher. "
+          "Read the exchange regardless — a response the suite could not "
+          "evaluate may still show behaviour worth reporting.")
+        w("")
+        for e in conflict_entries:
+            render_entry(w, e, index)
+    w("### 5.3 Preconditions this deployment did not meet")
     w("")
     if not prereq_entries:
         w("None. Every failing case in this run was made under the conditions its "
@@ -1574,6 +2250,8 @@ def render(results: dict, index: dict, analysis: dict, run_dir: Path,
     w(f"| Failure records analysed | {recon['failureRecordsAnalysed']} |")
     w(f"| Categorised findings | {recon['categorised']} |")
     w(f"| — of which test data defects | {recon['testDataDefects']} |")
+    w(f"| — of which cases the test suite cannot pass | "
+      f"{recon['upstreamSuiteConflicts']} |")
     w(f"| — of which preconditions not met by this deployment | "
       f"{recon['environmentPrerequisites']} |")
     w(f"| SUT-attributable failing cases | {recon['irisGapCases']} |")
@@ -1817,6 +2495,18 @@ def render_entry(w, e: dict, index: dict) -> None:
         # a package to supply. Saying so is the point of the entry.
         w("- Supplied by: not applicable — the case did not reach a statement "
           "about any FHIR feature, which is why it is in this appendix.")
+    elif e["category"] == "UPSTREAM_SUITE_CONFLICT":
+        # A package does supply the content where the conflict is between two
+        # requirements - that is precisely the evidence for it - but it is named in
+        # the reason text rather than looked up from the feature index, because the
+        # failing step is the core-FHIR one that refuses it, not the profile one
+        # that requires it. A step that crashed named no content at all.
+        if (e.get("errorType") or "").endswith("NullPointerException"):
+            w("- Supplied by: not applicable — the step raised an exception "
+              "rather than evaluating any content a package supplies.")
+        else:
+            w("- Supplied by: the package named in the attribution above, which "
+              "is why the two steps cannot both be satisfied.")
     elif e["category"] in NO_SUPPLYING_PACKAGE:
         # Not a failed lookup. These categories are about the REST envelope and the
         # write path, which no FHIR package declares, so "not resolvable" would
@@ -1863,6 +2553,32 @@ def render_entry(w, e: dict, index: dict) -> None:
         for r in ev["reasons"]:
             w(f"- {r}")
         w("")
+    if e.get("corpusEvidence"):
+        ce = e["corpusEvidence"]
+        verdict = ("the rejected content is this project's own"
+                   if ce["confirmed"] else
+                   "the staged corpus does not account for the rejection")
+        w(f"The staged corpus against the rejected content (from `{ce['source']}`) — "
+          f"{verdict}:")
+        w("")
+        w("| Element | Validator rejected | Profile requires | Staged files "
+          "carrying the rejected value | Attributable to | On what evidence |")
+        w("|---|---|---|---|---|---|")
+        for f in ce["findings"]:
+            carry = ", ".join(f"`{n}`" for n in f["stagedFilesCarryingRejected"][:4])
+            who = {"ours": "this project's test data",
+                   "sut": "the system under test",
+                   "indeterminate": "undecided"}[f["verdict"]]
+            w(f"| `{f['element']}` | `{f['rejected']}` | `{f['required']}` | "
+              f"{carry or '—'} | {who} | {f['detail']} |")
+        w("")
+        # Why an entry that has corpus findings is nonetheless charged to the
+        # product. Printed because the alternative - a table of findings followed
+        # by a product-side category - reads as a contradiction.
+        for b in ce.get("blockers") or []:
+            w(f"- Not attributed to the test data: {b}.")
+        if ce.get("blockers"):
+            w("")
 
     # occurrences
     w("<details><summary>Affected scenarios and their locations in the official "
@@ -1896,7 +2612,8 @@ def main() -> int:
     ap.add_argument("--out-md", type=Path,
                     help="default: <run-dir>/GAP-ANALYSIS.md")
     ap.add_argument("--out-json", type=Path,
-                    help="default: <run-dir>/gap-analysis.json")
+                    help="default: beside --out-md if that is given, else "
+                         "<run-dir>/gap-analysis.json")
     ap.add_argument("--generated-at",
                     help="ISO-8601 timestamp; defaults to now. Set it to make the "
                          "output byte-identical across re-runs.")
@@ -1917,13 +2634,21 @@ def main() -> int:
     reqs = load_json(run_dir / "provenance" / "requirements.json",
                      "the requirements corpus", required=False)
     seed = load_seed(run_dir)
+    corpus = load_corpus(run_dir)
 
     generated_at = args.generated_at or \
         datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    analysis = analyse(results, index, seed, run_dir, reqs)
+    analysis = analyse(results, index, seed, corpus, run_dir, reqs)
 
     out_md = args.out_md or (run_dir / "GAP-ANALYSIS.md")
-    out_json = args.out_json or (run_dir / "gap-analysis.json")
+    # The two outputs stay together. `--out-md /tmp/...` on an archived bundle is
+    # how this report is re-derived for a measurement, and a default that kept
+    # the JSON in the run directory wrote one half of a published pair - the
+    # bundle then carried a Markdown document and a JSON document generated by
+    # different code. Redirecting one redirects both unless both are named.
+    out_json = args.out_json or (
+        out_md.parent / "gap-analysis.json" if args.out_md
+        else run_dir / "gap-analysis.json")
     out_md.write_text(render(results, index, analysis, run_dir, generated_at),
                       encoding="utf-8")
     out_json.write_text(json.dumps({
@@ -1951,12 +2676,19 @@ def main() -> int:
 
     recon = analysis["reconciliation"]
     rel_md = out_md.relative_to(REPO) if out_md.is_relative_to(REPO) else out_md
+    # Findings and cases are different units and this line used to print both
+    # inside one parenthetical, which read as though the three trailing numbers
+    # added up to the one before them. Findings are stated as findings, cases as
+    # cases, on two lines.
     print(f"  {recon['failureRecordsAnalysed']} failing case(s) -> "
-          f"{recon['entries']} distinct finding(s) "
-          f"({recon['irisGapEntries']} SUT, "
-          f"{recon['entries'] - recon['irisGapEntries']} not the SUT's: "
-          f"{recon['testDataDefects']} test-data and "
-          f"{recon['environmentPrerequisites']} unmet-precondition case(s))",
+          f"{recon['entries']} distinct finding(s): "
+          f"{recon['irisGapEntries']} the SUT's, "
+          f"{recon['entries'] - recon['irisGapEntries']} not", file=sys.stderr)
+    print(f"  of the {recon['failureRecordsAnalysed']} failing case(s), "
+          f"{recon['irisGapCases']} are the SUT's and "
+          f"{recon['testDataDefects']} are test-data, "
+          f"{recon['upstreamSuiteConflicts']} suite-conflict and "
+          f"{recon['environmentPrerequisites']} unmet-precondition",
           file=sys.stderr)
     for cat, n in sorted(recon["byCategory"].items(), key=lambda kv: -kv[1]):
         print(f"    {n:5d}  {cat}", file=sys.stderr)

@@ -420,8 +420,58 @@ def parse_example_step(description: str | None) -> dict[str, str] | None:
     return out or None
 
 
+def excluded_example_rows(feature: "fp.Feature | None", scen: "fp.Scenario | None",
+                          rows: list[dict], selects) -> frozenset[int]:
+    """Indices of ``dataTable`` rows the level's tag expression never selected.
+
+    A ``Scenario Outline`` may carry several ``Examples:`` blocks, and ISiK tags
+    one of them ``@Optional`` in most of its Stufe 5 outlines: measured on 2.7.0,
+    32 of the 47 Stufe 5 outlines in scope carry at least one excluded block, 69
+    excluded rows in all, and Stufe 3 carries none. Cucumber applies the block's
+    tags to its rows, so under ``@Stufe5 and (not @Optional)`` those rows are
+    never executed - but Serenity writes the *whole* table into the outcome's
+    ``dataTable``, excluded blocks included.
+
+    That matters only because of the basename defect described in
+    ``match_step_rows()``: a step duplicated from the sibling feature file can
+    carry parameters that match no row this scenario ran, yet match a row of its
+    excluded block. Measured on ISiK 2.7.0 Stufe 5, exactly one does -
+    ``Stufe5/Basis/AllergyIntolerance-Search`` has ``_tag`` as row 2 of its
+    selected block, while ``Stufe5/Medikation/AllergyIntolerance-Search`` has it
+    as the first row of its ``@Optional`` block - and attributing it produced one
+    phantom passing case, 896 against the specified 895.
+
+    Rows are attributed to blocks by ``lineNumber``: every row of a block lies
+    after the block's own ``Examples:`` line and before the next block's. If the
+    table cannot be attributed to this scenario that way - no line numbers, a
+    scenario that is not an outline, or a row outside every block's span, all of
+    which mean the table is not this scenario's - nothing is excluded, because
+    guessing here would discard real cases.
+    """
+    if feature is None or scen is None or not scen.examples or not rows:
+        return frozenset()
+    blocks = sorted(scen.examples, key=lambda ex: ex.line)
+    lines = [r.get("lineNumber") for r in rows]
+    if any(not isinstance(ln, int) or ln <= blocks[0].line for ln in lines):
+        return frozenset()
+    owner = []
+    for ln in lines:
+        hits = [ex for ex in blocks if ex.line < ln]
+        owner.append(hits[-1])
+    # Every block that contributed a row must also be able to hold all of them:
+    # a row count per block that disagrees with the parsed file means the table
+    # belongs to a different feature of the same basename.
+    for ex in blocks:
+        got = sum(1 for o in owner if o is ex)
+        if got and got != len(ex.rows):
+            return frozenset()
+    return frozenset(i for i, ex in enumerate(owner)
+                     if not selects(fp.effective_tags(feature, scen, ex)))
+
+
 def match_step_rows(steps: list[dict], headers: list[str],
-                    rows: list[dict]) -> list[int | None] | None:
+                    rows: list[dict],
+                    excluded: frozenset[int] = frozenset()) -> list[int | None] | None:
     """For each top-level step, the index of the Examples row it ran.
 
     ``None`` (instead of a list) means the steps carry no parameters at all, so
@@ -459,6 +509,10 @@ def match_step_rows(steps: list[dict], headers: list[str],
     run, every one of the 74 genuinely data-driven outcomes matched each of its
     steps to exactly one row, in order and without repetition, and the only
     unmatched steps were the 10 belonging to the other feature.
+
+    ``excluded`` names rows the level's tag expression did not select, which are
+    in the table but cannot have been executed; they are not match candidates.
+    See ``excluded_example_rows()`` for why a step can otherwise land on one.
     """
     parsed = [parse_example_step(s.get("description")) for s in steps]
     if all(p is None for p in parsed):
@@ -470,8 +524,9 @@ def match_step_rows(steps: list[dict], headers: list[str],
             out.append(None)
             continue
         hits = [i for i, values in enumerate(row_values)
-                if all(params.get(h) == values[j]
-                       for j, h in enumerate(headers) if j < len(values))]
+                if i not in excluded
+                and all(params.get(h) == values[j]
+                        for j, h in enumerate(headers) if j < len(values))]
         out.append(hits[0] if len(hits) == 1 else None)
     return out
 
@@ -479,7 +534,8 @@ def match_step_rows(steps: list[dict], headers: list[str],
 def cases_from_outcome(name: str, outcome: dict, index: FeatureIndex,
                        reqs_by_rel: dict[str, dict], reqs_all: dict[str, dict],
                        html_dir: Path | None,
-                       level_dir: str, level_name: str) -> tuple[list[dict], list[dict]]:
+                       level_dir: str, level_name: str,
+                       selects=None) -> tuple[list[dict], list[dict]]:
     """One record per test case, plus any anomalies found while extracting them."""
     anomalies: list[dict] = []
     story = outcome.get("userStory") or {}
@@ -571,9 +627,17 @@ def cases_from_outcome(name: str, outcome: dict, index: FeatureIndex,
 
     headers = table.get("headers") or [] if isinstance(table, dict) else []
     rows = table.get("rows") or [] if isinstance(table, dict) else []
+    # Rows of an Examples: block this level's tag expression did not select. They
+    # are in the table but were never run, so they are not candidates.
+    excluded = (excluded_example_rows(feature, scen, rows, selects)
+                if rows and selects is not None else frozenset())
     # Which row each step ran, from the step's own title. None means this outcome
     # is not data-driven at all, however much of a dataTable it was given.
-    step_rows = match_step_rows(steps, headers, rows) if rows else None
+    step_rows = match_step_rows(steps, headers, rows, excluded) if rows else None
+    # The same attribution ignoring the exclusion, used only to tell an unmatched
+    # step that matched nothing from one that matched an unselected row.
+    step_rows_lax = (match_step_rows(steps, headers, rows)
+                     if rows and excluded else None)
 
     if step_rows is not None:
         # Data-driven: Serenity creates one top-level step per Examples row
@@ -584,14 +648,22 @@ def cases_from_outcome(name: str, outcome: dict, index: FeatureIndex,
         # all. Both departures from plain index alignment are reported.
         for i, (step, row_ix) in enumerate(zip(steps, step_rows)):
             if row_ix is None:
+                lax = step_rows_lax[i] if step_rows_lax else None
+                if lax is not None and lax in excluded:
+                    where_only = (
+                        f"; the only row they match is row {lax + 1} of an "
+                        f"Examples: block that {level_name}'s tag expression does "
+                        "not select, so this scenario cannot have run them")
+                else:
+                    where_only = ""
                 anomalies.append({
                     "kind": "foreignExampleStep",
                     "detail": (f"{rel} / {scenario_name}: top-level step {i + 1} ran "
                                f"parameters that match no Examples row of this "
-                               f"scenario ({step.get('description')!r}); it belongs to "
-                               "another feature file of the same basename and is NOT "
-                               "counted as a case of this one. Serenity defect, not "
-                               "the SUT"),
+                               f"scenario ({step.get('description')!r}){where_only}; it "
+                               "belongs to another feature file of the same basename and "
+                               "is NOT counted as a case of this one. Serenity defect, "
+                               "not the SUT"),
                     "where": base["report"]["outcomeJson"],
                 })
                 continue
@@ -762,10 +834,26 @@ def collect_level(level: str, run_root: Path, index: FeatureIndex,
     # such rather than as an unknown feature.
     reqs_all = {f["rel"]: f for f in reqs["features"]}
 
+    # The level's own tag expression, compiled, so that an Examples: block the run
+    # did not select is recognised as such instead of being matched against.
+    tag_expr = (reqs.get("tagExpressions") or {}).get(level)
+    selects = None
+    if tag_expr:
+        try:
+            selects = fp.parse_tag_expression(tag_expr)
+        except fp.FeatureParseError as exc:
+            anomalies.append({
+                "kind": "unreadableTagExpression",
+                "detail": (f"the pinned suite's tag expression for {level} "
+                           f"({tag_expr!r}) did not parse ({exc}); Examples: blocks the "
+                           "run excluded cannot be told from the ones it ran"),
+                "where": "vendor/requirements.json",
+            })
+
     cases: list[dict] = []
     for name, outcome in outcomes:
         got, found = cases_from_outcome(name, outcome, index, reqs_by_rel, reqs_all,
-                                        html_dir, stufe, level)
+                                        html_dir, stufe, level, selects)
         cases.extend(got)
         anomalies.extend(found)
 
@@ -843,12 +931,30 @@ def collect_level(level: str, run_root: Path, index: FeatureIndex,
         })
 
     if totals["cases"] and totals["cases"] != expected["casesExecuted"]:
+        # The two directions have disjoint causes and the shortfall is the only
+        # one that bears on scope, so they are not reported in the same words. An
+        # excess cannot mean "fewer cases than the certification scope": no tag
+        # expression and no aborted run produces more cases than the suite
+        # specifies, so the surplus is in this analysis or in the report it reads.
+        if totals["cases"] < expected["casesExecuted"]:
+            kind = "scopeMismatch"
+            detail = (f"the report contains {totals['cases']} test case(s); the pinned "
+                      f"suite's {expected['tagExpression']} selects "
+                      f"{expected['casesExecuted']}. A narrowed tag expression, a "
+                      "different suite version, or an aborted run all produce this.")
+        else:
+            kind = "scopeExcess"
+            detail = (f"the report contains {totals['cases']} test case(s), "
+                      f"{totals['cases'] - expected['casesExecuted']} more than the "
+                      f"pinned suite's {expected['tagExpression']} selects "
+                      f"({expected['casesExecuted']}). The certification scope is "
+                      "covered; the surplus is an attribution fault, not a missing "
+                      "result. Reconcile against serenity-summary.json and the "
+                      "foreignExampleStep entries in this table before using the "
+                      "per-case figures.")
         anomalies.append({
-            "kind": "scopeMismatch",
-            "detail": (f"the report contains {totals['cases']} test case(s); the pinned "
-                       f"suite's {expected['tagExpression']} selects "
-                       f"{expected['casesExecuted']}. A narrowed tag expression, a "
-                       "different suite version, or an aborted run all produce this."),
+            "kind": kind,
+            "detail": detail,
             "where": f"{stufe}/run.json",
         })
 
@@ -1614,6 +1720,15 @@ def render(doc: dict, run_root: Path) -> str:
             w("> certification scope. Resolve it before treating these figures as a")
             w("> conformance result.")
             w("")
+        if "scopeExcess" in by_kind:
+            # Said separately and in different words: more cases than the suite
+            # specifies is not a gap in coverage, and calling it one would
+            # understate a complete run.
+            w("> The case count above exceeds the scope the pinned suite specifies. The")
+            w("> scope is covered; the surplus is an attribution fault in this analysis")
+            w("> or in the report it reads, and the per-case figures should be reconciled")
+            w("> before use. No verdict is missing.")
+            w("")
 
     # --- how to verify --------------------------------------------------------
     w("## 8. How to verify this document")
@@ -1887,8 +2002,15 @@ def main() -> int:
     # scenarioJvmOom is blocking for the same reason as wrongLevel: the level's
     # figures do not describe the SUT. A heap-exhausted run keeps producing
     # outcome records, so nothing else here would catch it.
+    # scopeExcess is blocking although its sibling scopeMismatch is not, and the
+    # asymmetry is deliberate: a narrowed run legitimately produces fewer cases
+    # than the suite specifies, but nothing legitimately produces more. When it
+    # fired before - one case, on every Stufe 5 round - the cause was this
+    # generator attributing a duplicated step to an Examples row the run never
+    # selected (excluded_example_rows()). Exiting non-zero is what would have put
+    # that in front of an operator instead of into a footnote.
     blocking = {"missingTestReport", "noLevels", "totalsDisagree", "unreadableJson",
-                "wrongLevel", "archiveChanged", "scenarioJvmOom"}
+                "wrongLevel", "archiveChanged", "scenarioJvmOom", "scopeExcess"}
     hard = [a for a in doc["anomalies"] if a["kind"] in blocking]
     for lv in doc["levels"].values():
         hard += [a for a in lv["anomalies"] if a["kind"] in blocking]

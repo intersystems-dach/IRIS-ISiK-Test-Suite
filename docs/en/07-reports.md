@@ -20,6 +20,11 @@ entitled to distrust anything a script wrote.
 > in their own text. That is not modesty; it is the only claim that makes a derived
 > document usable as evidence at all.
 
+Three documents per round, and these three are what `make all` produces. A fourth
+exists for the one question no single round can answer — whether anything that
+used to pass now fails — and because it is a join over *two* rounds it is written
+only when a pair is named: `comparison-vs-<run-id>.json`, below.
+
 ## The bundle
 
 ```
@@ -31,6 +36,7 @@ reports/<run-id>/
   analysis/MANIFEST.txt                  sha256 of every file here
   GAP-ANALYSIS.md                        the developer work list
   gap-analysis.json                      the same, machine-readable, for diffing rounds
+  comparison-vs-<run-id>.json            what moved against an earlier round, if asked for
   stufe3/official/*.zip                  untouched, as the suite wrote them
   stufe3/official/SHA256SUMS             their checksums, as received
   stufe3/official/extracted/test-report/  verbatim extraction
@@ -373,7 +379,7 @@ them nowhere.
 |---|---|---|
 | `UNSUPPORTED_OPERATION` | A FHIR operation (`$book`, `$update-metadata`) is invoked or declared and the SUT does not implement it | The endpoint's `OperationHandlerClass`; built-ins on `HS.FHIRServer.Storage.BuiltInOperations` |
 | `PROFILE_NONCONFORMANCE` | The body does not satisfy an ISiK `StructureDefinition`, or a FHIRPath assertion over a `mustSupport` element fails | Usually resource *content*, not IRIS code. IRIS is implicated when the element was stored and is missing from the response |
-| `WRITE_VALIDATION_GAP` | The status code disagrees with the profile on a write: a body ISiK forbids was accepted, or one it requires was refused | The write path's validation *depth*. Measured on the pinned SUT: a `Patient` with neither `identifier` nor `name` — valid R4, invalid ISiK — is accepted with `201`, while an unknown element is rejected with `400`, so writes are checked against base R4 and not against the endpoint's profiles |
+| `WRITE_VALIDATION_GAP` | The status code disagrees with the profile on a write: a body ISiK forbids was accepted, or one it requires was refused | The write path's validation *depth* — the strategy's Add/Update path and the endpoint's `ResourceValidation` setting. Which schema a given build enforces there is a measurement on a running SUT, not a property of the index; see [the probe](#probing-the-write-paths-validation-depth) |
 | `MISSING_SEARCH_PARAM` | A required search parameter is absent from the SUT's CapabilityStatement, or a search using it does not filter | Search-parameter indexing; an unindexed parameter is not advertised |
 | `CAPABILITY_STATEMENT_GAP` | `/metadata` omits an interaction, resource type or operation ISiK declares `SHALL` | CapabilityStatement generation — usually means the type or interaction is not *enabled*, not merely undeclared |
 | `SEARCH_SEMANTICS` | The search executes but returns the wrong set — a modifier, prefix, chain, `_include` or paging behaviour | The search layer and `SearchQueryProcessor` |
@@ -382,25 +388,70 @@ them nowhere.
 | `TEST_DATA_DEFECT` | The seeded resource was absent, unreadable or already flagged by `$validate` before the run | **None.** Ours, not the product's |
 | `UNCLASSIFIED` | The step shape is not in the classification table — almost always a suite version that grew a new shape | Unknown; the step and response are quoted verbatim so the entry is still actionable |
 
+#### Probing the write path's validation depth
+
+`WRITE_VALIDATION_GAP` is regularly the largest single class of a round, and the
+question a developer asks first — *does this build check a write against the base
+R4 schema only, or against the endpoint's profiles?* — cannot be answered from the
+report. The index is written by `make packages`, before any SUT exists, so it
+states the locus and leaves the depth to be measured per round, against that
+round's own endpoint, while the stack is still up:
+
+```sh
+B=http://127.0.0.1:52773/isik5/fhir/r4            # the round's endpoint
+A='-u <api-user>:<api-password>'                  # provenance/CREDENTIALS.md
+# 1. valid base R4, invalid against ISiKPatient (no identifier, no name)
+curl -s -o /dev/null -w '%{http_code}\n' $A -H 'Content-Type: application/fhir+json' \
+  -d '{"resourceType":"Patient","gender":"other"}' "$B/Patient"
+# 2. the same body with an element base R4 itself does not know
+curl -s $A -H 'Content-Type: application/fhir+json' \
+  -d '{"resourceType":"Patient","gender":"other","notAnElement":"x"}' "$B/Patient"
+```
+
+`2xx` on (1) with `4xx` on (2) is the asymmetry: the write path enforced base R4
+and not the endpoint's profiles. Record the two status codes, the endpoint's
+`ResourceValidation` setting and the build string beside the round, delete the
+resources the probe created, and say which build was measured. A measurement from
+an earlier build must not be reported as a property of a later one.
+
 **The IRIS locus column is different in kind from everything else in the report,
 and says so.** No artefact in this repository maps a FHIR feature to an IRIS class:
 those loci are authored by this project — the subsystems a developer would open —
 and `index.json` carries that provenance statement, which the report reproduces
 verbatim in §3. Verify against the product source before acting on one.
 
-### Category resolution: five sources, increasing evidence
+### Category resolution: six sources, increasing evidence
 
 1. the step's shape — what kind of assertion this is;
 2. the request context — what the assertion was made *about*;
 3. the HTTP response — what the SUT actually did;
 4. **the assertion message** — what the SUT did when (3) is unavailable;
-5. the seed records — whether our own data was already broken.
+5. the seed records — whether our own data was already broken;
+6. **the staged corpus** — whether the rejected content is the content we sent.
 
 Each overrides the previous **only when it knows strictly more**, and every entry
-states which one decided it. Only (5) can turn an IRIS gap into a test-data
-defect, and it needs positive evidence from `provenance/seed/` to do so. Absent
-that evidence the failure stays attributed to the SUT, because quietly excusing a
-failure is the one error this report must not make.
+states which one decided it. Only (5) and (6) can turn an IRIS gap into a
+test-data defect, and each needs positive evidence — from `provenance/seed/` and
+`provenance/corpus/` respectively — to do so. Absent that evidence the failure
+stays attributed to the SUT, because quietly excusing a failure is the one error
+this report must not make.
+
+**(6) exists because (3) and (5) are both blind to the corpus-authoring class.**
+When the suite validates a resource against a profile and the reference validator
+reports `Value is 'X' but must be 'Y'`, the question "is this the product's
+fault?" has exactly one honest answer: it is the product's fault only if the
+product returned something other than what it was given. (3) cannot answer it —
+these are Tiger TGR steps, so `failure.http` is `null` on every one of them. (5)
+cannot answer it either — the pre-run `$validate` is *the SUT's own* validator,
+and a build that does not enforce the profile reports no errors on data that
+violates it, which is precisely the condition under test. So the parser joins the
+rejected element path against `provenance/corpus/<Level>/`, the FHIR instances
+this round actually rendered and seeded, matched on resource type and level. The
+re-attribution fires only when the staged instance carries the rejected value
+*and* no staged resource of that type carries the required one; the resulting
+entry prints both columns so an inspector can check the join. A message form the
+parser does not recognise, or a corpus directory absent from the bundle, leaves
+the failure attributed to the SUT.
 
 **(4) exists because (3) is structurally absent for a whole class of step.** Tiger
 issues `TGR send …` requests through its own proxy, so Serenity records no
@@ -504,11 +555,54 @@ quote says so explicitly and points at `results.md` §7: **defects present only 
 the unexecuted features are absent from the report**, and an incomplete run must
 not be mistaken for a clean one.
 
+## `comparison-vs-<run-id>.json`
+
+A fourth document, for a fourth reader, written only when asked for:
+
+```sh
+make compare BASELINE=run-20260807T121756Z CANDIDATE=run-20261111T121705Z
+```
+
+A round answers *is the product conformant*. A release decision turns on the
+other question — *has anything that used to work stopped working* — and that
+answer is in neither round's archives, because it is a join over both. Hence a
+generator and an artefact of its own, which lands in the candidate's bundle and
+in its manifest, so that archiving the round archives the comparison with it.
+
+Each joined case is classified exactly once as `STABLE`, `FIXED`, `REGRESSION`,
+`PERSISTING` or `PRECONDITION`, and all five counts are always written, zeros
+included: *0 regressions* is the sentence the document exists to support and must
+not have to be deduced from a missing key. Preconditions are separated because
+the suite uses them to establish state, so their verdicts say nothing about
+conformance. `REGRESSION` is the only class that is a finding about the product;
+the other counts are what let a reader see that the two rounds are comparable at
+all.
+
+Within one suite version cases are joined on their exact address — level,
+feature file, scenario line, Examples index. Across two suite versions the lines
+move and tables are edited, so `--join auto` drops the line and matches Scenario
+Outline rows **by their parameter bindings rather than by their index**: an index
+join would compare each row below an inserted one against a different test and
+manufacture regressions. Cases the weaker key cannot pair appear in
+`onlyInBaseline` / `onlyInCandidate`, which is how a reader sees what a
+cross-version comparison does not cover. Only levels both rounds ran are
+compared, and `levels` records which those were.
+
+Like the gap analysis, it is a pure join over archived evidence — no container,
+no network, no licence key — so two slim archives are enough to re-derive it
+anywhere. The document names its two inputs, their run ids and its `generator`,
+and carries no timestamp, so the same two bundles regenerate it byte for byte and
+a reader who disbelieves a figure can find out what produced it. Exit status is
+about the comparison and not about the SUT: a round
+that regressed in fifty places exits 0 and says so, unless the caller asks for
+`--fail-on-regression`.
+
 ## Regenerating
 
 ```sh
 make report RUN_ID=run-20260806T093000Z      # extraction + results + citations + manifest + gap report
 make gap-report RUN_ID=run-20260806T093000Z  # the gap analysis alone
+make compare BASELINE=run-20260807T121756Z CANDIDATE=run-20260806T093000Z
 ```
 
 Neither re-runs the tests and neither touches the archives. Both are pure

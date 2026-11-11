@@ -205,6 +205,18 @@ copy_prov "${RUN_DIR}/seed/search-references.json" "seed/search-references.json"
   "the search scenarios' reference requirements, checked against the corpus" \
   "scripts/lib/search_reference_check.py"
 
+# The rendered corpus itself, one directory per level (~550 KB in total). Without
+# it the bundle can say that a resource was seeded but not what was in it, and
+# the one question that separates a product defect from a defect of ours -
+# did the SUT return something other than what we gave it? - cannot be answered
+# from the bundle at all. gap_report.py reads these files to decide exactly that;
+# see corpus_evidence() there.
+for level in $(suite_levels); do
+  copy_prov "${REPO_ROOT}/build/fhir/${level}" "corpus/${level}" \
+    "the rendered FHIR instances this round seeded, as built from testdata/fhir/" \
+    "scripts/lib/build_testdata.py"
+done
+
 copy_prov "${RUN_DIR}/iris-state/iris-provenance.json" "iris-provenance.json" \
   "the SUT's own record: \$ZV, namespaces, endpoints, loaded package ids" \
   "iris/src/ISiK/Setup.cls"

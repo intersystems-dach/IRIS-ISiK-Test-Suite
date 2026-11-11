@@ -180,6 +180,19 @@ RE_SEARCH_STEP = re.compile(
     r'(?:resource at|request to) "http://fhirserver/(?!metadata")([A-Za-z]+)/?'
     r'(?:\?(?P<query>[^"]*))?"')
 
+# The other way the suite sends a search: POST to `<Type>/_search` with the
+# criteria in a Gherkin table instead of in the URL. `RE_SEARCH_URL` cannot match
+# it - the type is followed by `/_search"`, not by `?` or `"` - and that is not a
+# flaw in that pattern but the reason this one exists: 41 steps in the pinned
+# 2.7.0 tree take this shape, and every criterion in them was invisible to this
+# gate. One of those steps is mandatory - `Observation` by `_tag` in
+# Stufe5/Basis/Observation-Statuses-Search.feature, present in 3.0.9 as well and
+# sent in round G, as that round's traffic log shows - so a round could charge the
+# system under test for an empty result set that no seeded Observation could have
+# filled.
+RE_SEARCH_POST = re.compile(
+    r'request to "http://fhirserver/(?!metadata")([A-Za-z]+)/_search"')
+
 # The suite's own words for "this search must find something". Only a criterion
 # guarded by this assertion is a requirement on the corpus: a search that is
 # allowed to come back empty says nothing about the seed data.
@@ -280,6 +293,30 @@ def resolve_keys(text: str, values: dict[str, str]) -> tuple[str, set[str]]:
     return RE_DATA_KEY.sub(repl, text), missing
 
 
+def table_query(step, row: dict[str, str]) -> tuple[str, str]:
+    """A POST-search step's parameter table as the query string it will send.
+
+    Returns the query and, when the table is not the two-row shape every site in
+    both pinned suite versions writes, an empty query and the reason - the same
+    discipline the rest of this module follows, because a table whose extra rows
+    were silently dropped would be a criterion this gate claims to have checked
+    and did not.
+
+    A cell escapes the token separator as `\\|`, `|` being the cell delimiter, so
+    it is unescaped here; the result is handed to `token_criteria` in the same
+    form a URL query arrives in.
+    """
+    if len(step.table) != 2:
+        return "", f"parameter table has {len(step.table)} row(s), not header + one"
+    header = [expand(c, row).strip() for c in step.table[0]]
+    pairs = []
+    for name, cell in zip(header, step.table[1]):
+        value = expand(cell, row).strip().replace("\\|", "|")
+        if name and value:
+            pairs.append(f"{name}={value}")
+    return "&".join(pairs), ""
+
+
 def search_parameters(packages_root: Path) -> dict[tuple[str, str], dict]:
     """(resource type, parameter code) -> the token SearchParameter's definition.
 
@@ -325,6 +362,15 @@ def token_path(rtype: str, code: str, defs: dict[tuple[str, str], dict]
     | Observation.component.code` is two, so it is skipped rather than halved.
     """
     spec = defs.get((rtype, code))
+    root = rtype
+    if spec is None:
+        # The parameters every resource has - `_tag`, `_security`, `_profile` -
+        # are defined once with base `Resource` and an expression rooted there,
+        # so a per-type lookup can never find them. `_tag` is the one of those
+        # this gate must resolve: the suite searches by it and asserts the result
+        # is non-empty, which is a requirement on the corpus like any other.
+        spec = defs.get(("Resource", code))
+        root = "Resource"
     if spec is None:
         return None, "no token SearchParameter for this type in the pinned packages"
     expr = " ".join((spec["expression"] or "").split())
@@ -332,7 +378,7 @@ def token_path(rtype: str, code: str, defs: dict[tuple[str, str], dict]
         return None, "the SearchParameter carries no expression"
     alts = [a.strip() for a in expr.split("|")]
     plain = [a for a in alts
-             if RE_PLAIN_PATH.match(a) and a.split(".", 1)[0] == rtype]
+             if RE_PLAIN_PATH.match(a) and a.split(".", 1)[0] == root]
     if len(plain) != 1:
         return None, f"expression not modelled by this check: {expr}"
     return plain[0].split(".", 1)[1], ""
@@ -443,6 +489,19 @@ def requirements(features_root: Path, level: str, predicate,
                         searched = url.group(1)
                         step_match = RE_SEARCH_STEP.search(text)
                         query = (step_match.group("query") or "") if step_match else ""
+                        continue
+
+                    post = RE_SEARCH_POST.search(text)
+                    if post:
+                        searched = post.group(1)
+                        query, why = table_query(step, row)
+                        if why:
+                            out.append({"kind": "reference",
+                                        "level": level, "type": None,
+                                        "element": None, "value": None,
+                                        "inScope": in_scope, "feature": feature.rel,
+                                        "scenario": scenario.name, "line": step.line,
+                                        "unmodelled": f"{text} [{why}]"})
                         continue
 
                     # The token criteria of the search this step requires to be

@@ -10,7 +10,7 @@
 # official report, from an IRIS conformance gap. Avoiding that misattribution is
 # what most of the checking below is for.
 #
-# Five stages, each of which can fail the step:
+# Six stages, each of which can fail the step:
 #
 #   1. render     testdata/fhir/{common,Stufe*,extra} -> build/fhir/<level>/
 #                 (scripts/lib/build_testdata.py: resolves ${<ns>.*} against the
@@ -20,17 +20,24 @@
 #                 the feature files (scripts/lib/assertion_check.py)
 #   3. refs       the search-scenario reference requirements no other check can
 #                 see (scripts/lib/search_reference_check.py)
-#   4. seed       PUT in dependency order, re-PUT to close the reference cycle,
+#   4. validate   every rendered resource against the ISiK profile it claims -
+#                 or, where it claims none, against the profile the scenarios
+#                 assert against it - using the reference validator and the
+#                 validation-module plugins out of the pinned suite image itself
+#                 (scripts/lib/validate_corpus.sh)
+#   5. seed       PUT in dependency order, re-PUT to close the reference cycle,
 #                 GET every resource back, POST $validate on every body
 #                 (scripts/lib/seed_client.py)
-#   5. record     run/seed/<level>.json + run/seed/SEED.txt, archived into the
+#   6. record     run/seed/<level>.json + run/seed/SEED.txt, archived into the
 #                 run's report directory by 70-collect-report.sh
 #
-# Stages 2 and 3 run on the host with no container involved, so a data defect
-# costs seconds rather than a 45-minute bring-up followed by a misleading report.
-# They are also run by `make check`, but repeated here because `make seed` may be
-# invoked directly and because build/ is regenerated in stage 1 - checking the
-# tree that was just rendered is the only check that covers what will be sent.
+# Stages 2, 3 and 4 run before anything is written: a data defect costs seconds
+# rather than a 45-minute bring-up followed by a misleading report. Stage 4 needs
+# the suite image, and nothing else - the container it runs has no network.
+# Stages 2 and 3 are also run by `make check`, but repeated here because
+# `make seed` may be invoked directly and because build/ is regenerated in stage
+# 1 - checking the tree that was just rendered is the only check that covers what
+# will be sent.
 #
 # Idempotent: PUT-with-ID overwrites, so re-running against a live endpoint is
 # safe and is the intended way to reset the corpus after a scenario has mutated
@@ -74,7 +81,7 @@ mkdir -p "$SEED_DIR"
 # build/ is removed first rather than overwritten: a resource dropped from the
 # inventory by a test-suite version bump would otherwise stay behind and be seeded
 # for a level that no longer wants it.
-step "1/5 Rendering the authored test data"
+step "1/6 Rendering the authored test data"
 
 rm -rf "${REPO_ROOT}/build/fhir"
 # One --src per authored tree, shared tree first: a 3.x round adds
@@ -97,7 +104,7 @@ python3 "${LIB}/build_testdata.py" --packages "$PACKAGES_DIR" \
 # honest strength tiers assertion_check.py documents. The UNVERIFIED count is
 # printed rather than suppressed: it is the measure of how much of the
 # specification this static check does not cover.
-step "2/5 Checking the rendered data against the suite's assertions"
+step "2/6 Checking the rendered data against the suite's assertions"
 
 assert_failed=0
 for level in $(suite_levels); do
@@ -117,7 +124,7 @@ done
 # reference needs at least one seeded resource carrying that reference, or the
 # scenario fails at `entry.resource.count() > 0` and reads as an IRIS search
 # defect. See the module docstring for why `all()` over the result set is vacuous.
-step "3/5 Checking the search-scenario reference requirements"
+step "3/6 Checking the search-scenario reference requirements"
 
 # TESTS_TO_RUN_STUFE3 is passed only when the suite carries Stufe 3; under a 3.x
 # suite the variable may legitimately be unset, and `:?` would abort the step.
@@ -129,12 +136,65 @@ python3 "${LIB}/search_reference_check.py" --data-root "$BUILD_DIR" \
   || die "a search scenario requires a reference no seeded resource carries - see above"
 
 # -----------------------------------------------------------------------------
-# 4. Seed
+# 4. Reference validation of the corpus
+# -----------------------------------------------------------------------------
+# The rendered bodies, judged by the validator that will judge the server's
+# responses: the gematik reference validator at the version the pinned suite
+# image carries, loaded with that image's own ISiK validation-module plugins.
+#
+# This is the check whose absence cost the most. Stage 5 below asks the SUT's
+# own $validate operation about every body, which is the wrong oracle twice
+# over - it is the artefact under test, and in the round of 2026-11-11 it
+# accepted every one of the bodies this stage rejects. A body that the reference
+# validator rejects produces a FAILED scenario indistinguishable, in the
+# official report, from a conformance defect in the product.
+#
+# The requirements corpus is passed as well, so that a body carrying no
+# meta.profile is validated against the profiles the scenarios assert against it
+# rather than skipped. Those bodies are the fabricated ones - stage 1 stamps
+# meta.profile only where the feature files state it - so skipping them left the
+# least trustworthy part of the corpus unchecked.
+#
+# Requires docker and the pinned suite image. Set CORPUS_REFV_VALIDATE=0 to skip
+# it - which is a decision to publish a gap count the rig cannot stand behind,
+# so the skip is warned about rather than silent.
+step "4/6 Validating the corpus with the suite's own reference validator"
+
+CORPUS_REFV_VALIDATE="${CORPUS_REFV_VALIDATE:-1}"
+if [[ "$CORPUS_REFV_VALIDATE" == 1 ]]; then
+  if TESTSUITE_IMAGE="$TESTSUITE_IMAGE" TESTSUITE_VERSION="$TESTSUITE_VERSION" \
+     "${LIB}/validate_corpus.sh" "$BUILD_DIR" "$SEED_DIR" \
+       "${VENDOR_DIR}/requirements.json"; then
+    ok "every rendered body conforms to the profile it claims, or - where it
+  claims none - to the profile the scenarios assert against it"
+  else
+    rc=$?
+    if (( rc == 1 )); then
+      die "the rendered test data does not satisfy the ISiK profile it claims - see above.
+  Each body listed above would be returned by the SUT and then rejected by the
+  suite's validator, producing a failing scenario that reads as a product defect.
+  Fix the authored source under testdata/fhir/ and re-run; the full message list
+  is in run/seed/corpus-validation.json."
+    fi
+    die "the corpus could not be validated (exit ${rc}) - see above.
+  This is an infrastructure failure, not a data defect: docker, the pinned suite
+  image ${TESTSUITE_IMAGE}:${TESTSUITE_VERSION}, or the report path. Set
+  CORPUS_REFV_VALIDATE=0 to seed without the check, knowing that a data defect
+  would then be charged to the product."
+  fi
+else
+  warn "CORPUS_REFV_VALIDATE=0: the corpus will NOT be checked against the ISiK
+  profiles it claims. A non-conformant body then surfaces during the run as a
+  product conformance failure."
+fi
+
+# -----------------------------------------------------------------------------
+# 5. Seed
 # -----------------------------------------------------------------------------
 # Each level into its own endpoint. Deliberately sequential: the two endpoints
 # share one IRIS instance, and a parallel seed would interleave in the log, which
 # is the artefact an inspector reads to see what was loaded.
-step "4/5 Writing the corpus into both endpoints"
+step "5/6 Writing the corpus into both endpoints"
 
 SEED_VALIDATE="${SEED_VALIDATE:-1}"
 SEED_VALIDATE_STRICT="${SEED_VALIDATE_STRICT:-1}"
@@ -185,7 +245,7 @@ done
 # A short human-readable summary alongside the JSON. The JSON is the evidence;
 # this is what gets pasted into a ticket, and what `make status` and the results
 # documentation quote.
-step "5/5 Recording what was seeded"
+step "6/6 Recording what was seeded"
 
 {
   printf 'ISiK test-data seed record\n'

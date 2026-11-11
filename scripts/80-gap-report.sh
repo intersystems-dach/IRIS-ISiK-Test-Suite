@@ -195,19 +195,25 @@ if not gaps:
           "can pass without proving much.", file=sys.stderr)
     raise SystemExit(0)
 
-# The same two categories gap_report.py keeps out of the gap count: a defect in
-# our own test data, and a case whose precondition this deployment did not meet.
-# Named here rather than imported because this is a shell wrapper's summary, and
-# a stale list would overstate the work rather than crash - so it is kept short
-# and checked against the JSON's own count below.
-not_sut = {"TEST_DATA_DEFECT", "ENVIRONMENT_PREREQUISITE"}
+# The categories gap_report.py keeps out of the gap count, read from the document
+# the generator just wrote rather than restated here. An earlier version of this
+# block did keep its own copy of the list, and on 2026-11-11 that copy was missing
+# UPSTREAM_SUITE_CONFLICT, so this line charged the product with 21 findings where
+# the report said 20. The list is a property of the generator, so it is the
+# generator that states it; the fallback below is for a document written by a
+# version that predates `notSutCategories`, and the count check still guards it.
+not_sut = set(r.get("notSutCategories")
+              or ("TEST_DATA_DEFECT", "ENVIRONMENT_PREREQUISITE",
+                  "UPSTREAM_SUITE_CONFLICT"))
 sut = [g for g in gaps if g.get("category") not in not_sut]
 print(f"  {r.get('irisGapCases', '?')} failing case(s) attributable to the SUT "
       f"-> {len(sut)} distinct defect(s) to fix", file=sys.stderr)
 if len(sut) != r.get("irisGapEntries", len(sut)):
     print(f"  WARNING this summary counted {len(sut)} SUT finding(s) and the "
-          f"report counted {r['irisGapEntries']}. The report is authoritative; "
-          "this line's category list is out of date.", file=sys.stderr)
+          f"report counted {r['irisGapEntries']}. The report is authoritative. "
+          "The two now read the same category list out of the same document, so "
+          "a disagreement here means the document is internally inconsistent: "
+          "re-generate it before quoting either number.", file=sys.stderr)
 if r.get("testDataDefects"):
     print(f"  {r['testDataDefects']} failure(s) are defects in this project's own "
           f"test data, segregated into the report's appendix and excluded from "

@@ -39,6 +39,7 @@
   ],
   "prediction": [
     {
+      "probabilityDecimal": 85,
       "qualitativeRisk": {
         "coding": [
           {

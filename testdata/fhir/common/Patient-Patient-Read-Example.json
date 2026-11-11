@@ -25,6 +25,10 @@
       },
       "system": "http://fhir.de/sid/gkv/kvid-10",
       "value": "X485231029"
+    },
+    {
+      "system": "{{data.patient-read-identifier-system}}",
+      "value": "{{data.patient-read-identifier-value}}"
     }
   ],
   "active": true,

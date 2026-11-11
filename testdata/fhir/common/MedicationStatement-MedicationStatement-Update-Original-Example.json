@@ -13,6 +13,7 @@
   "subject": {
     "reference": "Patient/{{data.medication-patient-id}}"
   },
+  "effectiveDateTime": "2021-07-01",
   "dateAsserted": "2021-07-01",
   "note": [
     {
@@ -22,6 +23,13 @@
   "dosage": [
     {
       "text": "1 Brausetablette morgens",
+      "timing": {
+        "repeat": {
+          "when": [
+            "MORN"
+          ]
+        }
+      },
       "patientInstruction": "Instruktionstest",
       "doseAndRate": [
         {

@@ -111,9 +111,14 @@ like an IRIS gap.
   themselves rather than assembling a URL from a pattern. Needed for the 9
   inventory rows no assertion covers (a resource that is only a reference target,
   or is deleted, is never validated by the suite, so there is no canonical to
-  stamp). The claim is worth making rather than omitting, because IRIS `$validate`
-  runs over the seed corpus before every round — so a profile claim becomes a real
-  check of our own authoring.
+  stamp). The claim is worth making rather than omitting, because stage 4 of
+  seeding validates every body against the profile it claims, using the suite's
+  own reference validator — so a profile claim becomes a real check of our own
+  authoring. Not because IRIS `$validate` runs over the corpus as well: it does,
+  and on the round of record it accepted all 131 bodies with 0 errors, including
+  the five the reference validator rejects (defect 15 in
+  [08-known-limitations.md](08-known-limitations.md)). The system under test is
+  not an oracle for our test data.
 * **`{{pattern.<Profile>.<element>}}`** — resolved to the code this level's
   package set fixes at that element, read out of the StructureDefinition itself.
   For a code the two levels' base profiles disagree on, this is what keeps one
@@ -141,6 +146,34 @@ Keeping these apart means the inventory count still reconciles against the
 extractor, and a reviewer can see at a glance which resources exist on our
 judgement. Each carries a `_provenance` comment naming the scenario that requires
 it; the key is stripped before the file is written, since it is not valid FHIR.
+
+**A fixture must not be dragged into another scenario's search results.** Where
+one scenario requires content that a different scenario's assertion forbids, the
+two resources have to be kept apart by every search parameter the suite searches
+by — otherwise the first resource arrives inside the second scenario's result
+Bundle and fails it. `Encounter-Read-Planned` is the case: it is required to
+carry `plannedStartDate`, an extension whose canonical names FHIR 5.0, while the
+Stufe 5 Encounter searches validate the result Bundle against core FHIR R4,
+which refuses any extension URL naming another version. Four scenarios search
+`Encounter?location=Location/Location-Read-Example`, the ward that the contract's
+`encounter-read-in-progress-location` and `medication-encounter-location` both
+name, and until this correction the only seeded Encounter at that ward was the
+planned one: our in-progress Encounter carried a single `location` entry
+referencing room `Z001`, which `Encounter-Read-In-Progress.feature:52` requires
+it to be in. Every one of those searches therefore returned exactly the resource
+whose required content the same suite refuses. Two authoring changes resolve it.
+The in-progress Encounter now carries both locations — the ward as a literal
+reference and the room as an identifier-only reference, which keeps
+`location.location.reference` single-valued for the `matches()` assertion while
+still satisfying the room assertion — and the planned Encounter references
+`Location-Example` instead, which no scenario searches by. (Stufe 3's location
+search is `@Optional` and outside the selection, so its fixtures are
+unchanged.) What cannot be separated this way
+is separated nowhere: the planned Encounter must reference the Patient of
+`Patient-Read` and must carry class `IMP` and type `normalstationaer`, so a search on those
+criteria returns it by construction and cannot pass. Those cases are reported as
+suite self-contradictions, not as product defects — see
+[08-known-limitations.md](08-known-limitations.md).
 
 ### Fabrication, for the modules release 3.0.0 added
 
@@ -239,7 +272,8 @@ Three host-side checks run in `make check`, and the first two also in `make seed
 so a data defect costs seconds rather than a 45-minute bring-up followed by a
 misleading report. They are repeated in `make seed` because `build/` is regenerated
 there, and checking the tree that was just rendered is the only check that covers
-what will actually be sent.
+what will actually be sent. A fourth check, the reference validator out of the
+suite image itself, runs in `make seed` alone.
 
 **`assertion_check.py`** checks each authored resource against the assertions
 extracted from the feature files. The suite evaluates real FHIRPath — 494
@@ -257,13 +291,35 @@ assertion is reported **under the strength it received**:
 | `UNVERIFIED` | Nothing checkable could be derived, or the assertion is negative (`.empty()`, `not(…)`) where a present element is not evidence either way |
 
 The `UNVERIFIED` count is printed, never hidden: it is the honest measure of how
-much of the specification this check does not cover. IRIS `$validate` and the run
-itself cover the rest.
+much of the specification this check does not cover. The reference-validator
+stage below, and the run itself, cover the rest.
 
-**`search_reference_check.py`** covers the search-scenario reference requirements
-no other check can see: a scenario that searches for resources referencing another
-resource requires that reference to exist, and neither the profile nor the
-assertion extractor can tell you that.
+**`search_reference_check.py`** covers the search-scenario requirements no other
+check can see: a scenario that searches for resources referencing another
+resource requires that reference to exist, and one that searches by a token
+requires some seeded resource to carry that code — neither the profile nor the
+assertion extractor can tell you either. A criterion counts as a requirement
+only where the scenario also asserts `entry.resource.count() > 0`; a search the
+suite allows to come back empty says nothing about the corpus.
+
+Both of the suite's search shapes are read: the criteria in a `Get FHIR resource
+at "…?a=1&b=2"` URL, and the criteria of a `Post FHIR search request to
+"…/_search" … with parameters:` step, which carries them in a Gherkin table
+instead. The second shape was invisible to this check until 2026-11-11, and the
+cost of that is the measure of why it is here: in all 41 of those steps no
+criterion was ever checked against the corpus, and one of them is mandatory —
+`Stufe5/Basis/Observation-Statuses-Search.feature` searches `Observation` by
+`_tag`. No seeded `Observation` carried a tag, so the system under test returned
+an empty bundle, correctly, and a round charged it with a failure that belonged
+to this project's test data.
+
+The remedy is the `meta.tag` on
+`testdata/fhir/Stufe5/Observation-Arterial-Blood-Pressure-Read-Example.json`,
+and that fixture rather than any other because 2.7.0's
+`Stufe5/Vitalparameter/Observation-Search.feature` searches `_tag` together with
+`_id` and then requires *that* id in the bundle. Its system and code are written
+as `{{data.tag-system}}` and `{{data.tag-value}}`, so the corpus follows the
+suite's own contract if a later release changes either.
 
 **`choice_type_check.py`** exists because of a defect this project made and had to
 find the hard way. A FHIR choice element is spelled with its type appended —
@@ -285,6 +341,40 @@ profile assertion, so `$validate` passes it, the reference silently fails to
 resolve, and the scenario searching through it fails in the official report as an
 IRIS search defect. That is the misattribution this project exists to avoid, and it
 is worth 40 lines of Python to make it impossible.
+
+**`validate_corpus.sh`** is the fourth check and the only one that is not ours.
+It runs in `make seed` only, because it needs docker and the pinned suite image:
+it validates every rendered body with the gematik reference validator at the
+version that image carries, loaded with that image's own ISiK validation-module
+plugins, in a container with no network. That is the point — the corpus is judged
+by the same validator, at the same version, that will judge the server's
+responses an hour later. A body it rejects would be returned by the SUT and then
+rejected by the suite, producing a failing scenario that reads in the official
+report exactly like a conformance defect in the product.
+
+Two details decide whether the check is worth anything:
+
+* **It is not the SUT's `$validate`.** The seeder asks the system under test
+  about every body as well (see below), and on the round of record that oracle
+  accepted all 131 bodies with 0 errors — including the five the reference
+  validator rejects. An artefact under test cannot be the oracle for the data it
+  is tested with.
+* **A body with no `meta.profile` is not therefore unchecked.** Those are the
+  fabricated bodies, whose scenario passes the profile URL to the validation step
+  instead, so a `meta.profile`-driven check would skip exactly the bodies with the
+  least provenance. The requirements corpus records which profiles the in-scope
+  scenarios assert against each fixture, so a profileless body is validated
+  against those instead, keyed by level — the same fixture id is asserted against
+  the v3 profile under Stufe 3 and the v5 profile under Stufe 5. Only a body that
+  no in-scope scenario asserts any profile against is left unvalidated, and it is
+  then reported as `no-profile-asserted`, by name, with that statement checked
+  against the suite rather than assumed.
+
+Every message is written to `run/seed/corpus-validation.json` and archived with
+the round. The current corpus: 129 bodies, 123 validated, 0 invalid, and 6 that
+no scenario asserts a profile against. Defects 14, 15 and 19 in
+[08-known-limitations.md](08-known-limitations.md) record what this check found
+the first time it ran, and what it had been unable to see before.
 
 ### Seeding
 

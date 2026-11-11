@@ -8,6 +8,7 @@
   "subject": {
     "reference": "Patient/{{data.medication-patient-id}}"
   },
+  "effectiveDateTime": "2021-09-01",
   "dosage": [
     {
       "text": "1000 mL Infusionslösung mit 50 mL/h intravenös",

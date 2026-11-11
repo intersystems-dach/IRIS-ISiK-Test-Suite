@@ -936,11 +936,32 @@ internal = {
     # even though the container reads it as its own setting.
     "STUFE", "LEVEL", "VOLUME", "ARCHIVE_DIR", "OFFICIAL_DIR", "RUN_TIMEOUT",
     "TESTS_TO_RUN", "OFFICIAL_SCOPE", "LOG_PID", "EXIT_CODE",
+    # STARTED_AT is when this invocation began, taken once and then compared
+    # against the mtime of every archive the suite produced, so that a stale
+    # report left in the shared volume cannot be collected as this round's.
+    # Measured, never configured: an operator-supplied value would defeat the
+    # very assertion it feeds.
+    "STARTED_AT",
     # 70-collect-report.sh
     "RUN_REPORT_DIR", "ANALYSIS_DIR", "PROV_DIR",
     # 80-gap-report.sh
     "GAP_DIR", "GAP_INDEX", "GAP_RUN_DIR", "GAP_RESULTS", "GAP_FEATURES",
     "GAP_MD", "GAP_JSON", "GAP_MANIFEST", "GAP_TMP",
+    # 85-compare-rounds.sh. BASELINE and CANDIDATE are per-invocation arguments
+    # of `make compare`, like RUN_ID above: which two rounds to join is a
+    # judgement about what a figure is meant to show, so it is made on the
+    # command line and not carried in .env, where it would silently apply to
+    # the next comparison as well. COMPARE_MD asks for the human-readable form
+    # beside the JSON. The CMP_* names are the resolved paths.
+    "BASELINE", "CANDIDATE", "COMPARE_MD",
+    "CMP_BASE", "CMP_CAND", "CMP_JSON", "CMP_OUT_DIR", "CMP_MANIFEST",
+    "CMP_REL", "CMP_TMP",
+    # scripts/lib/validate_corpus.sh - seed stage 4, the suite's own reference
+    # validator run against the rendered corpus. All four are locals: the
+    # absolute forms of the directories the caller passed (docker needs absolute
+    # bind-mount sources), the directory the script itself lives in, and the
+    # argument that is added only when a requirements corpus was supplied.
+    "SELF_DIR", "CORPUS_ABS", "OUT_ABS", "ASSERTED_ARG",
     # 01-provision-host.sh. None of these is a knob: they are what the host
     # already is (VERSION_CODENAME and SUDO_USER come from /etc/os-release and
     # sudo respectively) or what the script decided to install. An operator who

@@ -154,19 +154,16 @@ CATEGORIES: dict[str, dict[str, str]] = {
         "signal": "a write the ISiK profile forbids was accepted, or one it "
                   "requires was refused - the status code disagrees with the "
                   "profile, whatever the stored resource then contains",
-        "irisLocus": "the write path's validation depth. Measured on the pinned "
-                     "SUT (2026.2.0.221.0, endpoint /isik5/fhir/r4, "
-                     "ResourceValidation=always): a POST of "
-                     "{\"resourceType\":\"Patient\",\"gender\":\"other\"} - valid "
-                     "R4, no identifier and no name, so invalid against the ISiK "
-                     "Patient profile - is answered 201 Created, while a POST "
-                     "carrying an unknown element is answered 400 with "
-                     "<HSFHIRErr>UnexpectedPropertyName. So the write path "
-                     "validates against the base R4 schema and not against the "
-                     "endpoint's profiles: read the interactions strategy's "
-                     "Add/Update path and what it does with the configured "
-                     "ResourceValidation setting, not the profile validator, "
-                     "which answers $validate correctly.",
+        "irisLocus": "the write path's validation depth: the interactions "
+                     "strategy's Add/Update path and what it does with the "
+                     "endpoint's configured ResourceValidation setting. "
+                     "$validate is a separate code path and a result there does "
+                     "not settle this one. Which schema this build's write path "
+                     "actually enforces is a measurement on a running SUT, so "
+                     "this index - written at `make packages` time, with no SUT "
+                     "reachable - does not state it: take the two-request probe "
+                     "in docs/en/07-reports.md against the round's own endpoint "
+                     "and record the result beside the round.",
     },
     "AUTHORIZATION_SCOPE": {
         "signal": "a request carrying a SMART-on-FHIR access token was answered "
@@ -190,14 +187,42 @@ CATEGORIES: dict[str, dict[str, str]] = {
                      "same reason TEST_DATA_DEFECT is: a count that mixes in "
                      "cases whose precondition failed overstates the work.",
     },
+    "UPSTREAM_SUITE_CONFLICT": {
+        "signal": "the case failed on the suite rather than on the response, in "
+                  "one of two ways, each established from positive evidence "
+                  "only. Either two steps require incompatible things of the "
+                  "same body, so no response can satisfy both - the rejected "
+                  "content is content the suite's own feature files require, see "
+                  "index['suiteRequiredCrossVersionExtensions'] - or the step "
+                  "raised a NullPointerException inside the suite's own "
+                  "evaluation, naming the suite library method whose return "
+                  "value it dereferenced, so it never compared an expectation "
+                  "against the response at all",
+        "irisLocus": "none. This is a defect in the test suite, not in the "
+                     "product and not in this project's test data. Each entry "
+                     "states which of the two kinds it is; where it is a crash, "
+                     "read the exchange anyway, because a response the suite "
+                     "could not evaluate is not thereby a correct one. The "
+                     "first measured instance of the incompatible-requirements "
+                     "kind is the R5 cross-version extension set: a Stufe 5 "
+                     "feature asserts "
+                     "`extension.where(url = 'http://hl7.org/fhir/5.0/"
+                     "StructureDefinition/extension-Encounter.plannedStartDate')"
+                     ".exists()` and the ISiK package defines that extension, "
+                     "while a later step validates the enclosing Bundle against "
+                     "core FHIR R4, which rejects any 5.0 extension URL as an "
+                     "invalid version. Excluded from the gap count for the same "
+                     "reason the two categories below are.",
+    },
     "TEST_DATA_DEFECT": {
         "signal": "the seeded resource was absent, unreadable or already flagged "
-                  "by $validate before the run - so the failure is ours, not the "
-                  "SUT's",
+                  "by $validate before the run, or the content the reference "
+                  "validator rejected is the content this project staged - so "
+                  "the failure is ours, not the SUT's",
         "irisLocus": "none. This is a defect in this project's test data or "
-                     "seeding, proven from provenance/seed/*.json, and is "
-                     "reported in a separate appendix so it cannot inflate the "
-                     "IRIS gap count.",
+                     "seeding, proven from provenance/seed/*.json or from the "
+                     "staged instances in provenance/corpus/, and is reported in "
+                     "a separate appendix so it cannot inflate the IRIS gap count.",
     },
     "UNCLASSIFIED": {
         "signal": "the failing step's shape is not in this index's classification "
@@ -478,9 +503,9 @@ STATUS_RULES = [
 RESPONSE_CODE_RULES = [
     {"when": "the suite demanded 4xx or 422 and the SUT answered 2xx",
      "category": "WRITE_VALIDATION_GAP",
-     "why": "the write was accepted although the profile forbids the body. The "
-            "SUT validated it against base R4 rather than the endpoint's "
-            "profiles - see the category's irisLocus for the measurement"},
+     "why": "the write was accepted although the profile the suite validated "
+            "against forbids the body. What the write path did validate against "
+            "is not established by this case - see the category's irisLocus"},
     {"when": "the suite demanded 2xx and the SUT answered 400",
      "category": "WRITE_VALIDATION_GAP",
      "why": "the mirror image: a body ISiK requires the SUT to accept was "
@@ -911,6 +936,57 @@ EXPECTATION_EXT = "http://hl7.org/fhir/StructureDefinition/capabilitystatement-e
 # Which ISiK level a package belongs to. Derived from the package name, which is
 # the only signal there is, and checked: an ISiK package that matches neither
 # pattern is reported rather than silently filed under one of them.
+def index_cross_version_extensions(root: Path, packages_dir: Path) -> dict:
+    """Cross-version extension URLs the suite requires, and who defines them.
+
+    One class of failure in this rig belongs to neither side of the usual line.
+    A Stufe 5 feature asserts an extension whose URL carries another FHIR
+    version - `http://hl7.org/fhir/5.0/StructureDefinition/extension-Encounter.
+    plannedStartDate` - and the ISiK package itself ships the StructureDefinition
+    for it, so a body that carries it conforms to the ISiK profile. The same
+    body, inside a search Bundle, is then validated against core FHIR R4 by a
+    later step, and the core validator rejects any `/5.0/` extension URL as an
+    invalid version. No response can satisfy both steps: the conflict is inside
+    the test suite.
+
+    Charging that to the product would be wrong, and so would charging it to this
+    project's test data - which is why it is recorded here, from the two sources
+    that settle it, rather than being recognised from the message text alone:
+
+      `requiredBy`  the feature files that assert the URL, with line numbers.
+      `definedBy`   the packages whose StructureDefinition declares that URL.
+
+    gap_report.py attributes a rejection to UPSTREAM_SUITE_CONFLICT only when
+    both lists are non-empty, so a URL that merely looks cross-version, or one
+    this round's packages do not define, stays with the SUT.
+    """
+    rx = re.compile(r"http://hl7\.org/fhir/\d+\.\d+/StructureDefinition/"
+                    r"extension-[A-Za-z0-9_.-]+")
+    out: dict[str, dict] = {}
+    for feat in fp.load_features(root):
+        for sc in feat.scenarios:
+            for st in sc.steps:
+                text = st.full + (st.docstring or "")
+                for url in rx.findall(text):
+                    rec = out.setdefault(url, {"requiredBy": [], "definedBy": []})
+                    rec["requiredBy"].append({"feature": feat.rel, "line": st.line,
+                                              "level": feat.level})
+    if not out or not packages_dir.is_dir():
+        return out
+    for sd in sorted(packages_dir.glob("*/*.json")):
+        name = sd.name
+        if not name.startswith("StructureDefinition-"):
+            continue
+        try:
+            doc = json.loads(sd.read_text(encoding="utf-8"))
+        except (ValueError, OSError):
+            continue
+        url = doc.get("url")
+        if isinstance(url, str) and url in out:
+            out[url]["definedBy"].append(sd.parent.name)
+    return out
+
+
 def level_of_package(name: str) -> str | None:
     if name == "de.gematik.isik" or name.startswith("de.gematik.isik5"):
         return "Stufe5"
@@ -1295,6 +1371,14 @@ def main() -> int:
                                                      args.plugins)
     notes.extend(module_notes)
 
+    xver = index_cross_version_extensions(args.features_root, args.packages)
+    for url, rec in sorted(xver.items()):
+        if not rec["definedBy"]:
+            notes.append(f"the suite's feature files require the cross-version "
+                         f"extension {url}, which no package loaded by this round "
+                         f"defines; a rejection of it will be attributed to the "
+                         f"SUT rather than to the suite")
+
     # --- shape census, against the pinned expectations -----------------------
     # Recorded rather than asserted so that the index itself carries the evidence
     # for the classification's completeness, and so a suite version bump produces
@@ -1361,6 +1445,7 @@ def main() -> int:
             "operations": pkg["operations"],
             "operationDefinitions": pkg["operationDefinitions"],
         },
+        "suiteRequiredCrossVersionExtensions": xver,
         "profileElements": pkg["profileElements"],
         "canonicals": pkg["canonicals"],
         "packages": pkg["packages"],

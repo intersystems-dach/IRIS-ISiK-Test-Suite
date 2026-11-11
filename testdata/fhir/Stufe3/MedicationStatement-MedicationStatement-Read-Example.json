@@ -44,5 +44,10 @@
         }
       ]
     }
+  ],
+  "reasonReference": [
+    {
+      "reference": "Condition/{{data.medication-condition-id}}"
+    }
   ]
 }

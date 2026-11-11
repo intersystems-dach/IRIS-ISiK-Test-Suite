@@ -43,6 +43,7 @@
   "name": [
     {
       "use": "official",
+      "text": "Walter Musterarzt",
       "family": "Musterarzt",
       "_family": {
         "extension": [
@@ -103,7 +104,7 @@
         "coding": [
           {
             "system": "urn:oid:1.2.276.0.76.5.514",
-            "code": "010",
+            "code": "011001",
             "display": "FA Allgemeinmedizin"
           }
         ]

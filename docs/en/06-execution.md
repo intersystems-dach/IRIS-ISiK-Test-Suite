@@ -469,6 +469,13 @@ The blocking set — `scopeMismatch`, `notExecuted`, `missingTestReport`,
 `totalsDisagree`, `wrongLevel`, `archiveNotExtracted`, `scenarioJvmOom` — means the
 report does not cover the full certification scope, and the document says so in a
 block quote.
+
+`scopeExcess` is the opposite direction of `scopeMismatch` and is reported in
+different words, because *more* cases than the pinned suite specifies is not a
+coverage gap: the scope is covered and no verdict is missing, but some case was
+counted twice. It is nevertheless a blocking anomaly for the exit status, where
+`scopeMismatch` is not — a narrowed debugging run legitimately produces fewer
+cases, nothing legitimately produces more.
 `archiveChanged` is stronger still: an archive that no longer matches the checksum
 recorded when the run finished means the bundle cannot be used as evidence at all,
 because the official report is supposed to be immutable from the moment
