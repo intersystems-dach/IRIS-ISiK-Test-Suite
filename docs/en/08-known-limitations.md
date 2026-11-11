@@ -1426,6 +1426,77 @@ identity is deliberately mechanical — what the record shows, not what a reader
 infers from it. Grouping by root cause across such entries is the assessment's
 job, and the assessment does it there.
 
+### One further defect, found by asking what "already installed" installed
+
+**31. The marker said an installation was present, not which one.** The IRIS
+container installs the FHIR endpoints at first start and then writes
+`run/iris-state/bootstrap.done`. A later start that finds the marker reuses the
+installation instead of repeating a package import that takes minutes. The
+marker was empty: it recorded that an install had happened, not what it had
+installed. Two things make that the wrong question, and both occurred here.
+
+a) **A round can be pinned to a different test-suite version than the one the
+   running instance was installed for.** The package plan is derived from the
+   suite image and rewritten by `make packages`; the marker lives on the host
+   and survives that. Round J (`run-20261111T144543Z`) was pinned to suite
+   3.0.9 and analysed against the 3.0.9 plan, but it ran against the instance
+   installed at 12:24:57Z from the 2.7.0 plan. Its archived
+   `provenance/iris-provenance.json` records `packagePlanSource`
+   `gematik1/isik-testsuite:2.7.0` where its archived `provenance/package-plan.json`
+   records `sourceImage` `gematik1/isik-testsuite:3.0.9`, and the ISIK5 endpoint
+   held `de.gematik.isik@5.1.2`, `de.fhir.medication@1.0.0`,
+   `hl7.terminology.r4@6.5.0` and `hl7.fhir.uv.sdc@3.0.0` where the plan assigns
+   `5.1.3`, `1.0.4`, `7.1.0` and `4.0.0-ballot`. The round's own log states the
+   reuse in one line — "isik-iris is already running - keeping its bootstrap
+   markers" — and nothing else anywhere said that the packages were another
+   round's. The loaded packages are what an IRIS FHIR endpoint validates against
+   and what it declares in its `CapabilityStatement`, so a profile or search
+   parameter introduced in `5.1.3` was absent for a reason that lay in the rig.
+
+b) **A container recreate destroys the installation and leaves the marker
+   behind.** The instance's databases live in the container's writable layer;
+   there is no named volume for them. Anything that recreates the container
+   therefore removes every namespace and endpoint while the marker, on a host
+   bind mount, continues to report the installation as present. The next round
+   then fails at its first request, for a cause nothing in its output names.
+
+Three changes, each closing the hole at a different distance from the error.
+
+The marker now carries the fingerprint of the plan it installed — the suite
+image the plan came from and, per endpoint, its namespace, its base URL and the
+ordered packages loaded into it (`iris/bootstrap/plan_fingerprint.py`, used by
+every side so that they cannot disagree about what "the same installation"
+means). A second copy is written inside the container's own filesystem, where it
+shares the lifetime of the databases rather than of the bind mount. Reuse
+requires both copies to match this start's plan; anything else reinstalls, which
+costs minutes and never a wrong measurement. It is deliberately not a digest of
+the plan file, which would force a reinstall when regeneration reworded a
+comment without changing a single package.
+
+`make up` refuses to start a round against a running instance whose marker names
+another plan, and says which two plans those are and what to do about it. This
+is the only place that case can be caught: `compose up -d` on an unchanged,
+already-running container does not restart it, so the container's own guard is
+never reached. It is a stop rather than an automatic rebuild — destroying a live
+installation is the operator's decision, and a mistyped `TESTSUITE_VERSION`
+should cost a corrected line in `.env` rather than a reinstallation.
+
+`make report` refuses to publish a round whose archived provenance disagrees
+with its archived plan. The check is made from the two files the bundle itself
+carries, so an inspector can repeat it without this rig, and it needs no
+fingerprint to be useful: comparing the plan's `sourceImage` against the SUT's
+recorded `packagePlanSource` is what identified this defect, and it is the
+fallback for any round installed before the fingerprint existed. Applied to the
+rounds already on record, the check passes round I — the 2.7.0 plan it publishes
+is the one its endpoints were installed from — and refuses round J.
+
+Round J is therefore withdrawn as a measurement of suite 3.0.9: what it measured
+was conformance against the ISiK packages of the 2.7.0 plan. It is superseded by
+round K, which installed the 3.0.9 plan cold and measured that. Round I is
+unaffected and remains the 2.7.0 round of record. No part of round J's analysis
+is reused: the round was re-run rather than re-analysed, because the difference
+is in what the SUT was, not in how its answers were read.
+
 ### In the ISiK packages rather than in the suite: same version, two definitions
 
 Found by the parity gate on the official 2026.2 round, and **not worked around** —

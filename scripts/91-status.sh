@@ -116,9 +116,30 @@ else
   kv "status" "no status file - the container has not started, or run/ was cleaned"
 fi
 
-[[ -f "${STATE_DIR}/bootstrap.done" ]] \
-  && kv "done marker" "present (a restart will reuse this installation)" \
-  || kv "done marker" "absent"
+# The marker carries the fingerprint of the plan it installed, so "present" and
+# "describes what is configured now" are two different statements and the second
+# is the one that matters: a marker from another plan means the next start
+# reinstalls, and a round started before it does measures the packages named by
+# the marker rather than the ones in vendor/package-plan.json.
+if [[ -f "${STATE_DIR}/bootstrap.done" ]]; then
+  marker_fp="$(head -n 1 "${STATE_DIR}/bootstrap.done" 2>/dev/null || true)"
+  plan_fp=""
+  [[ -f "${VENDOR_DIR}/package-plan.json" ]] \
+    && plan_fp="$(python3 "${REPO_ROOT}/iris/bootstrap/plan_fingerprint.py" \
+                  "${VENDOR_DIR}/package-plan.json" 2>/dev/null || true)"
+  if [[ -z "$marker_fp" ]]; then
+    kv "done marker" "present, from before the fingerprint was recorded (the next start reinstalls)"
+  elif [[ -z "$plan_fp" ]]; then
+    kv "done marker" "present for plan ${marker_fp:0:12}; no plan to compare it against (run make packages)"
+  elif [[ "$marker_fp" == "$plan_fp" ]]; then
+    kv "done marker" "present for plan ${marker_fp:0:12}, which is the configured one (a restart reuses this installation)"
+  else
+    kv "done marker" "present for plan ${marker_fp:0:12}, but vendor/package-plan.json is ${plan_fp:0:12}"
+    kv "" "the installed packages are not the configured ones - the next start reinstalls"
+  fi
+else
+  kv "done marker" "absent"
+fi
 
 if [[ -f "${STATE_DIR}/bootstrap.log" ]]; then
   kv "log" "run/iris-state/bootstrap.log ($(wc -l <"${STATE_DIR}/bootstrap.log" | tr -d ' ') lines)"

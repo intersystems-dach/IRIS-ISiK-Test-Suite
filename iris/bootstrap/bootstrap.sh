@@ -159,11 +159,73 @@ done <<<"$lmf_ok"
 # The container may be restarted without a rebuild (docker restart, host reboot).
 # The ObjectScript side is itself idempotent, but re-running a ~30 minute package
 # import for nothing is worth avoiding, so a completed marker short-circuits.
-if [[ -f "${STATE_DIR}/bootstrap.done" ]]; then
-    say "bootstrap.done present - endpoints were already installed by a previous start"
-    say "delete ${STATE_DIR}/bootstrap.done (or run 'make clean') to force a reinstall"
+#
+# What the marker has to establish, though, is not "an install happened here
+# once". It is "the installation in this instance is the one this round asks
+# for". Two things break that, and both were measured on this rig:
+#
+#   a changed plan     The marker lives in the host-mounted state directory,
+#                      while the package plan is rewritten by `make packages`.
+#                      Pinning the suite to another version and starting again
+#                      therefore reuses the previous round's packages. That is
+#                      how a round pinned to suite 3.0.9 came to measure an
+#                      ISIK5 endpoint carrying de.gematik.isik 5.1.2 from the
+#                      2.7.0 plan: the profiles it validated against and the
+#                      search parameters it declared were the previous round's,
+#                      so the round measured the rig and not the product.
+#
+#   a wiped instance   The instance's databases live in the container's writable
+#                      layer - there is no named volume for them - so anything
+#                      that recreates the container destroys every namespace and
+#                      endpoint, while the marker, being on the host, survives
+#                      and reports the installation as present. The round then
+#                      fails at the first request against an endpoint that is
+#                      no longer there, for a reason nothing on the host states.
+#
+# So the marker records the fingerprint of the plan it installed, and a second
+# copy of it is written inside the container's own filesystem. Reuse requires
+# both to agree with this start's plan: the plan must be the same one, and the
+# installation must still physically be there. Anything else reinstalls - which
+# costs half an hour, and never a wrong measurement. A marker from before this
+# became the rule carries no fingerprint and so reinstalls once.
+DONE_MARKER="${STATE_DIR}/bootstrap.done"
+# Not under $STATE_DIR: the point of this one is that it shares the lifetime of
+# the databases the install created, which the writable layer has and the bind
+# mount does not. mgr/ is where those databases are.
+INSTANCE_MARKER=/usr/irissys/mgr/isik-bootstrap.done
+
+plan_fp="$(python3 /opt/isik/bootstrap/plan_fingerprint.py "$ISIK_PACKAGE_PLAN" 2>&1)" \
+    || { say "the package plan's fingerprint could not be computed: ${plan_fp}"
+         say "this start will install rather than reuse"
+         plan_fp=""; }
+[[ -n "$plan_fp" ]] && say "package plan fingerprint: ${plan_fp}"
+
+if [[ -n "$plan_fp" && -f "$DONE_MARKER" && -f "$INSTANCE_MARKER" ]] \
+   && [[ "$(head -n 1 "$DONE_MARKER" 2>/dev/null)" == "$plan_fp" ]] \
+   && [[ "$(head -n 1 "$INSTANCE_MARKER" 2>/dev/null)" == "$plan_fp" ]]; then
+    say "this instance already holds the installation this plan describes - reusing it"
+    say "delete ${DONE_MARKER} (or run 'make clean') to force a reinstall"
     set_status "done: reused previous installation"
     exit 0
+fi
+
+if [[ -f "$DONE_MARKER" ]]; then
+    # Say which of the two it was, because they call for different things from
+    # the operator: a changed plan is a deliberate act, a wiped instance is not.
+    if [[ ! -f "$INSTANCE_MARKER" ]]; then
+        say "a completion marker is present on the host but this instance holds no"
+        say "installation of its own - the container was recreated and its databases"
+        say "went with it. Installing from scratch."
+    else
+        say "the completion marker describes a different package plan"
+        say "  installed: $(head -n 1 "$DONE_MARKER" 2>/dev/null || true)"
+        say "  this plan: ${plan_fp}"
+        say "Reusing it would measure the previously installed packages. Installing"
+        say "from scratch."
+    fi
+    # Neither marker may survive a failed reinstall: a later start must not read
+    # a half-removed installation as complete.
+    rm -f "$DONE_MARKER" "$INSTANCE_MARKER"
 fi
 
 # --- Drive IRIS --------------------------------------------------------------
@@ -270,7 +332,29 @@ if (( verify_rc != 0 )) || ! printf '%s' "$verify_out" | grep -qa 'VERIFY OK'; t
        rig rather than the SUT."
 fi
 
-touch "${STATE_DIR}/bootstrap.done"
+# Both markers carry the fingerprint of the plan that was just installed, so the
+# next start can tell whether this installation is the one it wants (see the
+# Idempotency section). The copy in mgr/ shares its lifetime with the databases.
+printf '%s\n' "$plan_fp" >"${STATE_DIR}/bootstrap.done"
+printf '%s\n' "$plan_fp" >/usr/irissys/mgr/isik-bootstrap.done
+
+# The same fingerprint goes into the SUT's own provenance record, which is what a
+# published round archives. Written here rather than by ISiK.Setup because this is
+# where it is computed, and a round whose archived plan does not match the
+# installation it measured has to be refusable from the bundle alone - which is
+# what scripts/70-collect-report.sh does with this field.
+python3 - "${STATE_DIR}/iris-provenance.json" "$plan_fp" <<'PY' || \
+    say "note: the plan fingerprint could not be added to iris-provenance.json"
+import json, sys
+path, fp = sys.argv[1], sys.argv[2]
+with open(path, encoding="utf-8") as handle:
+    doc = json.load(handle)
+doc["packagePlanFingerprint"] = fp
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(doc, handle, indent=2, ensure_ascii=False)
+    handle.write("\n")
+PY
+
 set_status "done: endpoints installed and verified"
 say "=========================================================================="
 say "bootstrap complete"

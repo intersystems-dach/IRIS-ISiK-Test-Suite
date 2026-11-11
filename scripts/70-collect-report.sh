@@ -260,6 +260,92 @@ copy_prov "${VENDOR_DIR}/package-plan.json" "package-plan.json" \
   "which package version is assigned to which endpoint, and why" \
   "scripts/lib/plan_packages.py"
 
+# --- Did this round measure the plan it is about to publish? -----------------
+# The two files just archived are the round's claim and the SUT's own record of
+# what it holds, and they are the only pair that can show the one error no
+# verdict in this bundle would survive: a round analysed against one package
+# plan but measured against an endpoint installed from another. The installed
+# packages decide which profiles the SUT validates against and which search
+# parameters it declares, so under a mismatch the conformance reported here is
+# the previous installation's.
+#
+# It happened: a round pinned to suite 3.0.9 ran against an ISIK5 endpoint
+# installed from the 2.7.0 plan, carrying de.gematik.isik 5.1.2 where the plan
+# says 5.1.3. scripts/40-up.sh now refuses to start such a round and
+# iris/bootstrap/bootstrap.sh reinstalls rather than reuse - this is the check
+# that makes the bundle itself unable to assert it, which is the one that an
+# auditor can repeat without the rig.
+#
+# A hard stop, and deliberately so. There is no post-hoc repair for it: the
+# measurements were taken against the wrong installation and the round is void.
+# The raw results stay where they are under run/, nothing is deleted, and
+# 'make clean' followed by 'make all' produces a round that can be published.
+plan_match_rc=0
+if [[ ! -f "${PROV_DIR}/iris-provenance.json" || ! -f "${PROV_DIR}/package-plan.json" ]]; then
+  # Both are copied above and their absence is already reported there; without
+  # them there is nothing to compare, which is a gap in the bundle rather than a
+  # mismatch, and the warning below says exactly that.
+  plan_match_rc=2
+else
+python3 - "${PROV_DIR}/iris-provenance.json" "${PROV_DIR}/package-plan.json" \
+         "${REPO_ROOT}/iris/bootstrap/plan_fingerprint.py" <<'PY' || plan_match_rc=$?
+import importlib.util
+import json
+import sys
+
+prov_path, plan_path, fp_module = sys.argv[1:4]
+
+spec = importlib.util.spec_from_file_location("plan_fingerprint", fp_module)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+
+with open(plan_path, encoding="utf-8") as handle:
+    plan = json.load(handle)
+with open(prov_path, encoding="utf-8") as handle:
+    prov = json.load(handle)
+
+planned = module.fingerprint(plan)
+installed = prov.get("packagePlanFingerprint") or ""
+if installed:
+    if installed == planned:
+        print(f"the SUT holds the plan this round publishes ({planned[:12]})")
+        sys.exit(0)
+    print(f"installed plan:  {installed}", file=sys.stderr)
+    print(f"published plan:  {planned}", file=sys.stderr)
+    sys.exit(1)
+
+# No fingerprint: the installation predates it being recorded. The suite image
+# the plan was derived from is the weaker comparison, and it is what caught this
+# in the first place, so it is still worth making.
+source = plan.get("sourceImage") or "?"
+recorded = prov.get("packagePlanSource") or "?"
+print("the SUT's provenance records no package plan fingerprint - this "
+      "installation predates it", file=sys.stderr)
+if recorded != source:
+    print(f"installed from:  {recorded}", file=sys.stderr)
+    print(f"published as:    {source}", file=sys.stderr)
+    sys.exit(1)
+print(f"the plan's source image matches what the SUT recorded ({source}); the "
+      "package versions themselves are unconfirmed", file=sys.stderr)
+sys.exit(2)
+PY
+fi
+
+case "$plan_match_rc" in
+  0) ok "the SUT was installed from the package plan this round publishes" ;;
+  2) warn "this round cannot confirm from the bundle that the SUT was installed from the package plan it publishes - see the lines above" ;;
+  *) die "this round measured an endpoint that was not installed from the package plan it would publish - see the two fingerprints above.
+
+  The installed packages decide which profiles the SUT validates against and
+  which search parameters it declares, so every conformance verdict here would
+  be the previous installation's. The round cannot be published.
+
+  Nothing has been deleted: the raw results are under run/ and reports/.
+  Install the configured plan and run the round again:
+
+      make clean && make all" ;;
+esac
+
 # The resolved version record, complete. This is the deployment's whole resolved
 # configuration - image digests, the versions actually pulled, and the generated
 # credentials - so it is the single file from which the round can be reconstructed.

@@ -155,6 +155,53 @@ fi
 # the instance the rest of this script is about to wait for: leave them alone.
 if [[ "$(docker inspect "$IRIS_CONTAINER" --format '{{.State.Status}}' 2>/dev/null || true)" == "running" ]]; then
   log "${IRIS_CONTAINER} is already running - keeping its bootstrap markers (they describe this instance)"
+
+  # Reusing a running instance is only sound while it holds the installation this
+  # round is configured for. `compose up -d` on an unchanged, already-running
+  # container does nothing whatsoever - it does not restart it, so bootstrap.sh
+  # does not run and the container's own guard against a changed package plan
+  # never gets the chance to fire. The host is therefore the only place this can
+  # be caught, and it has to be caught before a single request is sent.
+  #
+  # It is a hard stop rather than an automatic rebuild: destroying a live SUT
+  # installation is a decision for the operator, and a mistyped TESTSUITE_VERSION
+  # should cost a corrected line in .env, not half an hour of reinstallation.
+  #
+  # This is the defect that let a round pinned to suite 3.0.9 measure an ISIK5
+  # endpoint loaded from the 2.7.0 plan (de.gematik.isik 5.1.2 rather than 5.1.3).
+  # Nothing in that round's own output said so; it had to be found by reading the
+  # SUT's provenance against the plan afterwards.
+  marker_fp="$(head -n 1 "${STATE_DIR}/bootstrap.done" 2>/dev/null || true)"
+  plan_fp="$(python3 "${REPO_ROOT}/iris/bootstrap/plan_fingerprint.py" \
+             "${VENDOR_DIR}/package-plan.json" 2>/dev/null || true)"
+  if [[ -z "$plan_fp" ]]; then
+    warn "the configured package plan could not be fingerprinted - this round cannot confirm that the running instance holds the packages it describes"
+  elif [[ -z "$marker_fp" ]]; then
+    # No marker at all, or one from before the fingerprint was recorded. The
+    # container will reinstall when it is next started, but it is running now and
+    # nothing here can tell what it installed.
+    warn "the running instance's completion marker names no package plan, so it cannot be matched against vendor/package-plan.json"
+    warn "if this instance predates this check, 'make clean' then 'make all' installs the configured plan and records it"
+  elif [[ "$marker_fp" != "$plan_fp" ]]; then
+    die "the running IRIS instance was installed from a different package plan.
+
+  installed: ${marker_fp}
+  configured: ${plan_fp}  (vendor/package-plan.json, from $(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("sourceImage","?"))' "${VENDOR_DIR}/package-plan.json" 2>/dev/null || echo '?'))
+
+  Its endpoints validate against the profiles and declare the search parameters
+  of the plan it was installed from, not the configured one, so a round against
+  it would report the previous installation's conformance as this one's.
+
+  A package plan is installed once, at first start, and cannot be changed under a
+  running instance. Install the configured plan with:
+
+      make clean && make all
+
+  Keep the instance as it is instead by restoring the suite version it was
+  installed for in .env (TESTSUITE_VERSION) and running 'make packages'."
+  else
+    ok "the running instance holds the configured package plan (${plan_fp:0:12})"
+  fi
 else
   rm -f "$STATUS_FILE" "${STATE_DIR}/bootstrap.done"
 fi

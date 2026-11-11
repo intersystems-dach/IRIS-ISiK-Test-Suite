@@ -46,7 +46,9 @@ running instance.
 1. **Check configuration.** Every `ISIK_*` variable must be non-empty. A missing
    one fails before a namespace is created, not halfway through.
 2. **Short-circuit.** `state/bootstrap.done` means a previous start already
-   installed everything; a needless package re-import costs tens of minutes.
+   installed everything; a needless package re-import costs tens of minutes. The
+   marker has to say *which* installation, not merely that there was one — see
+   [What the completion marker has to establish](#what-the-completion-marker-has-to-establish).
 3. **Compile and run.** `iris session iris -U HSCUSTOM` loads `/opt/isik/src` with
    `$system.OBJ.LoadDir(…, "ck", …)` and calls `ISiK.Setup.Run()`. Compiling at
    runtime rather than shipping a pre-built export keeps the ObjectScript
@@ -143,6 +145,40 @@ so leave them alone. Only the not-running case clears them.
 The general form of the finding, worth carrying to any similar rig: **`compose up -d`
 is not a bring-up, it is a reconciliation.** Any host-side action that assumes a
 container start will happen is wrong whenever the desired state is already met.
+
+### What the completion marker has to establish
+
+Not "an installation happened here", but "the installation in this instance is
+the one this round is configured for". The marker therefore holds the
+**fingerprint of the package plan it installed**, computed by
+[`plan_fingerprint.py`](../../iris/bootstrap/plan_fingerprint.py) over the suite
+image the plan came from and, per endpoint, its namespace, its base URL and the
+ordered packages loaded into it. Not a digest of the plan file: regenerating the
+plan can reword a comment or reorder a mapping without changing one package, and
+a digest would spend minutes reinstalling for that.
+
+A second copy of the fingerprint is written to `/usr/irissys/mgr/isik-bootstrap.done`,
+inside the container. The reason is the asymmetry that the section above exploits
+in the other direction: the host-side marker outlives the container, and the
+instance's databases do not — there is no named volume for them, so a recreate
+destroys every namespace and endpoint while the marker survives to call the
+installation present. Reuse requires **both** copies to match this start's plan.
+Anything else reinstalls.
+
+Three places act on it, because the same error is reachable from three
+distances:
+
+| Where | What it does |
+|---|---|
+| `bootstrap.sh`, at container start | Reuses the installation only if both markers carry this plan's fingerprint; otherwise installs, and logs which of the two conditions failed |
+| `40-up.sh`, before a round | Refuses to run against a **running** instance whose marker names another plan. The only place that case is catchable: `compose up -d` does not restart an unchanged container, so the container's own guard is never reached |
+| `70-collect-report.sh`, at publication | Refuses to publish a round whose archived `iris-provenance.json` disagrees with its archived `package-plan.json`, from the two files the bundle itself carries — so the check is repeatable without this rig |
+
+This is defect 31 in
+[08-known-limitations.md](08-known-limitations.md#one-further-defect-found-by-asking-what-already-installed-installed),
+where the measurement that found it is recorded: a round pinned to suite 3.0.9
+that ran against an endpoint installed from the 2.7.0 plan, two ISiK package
+versions behind what it published.
 
 ## FHIR packages
 
