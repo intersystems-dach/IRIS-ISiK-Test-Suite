@@ -13,11 +13,12 @@ reason it existed has to be addressed too.
 
 ## What a result from this rig does and does not prove
 
-**Does prove.** That the pinned Gematik ISiK test suite, at 2.7.0, run in its
-official container with the official certification tag expression, against a stock
-IRIS for Health 2026.2 endpoint loaded with exactly the FHIR packages the suite's
-own reference validator validates against, produced the verdicts recorded in
-`test-report.zip`.
+**Does prove.** That the Gematik ISiK test suite, at the version the round pins
+(`TESTSUITE_VERSION`, recorded per round in `provenance/env.resolved.txt`), run
+in its official container with the official certification tag expression,
+against a stock IRIS for Health endpoint of the pinned build, loaded with
+exactly the FHIR packages the suite's own reference validator validates against,
+produced the verdicts recorded in `test-report.zip`.
 
 **Does not prove:**
 
@@ -1350,6 +1351,80 @@ requested resource, and the self link records the executed search as
 reference either `Substance` or `Medication`. That behaviour belongs in the
 report; this case's failure does not. On round G the rule fires exactly once: 42
 failing cases, 41 of them the product's.
+
+### One further defect, found by asking what an entry's title covers
+
+**30. An entry described one of its cases and was titled after it.** The gap
+report groups failing cases by root cause and then describes each group from the
+*first* case that reached it. Where a group covers cases that differ in what
+they tested, every field of that description — the title, the FHIR feature, the
+expectation, the cited requirement — was true of one case and asserted of all of
+them.
+
+Measured on the two published rounds, before the fix:
+
+a) Round I's largest finding was titled "reference element `subject`" and
+   counted six cases. Their steps name three different elements: `subject`
+   (`Stufe3/Medikation/MedicationAdministration-Search.feature:81`, `Stufe5` :55),
+   `performer.actor` (`Stufe3` :91, `Stufe5` :101) and `context`
+   (`Stufe3/Medikation/MedicationStatement-Search.feature:55`, `Stufe3` :56).
+   The suite's `reference-element-all` step words its failure identically for
+   all three, and the group key falls back to the message, so three elements
+   arrived at one key and two of them were not described at all.
+
+b) The same message-based key put genuinely different searches in one entry.
+   Round J's composite-parameter finding also held a
+   `DocumentReference?creation=2026-01-31&patient=…` case; round I's held that
+   one, a `MedicationRequest?requester.identifier=…` case and a
+   `Patient?given:contains=An%26na%5C%2CVic%24tor%7Ca` case. None of the three
+   was visible in the report: the entry named an `Observation` search on
+   `combo-code-value-quantity`.
+
+c) The same key split one defect in two in the opposite direction. Round J
+   reported the unhonoured `Observation` composite parameter as two entries,
+   because one feature file spells the parameter into its error text
+   ("…do not fully match the combo-code-value-quantity search criteria") and the
+   others do not.
+
+Two changes. First, a group's description is now merged over every case it
+covers: the feature and the expectation list each distinct value, and the cited
+requirements and packages are the union. Where the cases share one search shape
+the title is that shape and a note records the queries as measured, because
+joining several search URLs into a heading is unreadable without being more
+precise. A group whose cases were attributed to different *mechanisms* is
+reported as a warning rather than merged, since one entry cannot state two
+mechanisms without saying which case has which. Second, a search-semantics
+finding is keyed on what was searched rather than on how the suite worded the
+failure: the resource type, the set of parameter names, and which of the two
+assertions failed — that the result set was empty, or that its members did not
+satisfy the criteria. The suite's wording carries a stack frame and varies
+between feature files; neither belongs in the identity of a defect.
+
+Nothing about any case's attribution changes, so no round's charged case count,
+category count or reconciliation moves. What changes is how those cases are
+grouped and described: round J now reports 17 findings, 14 of them the
+product's, from the same 41 failing and 33 charged cases; round I reports 21
+findings, 20 of them the product's, from the same 50 failing and 47 charged
+cases — three more work items than before, because three real product findings
+had been absorbed into an entry about something else.
+
+Both published rounds were re-analysed from their own archived results. Round I
+ran on suite 2.7.0, so its 2.7.0 attribution index was rebuilt first and the
+rebuilt package set was verified identical, version by version and digest by
+digest, to the manifest the round itself recorded; the lab was then returned to
+the 3.0.9 state of the round of record and verified against round J's manifest
+the same way. The official reports are untouched by all of this: the gap
+analysis is a derived document.
+
+One limitation remains, and is not worked around: the same product behaviour
+still appears as two entries when the suite exercises it with different
+companion criteria. In round I, `MedicationRequest?requester.identifier` is one
+entry and `MedicationRequest?patient&requester.identifier` another, because the
+Stufe 3 and Stufe 5 features send the chain with and without a patient
+criterion. The two entries state the identical expectation, and an entry's
+identity is deliberately mechanical — what the record shows, not what a reader
+infers from it. Grouping by root cause across such entries is the assessment's
+job, and the assessment does it there.
 
 ### In the ISiK packages rather than in the suite: same version, two definitions
 

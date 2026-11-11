@@ -311,6 +311,13 @@ RE_ASSERTJ_VALUES = re.compile(
     r"^\s*Element value:\s*\n(?P<actual>.*?)\nExpected:\s*\n(?P<expected>.*?)\s*$",
     re.DOTALL)
 RE_ATTR_OF_STEP = re.compile(r'with attribute "([^"]*)" matches "')
+# The suite asserts two different things about a search result with the same
+# kind of step: that it is not empty, and that its members satisfy the criteria.
+# Which one failed is part of the finding's identity, and it is read from the
+# assertion because the suite's own error wording for the second differs from
+# feature to feature.
+RE_EMPTY_RESULT_ASSERT = re.compile(
+    r"\bcount\(\)\s*(?:>\s*0|>=\s*1)|\bentry(?:\.resource)?\.exists\(\)")
 
 
 def response_code_verdict(failure: dict, cls: dict) -> tuple[str, str] | None:
@@ -707,6 +714,24 @@ def attribute(index: dict, category: str, cls: dict, sub: dict | None,
         expr = args.get("expr")
         out["expected"] = (f"the search result Bundle satisfies `{expr}`" if expr
                            else "the search returns exactly the expected result set")
+        # What identifies this finding is which parameters the SUT mishandled on
+        # which resource type - not the literal query. The suite sends the same
+        # search once per module with a different patient, and that is one
+        # defect; whereas two genuinely different searches must not share an
+        # entry just because the suite words both failures identically, which is
+        # what the message-based key did (measured: an `Observation` composite
+        # and a `DocumentReference` date search in one entry titled after the
+        # composite).
+        if rtype and query:
+            pnames = sorted({p.split("=", 1)[0].split(":", 1)[0]
+                             for p in query.split("&") if p})
+            kind = ("empty-result" if expr and RE_EMPTY_RESULT_ASSERT.search(expr)
+                    else "non-matching-result")
+            out["groupKey"] = f"{rtype}?{'&'.join(pnames)} [{kind}]"
+            # How to title the finding when its cases ran different queries of
+            # the same shape, which is what the key groups.
+            out["featureShape"] = (f"search on `{rtype}` with "
+                                   + ", ".join(f"`{p}`" for p in pnames))
         return out
 
     # --- reference integrity -------------------------------------------------
@@ -1666,9 +1691,6 @@ def root_cause_key(category: str, attribution: dict, failure: dict,
     entry lists both levels. Splitting by level would double the work list and
     misrepresent the amount of work.
     """
-    args = dict(cls.get("args") or {})
-    if sub:
-        args.update(sub.get("args") or {})
     feature = attribution.get("feature") or ""
     if prereq_rule:
         # One entry per unmet precondition, not per scenario that tripped over
@@ -1679,6 +1701,15 @@ def root_cause_key(category: str, attribution: dict, failure: dict,
     if category in ("MISSING_SEARCH_PARAM", "CAPABILITY_STATEMENT_GAP",
                     "UNSUPPORTED_OPERATION"):
         return (category, feature)
+    if category == "SEARCH_SEMANTICS" and attribution.get("groupKey"):
+        # The search shape and which assertion it failed - deliberately not the
+        # message, which carries the suite's wording and a stack frame and so
+        # splits one defect into several: measured, the same unhonoured
+        # `Observation` composite parameter produced two entries because one
+        # feature file spells the parameter into its error text and another
+        # does not.
+        return (category, attribution["groupKey"],
+                failure.get("errorType") or "-")
     if category == "PROFILE_NONCONFORMANCE":
         return (category, feature, normalise_message(failure.get("message") or ""))
     if category == "WRITE_VALIDATION_GAP":
@@ -1840,6 +1871,10 @@ def analyse(results: dict, index: dict, seed: dict, corpus: dict, run_dir: Path,
                                       ).get("irisLocus")),
                     "gherkinStep": gherkin,
                     "substep": substep,
+                    # Every instance's attribution, merged once the group is
+                    # closed. The fields above are the first instance's, and a
+                    # key can legitimately cover instances that differ in them.
+                    "_variants": [],
                     "stepKind": cls.get("kind"),
                     "requestContext": (indexed or {}).get("context"),
                     "errorType": failure.get("errorType"),
@@ -1855,6 +1890,7 @@ def analyse(results: dict, index: dict, seed: dict, corpus: dict, run_dir: Path,
                 bodies = load_bodies(run_dir, case)
                 if bodies:
                     grp["exchange"] = bodies
+            grp["_variants"].append(attribution)
             grp["occurrences"].append({
                 "level": level,
                 "module": case.get("module"),
@@ -1880,6 +1916,55 @@ def analyse(results: dict, index: dict, seed: dict, corpus: dict, run_dir: Path,
             mod = case.get("module") or "(unknown)"
             pl["byModule"].setdefault(mod, {})
             pl["byModule"][mod][category] = pl["byModule"][mod].get(category, 0) + 1
+
+    # An entry's description has to describe every case it covers, not just the
+    # first one that reached it. Several keys group by the message, and one
+    # message can be raised about different parts of a resource: measured, the
+    # suite's "element X in all bundle resources references resource with ID Y"
+    # step words its failure identically for `subject`, `performer.actor` and
+    # `context`, so six cases spanning three reference elements arrived at one
+    # key and were titled after whichever happened to be read first. The cases
+    # are left grouped - nothing in the per-case record distinguishes their
+    # causes, and splitting on the element would assert three defects where the
+    # evidence supports one description - but the description now names all of
+    # them, and the per-occurrence table says which case is which.
+    for grp in groups.values():
+        variants = grp.pop("_variants")
+        for field, attr_field in (("fhirFeature", "feature"),
+                                  ("expected", "expected")):
+            seen = []
+            for v in variants:
+                val = v.get(attr_field)
+                if val and val not in seen:
+                    seen.append(val)
+            if len(seen) <= 1:
+                continue
+            # A group whose instances share one shape is titled by the shape and
+            # says what was measured underneath it; joining several long search
+            # URLs into a heading would be unreadable without being any more
+            # precise.
+            shapes = {v.get("featureShape") for v in variants}
+            if field == "fhirFeature" and len(shapes) == 1 and None not in shapes:
+                grp[field] = shapes.pop()
+                grp["notes"].append("measured as " + "; ".join(sorted(seen)))
+            else:
+                grp[field] = "; ".join(sorted(seen))
+        for field in ("requirements", "packages", "notes"):
+            merged = list(grp[field])
+            for v in variants:
+                for item in v.get(field) or []:
+                    if item not in merged:
+                        merged.append(item)
+            grp[field] = merged
+        # A single entry cannot state two mechanisms without saying which case
+        # has which, so this is surfaced rather than merged silently.
+        mechanisms = sorted({v.get("mechanism") for v in variants
+                             if v.get("mechanism")})
+        if len(mechanisms) > 1:
+            warnings.append(
+                f"{grp['category']} entry covering {len(variants)} case(s) was "
+                f"attributed to more than one mechanism ({', '.join(mechanisms)}); "
+                f"the entry states the first and the others are not described")
 
     # Order the work list by impact: most-affected first, test data last.
     order = {c: i for i, c in enumerate(

@@ -183,9 +183,10 @@ RE_SEARCH_STEP = re.compile(
 # The other way the suite sends a search: POST to `<Type>/_search` with the
 # criteria in a Gherkin table instead of in the URL. `RE_SEARCH_URL` cannot match
 # it - the type is followed by `/_search"`, not by `?` or `"` - and that is not a
-# flaw in that pattern but the reason this one exists: 41 steps in the pinned
-# 2.7.0 tree take this shape, and every criterion in them was invisible to this
-# gate. One of those steps is mandatory - `Observation` by `_tag` in
+# flaw in that pattern but the reason this one exists: 41 steps in the 2.7.0
+# tree and 49 in the 3.0.9 tree take this shape (counted on both extracted
+# trees), and every criterion in them was invisible to this gate. One of those
+# steps is mandatory - `Observation` by `_tag` in
 # Stufe5/Basis/Observation-Statuses-Search.feature, present in 3.0.9 as well and
 # sent in round G, as that round's traffic log shows - so a round could charge the
 # system under test for an empty result set that no seeded Observation could have
