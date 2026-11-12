@@ -97,9 +97,12 @@ fi
 # 3. The official archives
 # -----------------------------------------------------------------------------
 # The exchange is read out of the suite's own archives. Both forms are accepted -
-# the extracted tree `make report` leaves behind, and the zips alone, which is all
-# a slim bundle carries - so this step is checked by counting what is addressable
-# either way rather than by looking for one of them.
+# the extracted tree `make report` leaves behind, and the zips alone - so this
+# step is checked by counting what is addressable either way rather than by
+# looking for one of them. What it cannot replace is the debug archive itself:
+# a slim bundle carries official/test-report.zip only, and over one of those the
+# generator documents every case and quotes no exchange at all. Hence the warning
+# below, per level, rather than a silent document.
 ce_levels=0
 ce_sources=0
 for ce_lvl in "$CE_RUN_DIR"/stufe*; do

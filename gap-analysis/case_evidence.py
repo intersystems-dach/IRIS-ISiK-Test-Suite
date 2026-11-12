@@ -32,9 +32,15 @@ three files of the round's own bundle:
                                 the suite's own record of the exchange.
 
 The archives are read directly, not through an extraction, so this document can be
-generated from a slim bundle on a machine that has never run the suite. Where an
+generated on a machine that has never run the suite. Where an
 `official/extracted/` tree is present it is used in preference, because it is the
 tree the citations in `analysis/results.md` name.
+
+Both archives are needed. The exchange exists only in `debug-report.zip`; a bundle
+carrying `test-report.zip` alone - which is what this project's slim archives
+carry - yields a document that states each case's input, expectation and recorded
+error but quotes no request and no response, and says so in section 1 rather than
+leaving the omission to be inferred.
 
 Which exchange belongs to a case
 --------------------------------
@@ -43,11 +49,11 @@ is first narrowed to the example's own step subtree by the label the suite gave 
 (`1: <scenario> ({...})`). Inside that subtree the suite attaches an RBelLog - its
 traffic dump - to the step that was executing when the log was written. The log is
 scoped to the example, and the exchange the assertion was made about is therefore
-the last response in it, together with the request that preceded it. Four classes
-of case have no exchange at all, because their assertion is made about a response
-obtained in an *earlier scenario* of the same feature (Tiger's *current response*
-is feature-scoped state); they are reported in section 5 rather than silently
-dropped.
+the last response in it, together with the request that preceded it. A case whose
+own log records no message asserts over a response obtained in an *earlier
+scenario* of the same feature - Tiger's *current response* is feature-scoped state
+- and has no exchange of its own; such cases are reported in section 5 rather than
+silently dropped, separately from the cases whose log is merely not in the bundle.
 
 Response bodies are decoded, not re-encoded
 -------------------------------------------
@@ -115,6 +121,17 @@ GENERATOR = "gap-analysis/case_evidence.py"
 # to decode: the two names are the variables the reproduction commands use.
 REDACTED = "<redacted: see provenance/CREDENTIALS.md>"
 
+# The three reasons an entry can carry no exchange. They are constants rather than
+# literals at the point of use because section 5 counts them: two of the three are
+# properties of the test suite and say something about the case, while the third is
+# a property of the bundle this document was generated from and says nothing about
+# the case at all. Conflating them would let an incomplete bundle read as a run in
+# which forty-one cases made no request.
+NOTE_LOG_EMPTY = ("the traffic log is present and records no HTTP message: "
+                  "this case made no request of its own")
+NOTE_LOG_ABSENT = "the traffic log this case names is not in the bundle"
+NOTE_NO_LOG = "the official report attaches no traffic log to this case"
+
 
 def die(msg: str) -> None:
     print(f"case_evidence.py: {msg}", file=sys.stderr)
@@ -142,11 +159,19 @@ class Bundle:
 
     results.json cites a case as
     `<stufe>/official/extracted/test-report/unresolvedReports/<sha>.json`, which
-    exists only where `make report` extracted the archive. A slim bundle - the
-    form that travels, and the form in this project's `archives/` - carries only
-    `test-report.zip` and `debug-report.zip`. Both are served here from the same
-    citation, so an entry reads identically either way and the citation printed in
-    the document stays the one the other documents of the round use.
+    exists only where `make report` extracted the archive. The zips are therefore
+    served from the same citation, so an entry reads identically whether the
+    extraction is present or not and the citation printed in the document stays
+    the one the other documents of the round use.
+
+    Which archives a bundle carries is a separate question from whether they are
+    extracted, and it decides what this document can say. The exchange is in
+    `debug-report.zip` only. A bundle without it - the slim archives in this
+    project's `archives/`, which carry `test-report.zip` alone - yields entries
+    that state the input, the expectation and the recorded error but quote no
+    request and no response. The document says so rather than reading as though
+    the cases had made no request: section 1 carries the warning and section 5
+    separates those cases from the ones whose own log is genuinely empty.
     """
 
     def __init__(self, run_dir: Path):
@@ -589,12 +614,11 @@ def entry_for(case: dict, level: str, level_dir: str, run: dict,
             traffic_path = got[1]
             request, response = last_exchange(msgs)
             if not msgs:
-                traffic_note = ("the traffic log is present and records no HTTP "
-                                "message: this case made no request of its own")
+                traffic_note = NOTE_LOG_EMPTY
         else:
-            traffic_note = "the traffic log this case names is not in the bundle"
+            traffic_note = NOTE_LOG_ABSENT
     else:
-        traffic_note = "the official report attaches no traffic log to this case"
+        traffic_note = NOTE_NO_LOG
 
     failure = case.get("failure") or {}
     ex = case.get("example") or {}
@@ -754,8 +778,8 @@ def render(results: dict, gap_doc: dict | None, analysis: dict, generated: str,
              "`gap-analysis.json` (what each failure was attributed to) and the "
              "official archives `<stufe>/official/test-report.zip` and "
              "`<stufe>/official/debug-report.zip` (what went over the wire). "
-             "Re-running `make case-evidence` on an archived bundle reproduces "
-             "this document exactly.")
+             "Re-running `make case-evidence` on a bundle that carries both "
+             "archives reproduces this document exactly.")
     w.append("")
 
     # ---- 1 Summary ----------------------------------------------------------
@@ -789,6 +813,29 @@ def render(results: dict, gap_doc: dict | None, analysis: dict, generated: str,
              f"**{len(with_body)}** | **{len(entries) - len(with_exchange)}** |")
     w.append("")
 
+    # The one circumstance under which this document is incomplete through no
+    # property of the run: the bundle it was generated from does not carry the
+    # archive the exchange lives in. Stated here, before anything is read, because
+    # a reader who takes the absence for a property of the cases would conclude
+    # that the suite made no request - and the entries themselves cannot say it,
+    # since each one can only speak for its own case.
+    missing_debug = [e for e in entries
+                     if e["received"]["note"] == NOTE_LOG_ABSENT]
+    if missing_debug:
+        w.append(f"> **This bundle does not carry the exchange for "
+                 f"{len(missing_debug)} of these cases.** The traffic logs the "
+                 f"official report names are not in it, because "
+                 f"`<stufe>/official/debug-report.zip` is absent from the run "
+                 f"directory this document was generated from — which is what a "
+                 f"slim archive carries. Those cases are in section 5 and state "
+                 f"their input data, their expectation and the error the test "
+                 f"suite recorded, but no request and no response as they went "
+                 f"over the wire, and no replay command. **This is a property of "
+                 f"the bundle, not of the run:** the cases did make requests. "
+                 f"Regenerate from a bundle that carries both archives to obtain "
+                 f"them.")
+        w.append("")
+
     # ---- 2 Coverage ---------------------------------------------------------
     w.append("## 2 Coverage of this run")
     w.append("")
@@ -815,8 +862,8 @@ def render(results: dict, gap_doc: dict | None, analysis: dict, generated: str,
     w.append("## 4 Cases")
     w.append("")
     w.append(f"{len(with_exchange)} case(s), one subclause each, ordered by level, "
-             "module, feature file and feature line. A case whose exchange the "
-             "official report does not record is in section 5 instead.")
+             "module, feature file and feature line. A case for which no exchange "
+             "could be read is in section 5 instead, which states why.")
     w.append("")
     for e in entries:
         if e["received"]["response"]:
@@ -824,20 +871,41 @@ def render(results: dict, gap_doc: dict | None, analysis: dict, generated: str,
 
     # ---- 5 Cases without an exchange ---------------------------------------
     rest = [e for e in entries if not e["received"]["response"]]
-    w.append("## 5 Cases for which the official report records no exchange")
+    w.append("## 5 Cases without a quoted exchange")
     w.append("")
     if not rest:
         w.append("None. Every failing case of this run carries a recorded request "
                  "and response.")
         w.append("")
     else:
-        w.append(f"{len(rest)} case(s). Each one's assertion is made about a "
-                 "response obtained in an earlier scenario of the same feature: "
-                 "Tiger's *current response* is feature-scoped state, so a "
-                 "scenario can assert over a response it did not itself request. "
-                 "The input, the expectation and the recorded error are stated as "
-                 "for every other case; the exchange has to be read in the "
-                 "scenario that made it.")
+        w.append(f"{len(rest)} case(s). The input, the expectation and the "
+                 "recorded error are stated as for every other case. Three "
+                 "different circumstances put a case here, and they are not "
+                 "equivalent:")
+        w.append("")
+        classes = [
+            (NOTE_LOG_EMPTY,
+             "the case's own traffic log is present and records no HTTP message. "
+             "Its assertion is made about a response obtained in an earlier "
+             "scenario of the same feature — Tiger's *current response* is "
+             "feature-scoped state, so a scenario can assert over a response it "
+             "did not itself request. The exchange has to be read in the scenario "
+             "that made it. This is a property of the test suite"),
+            (NOTE_LOG_ABSENT,
+             "the traffic log the official report names is not in this bundle, "
+             "because `<stufe>/official/debug-report.zip` is absent from it. "
+             "**This says nothing about the case:** the request was made and was "
+             "logged, and regenerating from a bundle that carries both archives "
+             "recovers it. See the warning in section 1"),
+            (NOTE_NO_LOG,
+             "the official report attaches no traffic log to the case at all, so "
+             "there is no path to read. This is a property of the record the test "
+             "suite wrote"),
+        ]
+        for note, prose in classes:
+            n = len([e for e in rest if e["received"]["note"] == note])
+            if n:
+                w.append(f"* **{n} case(s)** — {prose}.")
         w.append("")
         for e in rest:
             w += render_entry(e, limit)
@@ -946,13 +1014,19 @@ def derivation_clause() -> list[str]:
     w.append("Every entry cites three paths into the round's bundle: the Serenity "
              "outcome record inside the submitted archive, the browsable page for "
              "that case, and the traffic log the exchange was read from. All three "
-             "are also addressable inside the archives of a slim bundle, which is "
-             "the form that travels:")
+             "are addressable inside the two archives themselves, with or without "
+             "the extraction `make report` leaves behind:")
     w.append("")
     w += fence("unzip -p stufe5/official/test-report.zip "
                "'unresolvedReports/<sha>.json' | python3 -m json.tool\n"
                "unzip -p stufe5/official/debug-report.zip "
                "'serenity/downloadable/<file>' > /tmp/exchange.html", "sh")
+    w.append("The second of those two archives is the one that carries the "
+             "exchange. A bundle without it — a slim archive, which carries "
+             "`test-report.zip` alone — supports every other field of an entry "
+             "and no request and no response; where that is the case, section 1 "
+             "says so and section 5 lists the cases it affects.")
+    w.append("")
     w.append("### 3.3 Diffing two rounds")
     w.append("")
     w.append("Entries are keyed and ordered by level, module, feature file, "

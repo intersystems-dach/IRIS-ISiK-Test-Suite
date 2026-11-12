@@ -587,11 +587,22 @@ Every clause is a join over three files of the round's own bundle — which case
 failed and where each outcome record lies (`analysis/results.json`), what the
 failure was attributed to (`gap-analysis.json`), and the suite's own record of the
 exchange (`official/test-report.zip` and `official/debug-report.zip`). The zips are
-read directly, so the annex can be generated from a slim bundle on a machine that
-has never run the suite; where an `official/extracted/` tree is present it is used
-in preference, because that is the tree the citations in `results.md` name. The
-output is byte-identical either way — generated from the zips on one host and from
-an extraction on another, the four files of rounds I and K matched by sha256.
+read directly, so no extraction has to be present and the annex can be generated on
+a machine that has never run the suite; where an `official/extracted/` tree is
+present it is used in preference, because that is the tree the citations in
+`results.md` name. The output is byte-identical either way — generated from the zips
+on one host and from an extraction on another, the four files of rounds I and K
+matched by sha256.
+
+**Both archives have to be there.** The exchange exists only in
+`debug-report.zip`, which the slim archives in `archives/` deliberately do not
+carry. Run against a slim bundle, the generator produces a complete document in
+which every clause states its input, its expectation and the recorded error and
+no clause quotes a request or a response; §1 of that document says so, and §5
+separates those cases from the ones whose own traffic log is genuinely empty.
+Measured on round K's slim archive on 2026-11-12: 41 clauses, 0 exchanges. The
+annex therefore has to be generated where the full bundle is, or from one that
+was archived with its debug archives.
 
 A Scenario Outline writes one outcome record for all of its examples, so the record
 is first narrowed to the example's own step subtree by the label the suite gave it.
@@ -625,9 +636,16 @@ The feature-scoped-response coupling has a visible consequence here. A case whos
 assertion is made about a response obtained in an *earlier scenario* of the same
 feature has no exchange of its own: its own traffic log records zero messages.
 Those cases are reported in §5 by name, with the reason, rather than dropped — four
-of round K's 41 failures are of this class. `--strict` makes their presence a
-non-zero exit for a caller who wants to be told; without it the exit status is
-always 0, because a conformance gap is the expected result of this project.
+of round K's 41 failures are of this class.
+
+§5 keeps three circumstances apart, because they are not equivalent and only the
+first is a statement about the run: the traffic log is **present and empty**, which
+is the case above; the official report **attaches no log** to the case at all; or
+the log the case names is **not in the bundle**, which is what a missing
+`debug-report.zip` looks like and is a property of the bundle rather than of the
+case. `--strict` makes the presence of any of them a non-zero exit for a caller who
+wants to be told; without it the exit status is always 0, because a conformance gap
+is the expected result of this project.
 
 ### Diffing two rounds
 

@@ -399,10 +399,19 @@ erhaltenen Ausgabe und einem Befehl zur Wiederholung.
 Auch er ist eine reine Verknüpfung über den archivierten Datensatz: er liest das
 maschinenlesbare Ergebnisdokument, die maschinenlesbare Lückenanalyse und die
 beiden offiziellen Archive. Kein Netz, kein Prüfgegenstand. Die Archive werden
-unmittelbar gelesen, sodass der Anhang auch aus einem schlanken Datensatz auf
+unmittelbar gelesen, sodass kein Auszug vorliegen muss und der Anhang auch auf
 einem Rechner erzeugt werden kann, auf dem die Suite nie gelaufen ist; liegt ein
 Auszug vor, wird dieser bevorzugt, weil die Zitate des Ergebnisdokuments ihn
 benennen. Das Ergebnis ist in beiden Fällen byte-identisch.
+
+Beide Archive müssen dabei vorhanden sein. Der Austausch ist ausschließlich in
+`debug-report.zip` enthalten, das die schlanken Transportarchive dieses Projekts
+bewusst nicht mitführen. Über einem solchen schlanken Datensatz erzeugt der
+Generator ein vollständiges Dokument, in dem jede Klausel Eingabe, Erwartung und
+den aufgezeichneten Fehler nennt und keine Klausel eine Anfrage oder eine Antwort
+zitiert; Abschnitt 1 des Dokuments weist darauf hin, Abschnitt 5 trennt diese
+Fälle von denjenigen mit tatsächlich leerem Verkehrsprotokoll. Gemessen am
+schlanken Archiv des Durchgangs K am 2026-11-12: 41 Klauseln, 0 Austausche.
 
 Für eine prüfende Stelle ist er ohne Bedeutung. Er wird hier nur deshalb
 aufgeführt, weil er im Wurzelverzeichnis des Datensatzes liegt und in
