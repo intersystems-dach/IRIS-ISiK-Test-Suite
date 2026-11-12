@@ -213,6 +213,7 @@ alone brings the whole environment up first.
 | 5 | `test` | [60-run-tests.sh](../../scripts/60-run-tests.sh) | `reports/<run-id>/<stufe>/official/*.zip` + `run.json` + `run.log` |
 | 6 | `report` | [70-collect-report.sh](../../scripts/70-collect-report.sh) | The evidence bundle: extracted archives, `analysis/results.md`, `provenance/`, `MANIFEST.txt` |
 | | | [80-gap-report.sh](../../scripts/80-gap-report.sh) | `GAP-ANALYSIS.md` + `gap-analysis.json` |
+| | | [81-case-evidence.sh](../../scripts/81-case-evidence.sh) | `CASE-EVIDENCE.md` + `case-evidence.json` — the annex of the gap analysis, one clause per failing case |
 
 Inspection targets — `status`, `credentials`, `logs`, `shell-iris`, `check` — read
 the live environment and change nothing.

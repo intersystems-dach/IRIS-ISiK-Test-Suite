@@ -1,12 +1,13 @@
 # 3. Ergebnisse: Aufbau, Lesart, Nachweis, Zugangsdaten
 
-## Drei Dokumente, ein maßgebliches
+## Drei Dokumente und ein Anhang, eines davon maßgeblich
 
 | Dokument | Erzeugt von | Adressat | Status |
 |---|---|---|---|
 | `<stufe>/official/test-report.zip` | der offiziellen ISiK-Testsuite selbst | Gematik / TITUS | **maßgeblich** |
 | `analysis/results.md` | diesem Projekt, zitierend | prüfende Stelle | abgeleitet |
 | `GAP-ANALYSIS.md` | diesem Projekt, auslegend | Produktentwicklung InterSystems | abgeleitet, englischsprachig, **keine regulatorische Dokumentation** |
+| `CASE-EVIDENCE.md` | diesem Projekt, zitierend | Produktentwicklung InterSystems | abgeleitet, englischsprachig, Anhang zur Lückenanalyse, **keine regulatorische Dokumentation** |
 
 > Bei einer Abweichung zwischen einem abgeleiteten Dokument und dem offiziellen
 > Bericht gilt der offizielle Bericht. Die abgeleiteten Dokumente zitieren ihn; sie
@@ -28,6 +29,8 @@ reports/<run-id>/
   analysis/MANIFEST.txt                  SHA-256 über jede Datei des Datensatzes
   GAP-ANALYSIS.md                        die Lückenanalyse für die Produktentwicklung
   gap-analysis.json                      dasselbe, maschinenlesbar, für Vergleiche
+  CASE-EVIDENCE.md                       deren Anhang, eine Klausel je fehlgeschlagenem Fall
+  case-evidence.json                     dasselbe, maschinenlesbar, für Vergleiche
   stufe3/official/*.zip                  unverändert, wie die Suite sie geschrieben hat
   stufe3/official/SHA256SUMS             deren Prüfsummen, wie empfangen
   stufe3/official/extracted/…            der wörtliche Auszug beider Archive
@@ -289,10 +292,18 @@ gewährt Zugang zu einer anderen Instanz — auch nicht zu einer neu aufgebauten
 | `debug-report.zip`, `config/tiger.yaml` | die Konfiguration, so wie die Suite sie erhalten hat |
 | `make credentials`, `make status` | die Werte der laufenden Instanz |
 
-Genau eine Datei des Datensatzes enthält bewusst **kein** Kennwort:
-`provenance/iris-provenance.json`. Sie ist die Selbstbeschreibung der Installation
-durch den Prüfgegenstand und führt daher nur die *Kontonamen*; der Kanal für die
-Kennwörter sind die oben genannten Dateien.
+Zwei Dateien des Datensatzes enthalten bewusst **kein** Kennwort:
+
+* `provenance/iris-provenance.json`. Sie ist die Selbstbeschreibung der
+  Installation durch den Prüfgegenstand und führt daher nur die *Kontonamen*; der
+  Kanal für die Kennwörter sind die oben genannten Dateien.
+* `CASE-EVIDENCE.md`, der Anhang der Lückenanalyse. Er gibt jeden Austausch
+  wörtlich wieder, hält dabei aber den Wert der Kopfzeile `Authorization: Basic`
+  zurück und verweist auf `provenance/CREDENTIALS.md`. Das verbirgt nichts, was
+  nicht anderswo im Datensatz steht; der Grund ist, dass dieser Anhang das
+  Dokument ist, das an die Produktentwicklung weitergegeben wird, und ein
+  weitergegebenes Dokument keine Zugangsdaten in einsetzbarer Form führen soll.
+  Die Wiederholungsbefehle benennen stattdessen zwei Umgebungsvariablen.
 
 ### Was weiterhin gilt
 
@@ -375,14 +386,38 @@ solche Einträge und benennt ihr Vorgängerszenario; sie sind zuerst über diese
 diagnostizieren. Dies ist eine Eigenschaft des Werkzeugs, kein Mangel, und wird von
 diesem Projekt nicht geändert.
 
+### Der Anhang `CASE-EVIDENCE.md`
+
+Die Lückenanalyse ist absichtlich zusammengefasst: sie führt einen Eintrag je
+Ursache und nennt die betroffenen Szenarien, ohne sie zu zeigen. Damit ist sie als
+Arbeitsliste brauchbar und zur Bearbeitung eines einzelnen Falles unzureichend —
+sie enthält weder Anfragekörper noch Antwort noch einen Weg, einen Fall erneut
+auszuführen. Der Anhang schließt diese Lücke: eine Klausel je fehlgeschlagenem
+Fall statt je Ursache, mit der verwendeten Eingabe, der erwarteten und der
+erhaltenen Ausgabe und einem Befehl zur Wiederholung.
+
+Auch er ist eine reine Verknüpfung über den archivierten Datensatz: er liest das
+maschinenlesbare Ergebnisdokument, die maschinenlesbare Lückenanalyse und die
+beiden offiziellen Archive. Kein Netz, kein Prüfgegenstand. Die Archive werden
+unmittelbar gelesen, sodass der Anhang auch aus einem schlanken Datensatz auf
+einem Rechner erzeugt werden kann, auf dem die Suite nie gelaufen ist; liegt ein
+Auszug vor, wird dieser bevorzugt, weil die Zitate des Ergebnisdokuments ihn
+benennen. Das Ergebnis ist in beiden Fällen byte-identisch.
+
+Für eine prüfende Stelle ist er ohne Bedeutung. Er wird hier nur deshalb
+aufgeführt, weil er im Wurzelverzeichnis des Datensatzes liegt und in
+`analysis/MANIFEST.txt` geführt wird.
+
 ## Erneutes Erzeugen der abgeleiteten Dokumente
 
 ```sh
-make report RUN_ID=<run-id>       # Auszug, Ergebnisdokument, Zitatprüfung, Prüfsummen, Lückenanalyse
-make gap-report RUN_ID=<run-id>   # nur die Lückenanalyse
+make report RUN_ID=<run-id>          # Auszug, Ergebnisdokument, Zitatprüfung,
+                                     # Prüfsummen, Lückenanalyse, Fallanhang
+make gap-report RUN_ID=<run-id>      # nur die Lückenanalyse
+make case-evidence RUN_ID=<run-id>   # nur deren Fallanhang
 ```
 
-Beide Schritte sind reine Funktionen der Archive und der abgeleiteten Anforderungen
+Alle Schritte sind reine Funktionen der Archive und der abgeleiteten Anforderungen
 und lassen die Archive unberührt. Sie können auf einem anderen Rechner aus einem
 archivierten Datensatz erneut ausgeführt und ihre Ausgabe zwischen Durchgängen
 verglichen werden.

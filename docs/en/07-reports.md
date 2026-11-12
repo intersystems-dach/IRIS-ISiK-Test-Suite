@@ -7,6 +7,7 @@
 | `<stufe>/official/test-report.zip` | Gematik / TITUS | **Authoritative.** The *Bestätigungsverfahren* artefact. Nothing in this repository modifies it |
 | `analysis/results.md` | German regulatory inspector | Derived. A cited index into the official report; states *what* happened, never *why* |
 | `GAP-ANALYSIS.md` | IRIS for Health developer | Derived and interpretive. States *why*, in FHIR terms. Explicitly **not** regulatory documentation |
+| `CASE-EVIDENCE.md` | the same developer, at the keyboard | Derived. The annex of the document above: one clause per failing case rather than per defect, quoting the exchange verbatim |
 
 The separation is the point. An inspector must be able to tell evidence from
 interpretation at a glance, so the interpretation lives in a differently named
@@ -20,10 +21,13 @@ entitled to distrust anything a script wrote.
 > in their own text. That is not modesty; it is the only claim that makes a derived
 > document usable as evidence at all.
 
-Three documents per round, and these three are what `make all` produces. A fourth
-exists for the one question no single round can answer — whether anything that
-used to pass now fails — and because it is a join over *two* rounds it is written
-only when a pair is named: `comparison-vs-<run-id>.json`, below.
+Three audiences per round, and `make all` produces all of them. The fourth row is
+an annex and not a fourth audience: it is addressed to the reader of the row above
+it, for the part of that reader's work the deduplicated document cannot serve, and
+it is generated in the same step. A further document exists for the one question no
+single round can answer — whether anything that used to pass now fails — and
+because it is a join over *two* rounds it is written only when a pair is named:
+`comparison-vs-<run-id>.json`, below.
 
 ## The bundle
 
@@ -36,6 +40,8 @@ reports/<run-id>/
   analysis/MANIFEST.txt                  sha256 of every file here
   GAP-ANALYSIS.md                        the developer work list
   gap-analysis.json                      the same, machine-readable, for diffing rounds
+  CASE-EVIDENCE.md                       its annex, one clause per failing case
+  case-evidence.json                     the same, machine-readable, for diffing rounds
   comparison-vs-<run-id>.json            what moved against an earlier round, if asked for
   stufe3/official/*.zip                  untouched, as the suite wrote them
   stufe3/official/SHA256SUMS             their checksums, as received
@@ -245,9 +251,9 @@ and reproduced as a table in §6. `provenance/packages/MANIFEST.txt` is *not*
 excluded: it is evidence, and excluding it by name would leave the package
 checksums outside the integrity check.
 
-`80-gap-report.sh` runs after the manifest is written, so it appends the two gap
-files' hashes itself — dropping any previous entries for those paths first, then
-re-sorting with `LC_ALL=C sort -k2` to reproduce the byte order
+`80-gap-report.sh` and `81-case-evidence.sh` run after the manifest is written, so
+each appends its own two files' hashes — dropping any previous entries for those
+paths first, then re-sorting with `LC_ALL=C sort -k2` to reproduce the byte order
 `70-collect-report.sh` produced. That is what keeps two rounds' manifests diffable
 and `sha256sum -c` passing on the finished bundle either way.
 
@@ -555,9 +561,88 @@ quote says so explicitly and points at `results.md` §7: **defects present only 
 the unexecuted features are absent from the report**, and an incomplete run must
 not be mistaken for a clean one.
 
+## `CASE-EVIDENCE.md`
+
+The annex of the gap analysis, written by `gap-analysis/case_evidence.py` through
+`scripts/81-case-evidence.sh`, which `make report` runs after `make gap-report`.
+
+### Why the deduplication needs an annex
+
+Deduplication is what makes `GAP-ANALYSIS.md` a usable work list and is also what
+it costs: an entry names its affected scenarios without showing any of them, so it
+carries no request body, no response and no way to replay a case. That is the right
+document for deciding *what* to fix and the wrong one for *fixing* it. The annex is
+the other half, one clause per failing case rather than per defect, answering the
+four questions a developer asks at the keyboard — what input the case used, what
+output it expected, what output it received, and how to reproduce it.
+
+Both documents are generated from the same `analysis/results.json` and read the
+same `gap-analysis.json`, and the annex imports the category titles and the
+non-SUT category set from `gap_report.py` rather than restating them, so the two
+cannot come to disagree about which cases exist or what a case was attributed to.
+
+### Where each clause comes from
+
+Every clause is a join over three files of the round's own bundle — which cases
+failed and where each outcome record lies (`analysis/results.json`), what the
+failure was attributed to (`gap-analysis.json`), and the suite's own record of the
+exchange (`official/test-report.zip` and `official/debug-report.zip`). The zips are
+read directly, so the annex can be generated from a slim bundle on a machine that
+has never run the suite; where an `official/extracted/` tree is present it is used
+in preference, because that is the tree the citations in `results.md` name. The
+output is byte-identical either way — generated from the zips on one host and from
+an extraction on another, the four files of rounds I and K matched by sha256.
+
+A Scenario Outline writes one outcome record for all of its examples, so the record
+is first narrowed to the example's own step subtree by the label the suite gave it.
+Within that subtree the exchange the assertion was made about is the last response
+in the attached RBelLog together with the request before it. Responses the suite
+rendered as hex because it did not parse them — which is every gzip-encoded
+response — are unhexed and inflated, so the body shown is the body the SUT sent.
+Headers are reproduced as they arrived, original casing included.
+
+### What is withheld, and what is not
+
+The `Authorization: Basic` value, and only that. This laboratory's credentials are
+generated per deployment and documented on purpose in `provenance/CREDENTIALS.md`
+and in §1 of `results.md`, so withholding them protects nothing — but this is the
+document that gets forwarded to a product organisation, and a document that travels
+should not carry a credential in copy-pasteable form. The replay commands name
+`$SUT_USER` / `$SUT_PASSWORD` instead. The suite's own unresolved placeholder token
+is **exempt** from the withholding, because for the SMART-on-FHIR cases that
+placeholder reaching the endpoint is the evidence the finding rests on.
+
+Request bodies are verbatim. Response bodies are capped (default 20 000
+characters), and a capped body records the sha256 of the *complete* body, its
+character count and a truncation flag, so a reader can prove that what they have is
+the body the archive holds. The cap exists because the CapabilityStatement of this
+SUT is near a megabyte and appears in many cases; without it the JSON was 9.4 MB
+for one round.
+
+### Cases with no exchange
+
+The feature-scoped-response coupling has a visible consequence here. A case whose
+assertion is made about a response obtained in an *earlier scenario* of the same
+feature has no exchange of its own: its own traffic log records zero messages.
+Those cases are reported in §5 by name, with the reason, rather than dropped — four
+of round K's 41 failures are of this class. `--strict` makes their presence a
+non-zero exit for a caller who wants to be told; without it the exit status is
+always 0, because a conformance gap is the expected result of this project.
+
+### Diffing two rounds
+
+Entries are keyed and ordered by level, module, feature file, feature line and
+example index — never by a sequence number — so an unchanged case is byte-identical
+between two rounds' documents apart from the per-run values a response carries
+anyway (`Date`, `Content-Length`, generated resource ids). Pass the same
+`--generated-at` to both and the timestamp does not become the first difference.
+This is why the target is chained into `make report` rather than offered on demand:
+an annex that exists for one round and not for the round before it cannot be
+diffed, which is most of what it is for.
+
 ## `comparison-vs-<run-id>.json`
 
-A fourth document, for a fourth reader, written only when asked for:
+A further document, for a further reader, written only when asked for:
 
 ```sh
 make compare BASELINE=run-20260807T121756Z CANDIDATE=run-20261111T121705Z
@@ -600,18 +685,28 @@ that regressed in fifty places exits 0 and says so, unless the caller asks for
 ## Regenerating
 
 ```sh
-make report RUN_ID=run-20260806T093000Z      # extraction + results + citations + manifest + gap report
-make gap-report RUN_ID=run-20260806T093000Z  # the gap analysis alone
+make report RUN_ID=run-20260806T093000Z        # extraction + results + citations + manifest
+                                               # + gap report + case evidence
+make gap-report RUN_ID=run-20260806T093000Z    # the gap analysis alone
+make case-evidence RUN_ID=run-20260806T093000Z # its per-case annex alone
 make compare BASELINE=run-20260807T121756Z CANDIDATE=run-20260806T093000Z
 ```
 
-Neither re-runs the tests and neither touches the archives. Both are pure
+None of them re-runs the tests and none of them touches the archives. All are pure
 functions of the bundle plus `vendor/requirements.json` (results) or
 `gap-analysis/index.json` (gaps), so a bundle can be copied to another machine and
-its derived documents regenerated and diffed there.
+its derived documents regenerated and diffed there. The annex needs neither index:
+it reads the bundle and `gap-analysis.json` only.
 
 `80-gap-report.sh` passes any further arguments through to `gap_report.py`, so
 `--generated-at`, `--out-md`, `--out-json` and `--index` are available for diffing
 two rounds without the timestamp making every line differ. When `--out-md` or
 `--out-json` redirects the output, the manifest step is skipped — there is nothing
-at the default paths to hash.
+at the default paths to hash. `81-case-evidence.sh` behaves the same way and
+additionally accepts `--max-body` and `--strict`.
+
+Both wrappers append their two files to `analysis/MANIFEST.txt`, which
+`70-collect-report.sh` wrote before them, dropping any previous entry for the same
+path first and re-sorting — so re-generating updates the hashes instead of
+accumulating stale ones, and an inspector running `sha256sum -c` does not find two
+unlisted files at the bundle root, which is what tampering would look like.

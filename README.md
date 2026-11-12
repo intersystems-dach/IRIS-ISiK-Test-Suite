@@ -24,7 +24,8 @@ Per round, in `reports/<run-id>/`:
 |---|---|
 | `stufe3/official/test-report.zip`, `stufe5/official/…` | The **authoritative** Gematik archives, byte-for-byte — what the *Bestätigungsverfahren* is based on and what is uploaded to TITUS |
 | `analysis/results.md` | The cited results document: every claim traced to a path inside those archives |
-| `GAP-ANALYSIS.md` | Per failure: the test step, the FHIR feature and the package that supplies it, expected vs. actual. For product developers, in English |
+| `GAP-ANALYSIS.md` | Per distinct defect: the test step, the FHIR feature and the package that supplies it, expected vs. actual. For product developers, in English |
+| `CASE-EVIDENCE.md` | Its annex, per failing case: the input data used, the output expected and received with both bodies verbatim, and a command that replays the request |
 | `analysis/scenario-verdicts.csv` | One row per test case, 1401 of them |
 | `analysis/MANIFEST.txt` | sha256 of every file in the bundle |
 | `provenance/` | Resolved versions and image digests, the seed record, the SUT's own install record, the package manifest, the credentials used |

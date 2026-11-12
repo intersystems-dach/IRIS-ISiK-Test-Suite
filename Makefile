@@ -79,7 +79,7 @@ RUN_ID ?= run-$(shell date -u +%Y%m%dT%H%M%SZ)
 export RUN_ID
 
 .PHONY: help provision preflight resolve packages up seed \
-        test test-stufe3 test-stufe5 report gap-report compare \
+        test test-stufe3 test-stufe5 report gap-report case-evidence compare \
         manual all status credentials logs shell-iris check clean destroy
 
 # -----------------------------------------------------------------------------
@@ -161,9 +161,17 @@ test: seed ## Run every level the pinned suite carries, sequentially
 report: ## Extract the official reports verbatim + generate the cited results analysis
 	@$(SCRIPTS)/70-collect-report.sh
 	@$(MAKE) --no-print-directory gap-report
+	@$(MAKE) --no-print-directory case-evidence
 
 gap-report: ## Generate the standalone developer gap analysis (English, per failure)
 	@$(SCRIPTS)/80-gap-report.sh
+
+# Chained after gap-report rather than offered only on demand, because its value
+# is comparative: an annex that exists for one round and not for the round before
+# it cannot be diffed, which is most of what it is for. It reads the gap analysis,
+# so it must run after it, and it needs no container, so it costs seconds.
+case-evidence: ## Generate the per-case evidence annex (input, expected, received, repro)
+	@$(SCRIPTS)/81-case-evidence.sh
 
 # Not part of `make all`: a comparison needs a second round, and which round
 # that is, is a judgement about what the figure is meant to show (the previous

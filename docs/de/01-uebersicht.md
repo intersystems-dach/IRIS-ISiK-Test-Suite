@@ -304,6 +304,7 @@ referenzieren, ihre eigenen Vertragsdateien aber nicht definieren
 | `<stufe>/official/test-report.zip` | Gematik / TITUS | **maßgeblich** — Artefakt des Bestätigungsverfahrens |
 | `analysis/results.md` | prüfende Stelle | abgeleitet; jede Aussage zitiert die belegende Datei im offiziellen Bericht |
 | `GAP-ANALYSIS.md` | Produktentwicklung InterSystems | abgeleitet und auslegend, englischsprachig; **keine regulatorische Dokumentation** |
+| `CASE-EVIDENCE.md` | Produktentwicklung InterSystems | abgeleitet, englischsprachig; Anhang der Lückenanalyse mit einer Klausel je fehlgeschlagenem Fall; **keine regulatorische Dokumentation** |
 
 Die Trennung ist beabsichtigt: die Auslegung liegt in einer anders benannten Datei
 im Wurzelverzeichnis des Nachweisdatensatzes und nicht unter `analysis/`, damit

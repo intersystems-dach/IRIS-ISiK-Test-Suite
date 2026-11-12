@@ -947,6 +947,12 @@ internal = {
     # 80-gap-report.sh
     "GAP_DIR", "GAP_INDEX", "GAP_RUN_DIR", "GAP_RESULTS", "GAP_FEATURES",
     "GAP_MD", "GAP_JSON", "GAP_MANIFEST", "GAP_TMP",
+    # 81-case-evidence.sh. The same shape as the GAP_* names above: resolved
+    # paths inside the round's own bundle, plus the gap analysis it reads to
+    # attribute each case. Nothing an operator configures - the annex has no
+    # knob but the run id, which is RUN_ID.
+    "CE_DIR", "CE_RUN_DIR", "CE_RESULTS", "CE_GAP_JSON",
+    "CE_MD", "CE_JSON", "CE_MANIFEST", "CE_TMP",
     # 85-compare-rounds.sh. BASELINE and CANDIDATE are per-invocation arguments
     # of `make compare`, like RUN_ID above: which two rounds to join is a
     # judgement about what a figure is meant to show, so it is made on the
