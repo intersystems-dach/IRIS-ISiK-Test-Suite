@@ -78,7 +78,7 @@ COMPOSE := docker compose \
 RUN_ID ?= run-$(shell date -u +%Y%m%dT%H%M%SZ)
 export RUN_ID
 
-.PHONY: help provision preflight resolve packages up seed \
+.PHONY: help provision image-from-kit preflight resolve packages up seed \
         test test-stufe3 test-stufe5 report gap-report case-evidence compare \
         manual all status credentials logs shell-iris check clean destroy
 
@@ -98,6 +98,23 @@ help: ## Show this help
 
 provision: ## Install this rig's prerequisites on a pristine host (needs sudo; run once)
 	@$(SCRIPTS)/01-provision-host.sh
+
+# --- Phase 0b: an image from an installation kit -----------------------------
+# Also not a prerequisite of anything, and for the same reason: it produces an
+# INPUT to a round rather than a step of one. The normal path is a published
+# image pulled by `make resolve`; this exists for the case where the build that
+# must be tested is available as a kit and not as an image. Read kit/README.md
+# before quoting a round taken on the result - a self-built image is not a
+# published one, and the reports have to say so.
+#
+# KIT and SUPERVISOR_REF are passed through rather than read from .env: they
+# describe one build, not the deployment, and nothing about a round may depend
+# on them after the image exists.
+
+image-from-kit: ## Build an IRIS/Web Gateway image from an installation kit (KIT=... SUPERVISOR_REF=...)
+	@KIT='$(KIT)' SUPERVISOR_REF='$(SUPERVISOR_REF)' COMPONENT='$(COMPONENT)' \
+	 IMAGE_PREFIX='$(IMAGE_PREFIX)' IMAGE_TAG='$(IMAGE_TAG)' BASE_IMAGE='$(BASE_IMAGE)' \
+	 $(SCRIPTS)/02-build-image-from-kit.sh
 
 # --- Phase 1: prepare -------------------------------------------------------
 

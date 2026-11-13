@@ -1,0 +1,32 @@
+{
+  "resourceType": "List",
+  "id": "List-Update-Original-Example",
+  "meta": {
+    "profile": [
+      "https://gematik.de/fhir/isik/StructureDefinition/ISiKMedikationsListe"
+    ]
+  },
+  "status": "current",
+  "mode": "working",
+  "code": {
+    "coding": [
+      {
+        "system": "http://terminology.hl7.org/CodeSystem/list-example-use-codes",
+        "code": "medications",
+        "display": "Medication List"
+      }
+    ]
+  },
+  "subject": {
+    "reference": "Patient/Patient-Read-Example"
+  },
+  "date": "2021-07-01T10:00:00+02:00",
+  "entry": [
+    {
+      "date": "2021-07-01T10:00:00+02:00",
+      "item": {
+        "reference": "MedicationStatement/MedicationStatement-Read-Example"
+      }
+    }
+  ]
+}

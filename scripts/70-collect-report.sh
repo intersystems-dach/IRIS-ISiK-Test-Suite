@@ -40,7 +40,8 @@
 #   <stufe>/run.json, run.log     written by 60-run-tests.sh
 #   provenance/                   seed records, IRIS's own install record, the
 #                                 rendered Tiger config's checksums, the package
-#                                 manifest and plan, the resolved versions
+#                                 manifest and plan, the resolved versions, and
+#                                 the version of this rig that produced the round
 #
 # CREDENTIAL HANDLING: the credentials this round used are documented on purpose,
 # in three places at once - the "Access credentials" table in analysis/results.md,
@@ -361,6 +362,37 @@ else
   warn "provenance missing: .env.resolved (resolved versions and image digests)"
 fi
 
+# Which revision of this rig produced the round. The bundle records in detail what
+# was tested; without this it does not record what tested it, and two bundles that
+# disagree could not be attributed to a change in the SUT rather than a change in
+# the measuring instrument. VERSION is the released rig version; the commit is what
+# actually ran, which is not the same thing on a working copy with local edits.
+# A deployment unpacked from an archive is not a git checkout - that is recorded as
+# 'unrecorded' rather than guessed at.
+{
+  printf 'rig_version=%s\n' "$(cat "${REPO_ROOT}/VERSION" 2>/dev/null || echo unrecorded)"
+  if command -v git >/dev/null 2>&1 \
+     && git -C "$REPO_ROOT" rev-parse --git-dir >/dev/null 2>&1; then
+    printf 'rig_commit=%s\n' \
+      "$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo unrecorded)"
+    printf 'rig_describe=%s\n' \
+      "$(git -C "$REPO_ROOT" describe --tags --always --dirty 2>/dev/null || echo unrecorded)"
+    # Tracked content only (-uno). Reproducing a round depends on the tracked
+    # tooling; an untracked scratch file beside it changes nothing that ran.
+    if [[ -n "$(git -C "$REPO_ROOT" status --porcelain -uno 2>/dev/null)" ]]; then
+      printf 'rig_worktree=modified\n'
+    else
+      printf 'rig_worktree=clean\n'
+    fi
+  else
+    printf 'rig_commit=unrecorded\nrig_describe=unrecorded\nrig_worktree=unrecorded\n'
+  fi
+} >"${PROV_DIR}/rig-version.txt"
+printf '%s\t%s\t%s\n' "provenance/rig-version.txt" \
+  "the version and revision of this test rig that produced the round" \
+  "scripts/70-collect-report.sh" >>"${PROV_DIR}/.index.tmp"
+log "recorded the rig version: $(sed -n 's/^rig_describe=//p' "${PROV_DIR}/rig-version.txt")"
+
 # The requirement extraction the analysis joins against. 1.5 MB, and it is what
 # makes the scope figures in results.md checkable without the test suite image.
 copy_prov "${VENDOR_DIR}/requirements.json" "requirements.json" \
@@ -542,6 +574,7 @@ official report is correct.
 | \`<stufe>/run.json\` | what was run: images, digests, tag expression, timings, credentials |
 | \`<stufe>/run.log\` | the test suite container's complete output |
 | \`provenance/CREDENTIALS.md\` | the credentials this round used, as generated at deployment |
+| \`provenance/rig-version.txt\` | the version and revision of the test rig that produced this bundle |
 | \`provenance/\` | seed records, the SUT's own install record, package manifest, resolved versions |
 
 ## Reading the official report directly

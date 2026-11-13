@@ -1,0 +1,116 @@
+{
+  "category": [
+    {
+      "coding": [
+        {
+          "code": "laboratory",
+          "display": "Laboratory",
+          "system": "http://terminology.hl7.org/CodeSystem/observation-category"
+        }
+      ]
+    }
+  ],
+  "code": {
+    "coding": [
+      {
+        "code": "2160-0",
+        "display": "Creatinin [Masse/Volumen] in Serum oder Plasma",
+        "system": "http://loinc.org",
+        "version": "2.81"
+      },
+      {
+        "code": "70901006",
+        "display": "Creatinine measurement",
+        "system": "http://snomed.info/sct",
+        "version": "http://snomed.info/sct/11000274103/version/20251115"
+      }
+    ]
+  },
+  "device": {
+    "display": "Cobas c503 (Roche Diagnostics)"
+  },
+  "effectiveDateTime": "2024-05-14T07:45:00+02:00",
+  "encounter": {
+    "reference": "Encounter/Encounter-Read-Finished-Example"
+  },
+  "interpretation": [
+    {
+      "coding": [
+        {
+          "code": "N",
+          "display": "Normal",
+          "system": "http://terminology.hl7.org/CodeSystem/v3-ObservationInterpretation"
+        }
+      ]
+    }
+  ],
+  "issued": "2024-05-14T09:15:00+02:00",
+  "note": [
+    {
+      "text": "Wert im Normbereich."
+    }
+  ],
+  "performer": [
+    {
+      "reference": "Practitioner/Practitioner-Read-Example"
+    }
+  ],
+  "referenceRange": [
+    {
+      "appliesTo": [
+        {
+          "coding": [
+            {
+              "code": "248152002",
+              "display": "Weiblich",
+              "system": "http://snomed.info/sct",
+              "version": "http://snomed.info/sct/11000274103/version/20251115"
+            }
+          ]
+        }
+      ],
+      "high": {
+        "code": "mg/dL",
+        "system": "http://unitsofmeasure.org",
+        "value": 1.2
+      },
+      "low": {
+        "code": "mg/dL",
+        "system": "http://unitsofmeasure.org",
+        "value": 0.6
+      },
+      "type": {
+        "coding": [
+          {
+            "code": "normal",
+            "display": "Normal Range",
+            "system": "http://terminology.hl7.org/CodeSystem/referencerange-meaning"
+          }
+        ]
+      }
+    }
+  ],
+  "resourceType": "Observation",
+  "specimen": {
+    "identifier": {
+      "system": "https://example.org/fhir/sid/proben",
+      "value": "PRB-2024-1002"
+    }
+  },
+  "status": "final",
+  "subject": {
+    "reference": "Patient/Patient-Read-Example"
+  },
+  "valueQuantity": {
+    "code": "mg/dL",
+    "system": "http://unitsofmeasure.org",
+    "unit": "mg/dL",
+    "value": 0.7
+  },
+  "id": "ISiKLaboruntersuchungSerumkreatinin-Example",
+  "meta": {
+    "profile": [
+      "https://gematik.de/fhir/isik/StructureDefinition/ISiKLaboruntersuchungSerumkreatinin"
+    ]
+  }
+}

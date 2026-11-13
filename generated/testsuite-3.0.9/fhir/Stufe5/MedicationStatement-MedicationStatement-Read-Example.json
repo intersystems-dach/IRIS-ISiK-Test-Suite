@@ -1,0 +1,53 @@
+{
+  "resourceType": "MedicationStatement",
+  "id": "MedicationStatement-Read-Example",
+  "status": "active",
+  "medicationReference": {
+    "reference": "Medication/Medication-Read-Example"
+  },
+  "subject": {
+    "reference": "Patient/Patient-Read-Example"
+  },
+  "context": {
+    "reference": "Encounter/Encounter-Read-In-Progress-Example"
+  },
+  "effectivePeriod": {
+    "start": "2026-02-03"
+  },
+  "dateAsserted": "2026-02-27",
+  "note": [
+    {
+      "text": "Testnotiz"
+    }
+  ],
+  "dosage": [
+    {
+      "text": "1 Brausetablette morgens, mittags und abends",
+      "patientInstruction": "Instruktionstest",
+      "timing": {
+        "repeat": {
+          "when": [
+            "MORN",
+            "NOON",
+            "EVE"
+          ]
+        }
+      },
+      "doseAndRate": [
+        {
+          "doseQuantity": {
+            "value": 1,
+            "unit": "Brausetablette",
+            "system": "http://unitsofmeasure.org",
+            "code": "1"
+          }
+        }
+      ]
+    }
+  ],
+  "meta": {
+    "profile": [
+      "https://gematik.de/fhir/isik/StructureDefinition/ISiKMedikationsInformation"
+    ]
+  }
+}

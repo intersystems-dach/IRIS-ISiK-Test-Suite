@@ -1,0 +1,67 @@
+{
+  "bodySite": {
+    "coding": [
+      {
+        "code": "11527006",
+        "display": "Arterial system structure",
+        "system": "http://snomed.info/sct",
+        "version": "http://snomed.info/sct/11000274103/version/20251115"
+      }
+    ]
+  },
+  "category": [
+    {
+      "coding": [
+        {
+          "code": "vital-signs",
+          "display": "Vital Signs",
+          "system": "http://terminology.hl7.org/CodeSystem/observation-category"
+        }
+      ]
+    }
+  ],
+  "code": {
+    "coding": [
+      {
+        "code": "8499008",
+        "display": "Pulse",
+        "system": "http://snomed.info/sct",
+        "version": "http://snomed.info/sct/11000274103/version/20251115"
+      },
+      {
+        "code": "149514",
+        "display": "Pulse rate",
+        "system": "urn:iso:std:iso:11073:10101"
+      }
+    ]
+  },
+  "device": {
+    "reference": "Device/Device-Read-Example"
+  },
+  "effectiveDateTime": "2026-03-12T08:35:00+01:00",
+  "encounter": {
+    "reference": "Encounter/Encounter-Read-In-Progress-Example"
+  },
+  "performer": [
+    {
+      "reference": "Practitioner/Practitioner-Read-Example"
+    }
+  ],
+  "resourceType": "Observation",
+  "status": "final",
+  "subject": {
+    "reference": "Patient/Patient-Read-Extended-Example"
+  },
+  "valueQuantity": {
+    "code": "/min",
+    "system": "http://unitsofmeasure.org",
+    "unit": "beats per minute",
+    "value": 78
+  },
+  "id": "Observation-ICU-Pulse",
+  "meta": {
+    "profile": [
+      "https://gematik.de/fhir/isik/StructureDefinition/sd-mii-icu-puls"
+    ]
+  }
+}

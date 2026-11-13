@@ -1,0 +1,78 @@
+{
+  "bodySite": {
+    "coding": [
+      {
+        "code": "11527006",
+        "display": "Arterial system structure",
+        "system": "http://snomed.info/sct",
+        "version": "http://snomed.info/sct/11000274103/version/20251115"
+      }
+    ]
+  },
+  "category": [
+    {
+      "coding": [
+        {
+          "code": "vital-signs",
+          "display": "Vital Signs",
+          "system": "http://terminology.hl7.org/CodeSystem/observation-category"
+        }
+      ]
+    }
+  ],
+  "code": {
+    "coding": [
+      {
+        "code": "442476006",
+        "display": "Arterial oxygen saturation",
+        "system": "http://snomed.info/sct",
+        "version": "http://snomed.info/sct/11000274103/version/20251115"
+      },
+      {
+        "code": "59408-5",
+        "display": "Sauerstoffsättigung in arteriellem Blut mittels Pulsoximetrie",
+        "system": "http://loinc.org",
+        "version": "2.81"
+      },
+      {
+        "code": "150324",
+        "display": "MDC_SAT_O2_ART",
+        "system": "urn:iso:std:iso:11073:10101"
+      },
+      {
+        "code": "2708-6",
+        "display": "Sauerstoffsaettigung in arteriellem Blut",
+        "system": "http://loinc.org"
+      }
+    ]
+  },
+  "device": {
+    "reference": "Device/Device-Read-Example"
+  },
+  "effectiveDateTime": "2026-03-12T08:30:00+01:00",
+  "encounter": {
+    "reference": "Encounter/Encounter-Read-In-Progress-Example"
+  },
+  "performer": [
+    {
+      "reference": "Practitioner/Practitioner-Read-Example"
+    }
+  ],
+  "resourceType": "Observation",
+  "status": "final",
+  "subject": {
+    "reference": "Patient/Patient-Read-Extended-Example"
+  },
+  "valueQuantity": {
+    "code": "%",
+    "system": "http://unitsofmeasure.org",
+    "unit": "percent",
+    "value": 97
+  },
+  "id": "Observation-ICU-SpO2-Pulse-Oximetry",
+  "meta": {
+    "profile": [
+      "https://gematik.de/fhir/isik/StructureDefinition/sd-mii-icu-o2saettigung-im-arteriellen-blut-durch-pulsoxymetrie"
+    ]
+  }
+}

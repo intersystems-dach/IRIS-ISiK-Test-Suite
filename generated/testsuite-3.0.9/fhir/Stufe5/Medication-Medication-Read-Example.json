@@ -1,0 +1,55 @@
+{
+  "resourceType": "Medication",
+  "id": "Medication-Read-Example",
+  "code": {
+    "coding": [
+      {
+        "system": "http://fhir.de/CodeSystem/bfarm/atc",
+        "version": "2024",
+        "code": "V03AB23",
+        "display": "Acetylcystein"
+      }
+    ]
+  },
+  "status": "active",
+  "amount": {
+    "numerator": {
+      "value": 20,
+      "unit": "Stück",
+      "system": "http://unitsofmeasure.org",
+      "code": "1"
+    },
+    "denominator": {
+      "value": 1,
+      "unit": "Packung",
+      "system": "http://unitsofmeasure.org",
+      "code": "1"
+    }
+  },
+  "ingredient": [
+    {
+      "extension": [
+        {
+          "url": "https://www.medizininformatik-initiative.de/fhir/core/modul-medikation/StructureDefinition/wirkstofftyp",
+          "valueCoding": {
+            "system": "https://www.medizininformatik-initiative.de/fhir/core/modul-medikation/CodeSystem/wirkstofftyp",
+            "code": "IN",
+            "display": "Ingredient"
+          }
+        }
+      ],
+      "itemReference": {
+        "reference": "Medication/Medication-Read-Referenced-Ingredient-Example"
+      },
+      "isActive": true
+    }
+  ],
+  "batch": {
+    "lotNumber": "123"
+  },
+  "meta": {
+    "profile": [
+      "https://gematik.de/fhir/isik/StructureDefinition/ISiKMedikament"
+    ]
+  }
+}

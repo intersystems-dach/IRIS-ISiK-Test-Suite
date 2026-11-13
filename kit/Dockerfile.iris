@@ -1,0 +1,185 @@
+# =============================================================================
+# InterSystems IRIS for Health - container image built from an installation kit
+# =============================================================================
+# Use this when the build you have to test is not available as a container image
+# in containers.intersystems.com, but you hold the corresponding installation
+# kit. If a container image for your build *is* published, use it instead: set
+# IRIS_IMAGE / IRIS_VERSION in `.env` and let `make resolve` pull it. An image
+# you build yourself is one more variable in a conformance measurement.
+#
+# Driven by `scripts/02-build-image-from-kit.sh`, which detects the build string
+# and the platform from the kit and passes them in. See kit/README.md.
+#
+# Every choice below is taken from one of three sources, never guessed:
+#
+#   1. "Running InterSystems Products in Containers" (the ADOCK book), section
+#      "Required Environment Variables" - the six ISC_PACKAGE_* variables that
+#      must be built into an image installed from a kit, and the note on IRISSYS.
+#   2. /usr/irissys/parameters.isc read out of a *published* image of the same
+#      release line - InterSystems' own recorded answer set for an image build of
+#      that line. The install below reproduces it.
+#   3. `docker inspect` of that same published image - user, env, exposed ports,
+#      working directory, entrypoint and healthcheck.
+#
+# DEVIATION, deliberate and unavoidable: an installation kit ships no container
+# supervisor. /iris-main, /tini and /irisHealth.sh exist only inside
+# InterSystems' built images, and this rig requires iris-main because it passes
+# `--check-caps false -a <bootstrap>` as the container command. They are
+# therefore copied from a published image, named by SUPERVISOR_REF, which should
+# be the closest published build of the same release line. This substitutes that
+# build's process supervisor around your kit's IRIS instance. iris-main performs
+# process supervision, startup/shutdown orchestration, durable %SYS setup and
+# password-file handling; it implements no FHIR and no HTTP behaviour, which is
+# what a conformance round measures. The resulting image is labelled
+# `de.intersystems.isik.not-published-by-intersystems="true"` so that no report
+# can mistake it for a shipped product image.
+# =============================================================================
+
+# Declared before the first FROM so it can be used in one, as BuildKit requires.
+ARG SUPERVISOR_REF
+ARG BASE_IMAGE=ubuntu:24.04
+
+# --- Source of the container supervisor (see DEVIATION above) ----------------
+FROM ${SUPERVISOR_REF} AS runtime-ref
+
+# --- The image under test ----------------------------------------------------
+# The base must match the kit's platform: a dockerubuntux64 kit installs onto
+# ubuntu:24.04. The build script refuses a kit whose platform it cannot map.
+FROM ${BASE_IMAGE}
+
+ARG IRIS_VERSION
+ARG IRIS_PRODUCT=IRISHealth
+ARG IRIS_PLATFORM=dockerubuntux64
+ARG KIT_FILE=unrecorded
+ARG KIT_SHA256=unrecorded
+ARG SUPERVISOR_REF
+
+# Third-party prerequisites. This is `apt-mark showmanual` from a published
+# image, minus what the base already carries - i.e. the set InterSystems
+# installed deliberately rather than pulled in as dependencies. temurin-11-jdk
+# is load-bearing: IRIS's FHIR profile validator runs on the JVM, and a round on
+# an image without it would report validator failures as conformance gaps.
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      ca-certificates curl gnupg \
+ && install -m 0755 -d /usr/share/keyrings \
+ && curl -fsSL https://packages.adoptium.net/artifactory/api/gpg/key/public \
+      -o /usr/share/keyrings/adoptium.asc \
+ && chmod a+r /usr/share/keyrings/adoptium.asc \
+ && echo "deb [signed-by=/usr/share/keyrings/adoptium.asc] https://packages.adoptium.net/artifactory/deb $(. /etc/os-release && echo "$VERSION_CODENAME") main" \
+      > /etc/apt/sources.list.d/adoptium.list \
+ && apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      binutils bzip2 gawk gnupg2 iproute2 iputils-ping krb5-multidev \
+      libkrb5-dev libgomp1 locales lzma net-tools procps python3 python3-pip \
+      python3-venv sensible-utils software-properties-common sysstat \
+      temurin-11-jdk wget \
+ && sed -i 's/^# *en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen \
+ && locale-gen en_US.UTF-8 \
+ && rm -rf /var/lib/apt/lists/*
+
+ENV LANG=en_US.UTF-8 \
+    LANGUAGE=en_US.UTF-8 \
+    LC_ALL=en_US.UTF-8
+
+# Instance owner. uid/gid 51773 is not cosmetic: this rig bind-mounts the licence
+# key and a state directory for this uid, and a key uid 51773 cannot read makes
+# IRIS fall back to a zero-capacity diagnostic licence silently. See
+# secrets/README.md.
+RUN groupadd -g 51773 irisowner \
+ && useradd -u 51773 -g 51773 -m -d /home/irisowner -s /bin/bash irisowner
+
+# The six variables ADOCK requires to be present in the image at all times when
+# IRIS was installed from a kit, plus IRISSYS, which that section notes
+# InterSystems sets to /home/irisowner/irissys in all images (and which
+# parameters.isc confirms as server_location.registry_dir).
+ENV ISC_PACKAGE_INSTANCENAME=IRIS \
+    ISC_PACKAGE_INSTALLDIR=/usr/irissys \
+    ISC_PACKAGE_IRISUSER=irisowner \
+    ISC_PACKAGE_IRISGROUP=irisowner \
+    ISC_PACKAGE_MGRUSER=irisowner \
+    ISC_PACKAGE_MGRGROUP=irisowner \
+    IRISSYS=/home/irisowner/irissys \
+    PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/irisowner/bin \
+    PYTHONPATH=/usr/irissys/mgr/python
+
+# parameters.isc records server_location.is_nonroot_install: Y, so the install
+# runs as the instance owner with IRISSYS set, exactly as InterSystems does it.
+# Both directories must exist and be owned by that user first.
+RUN install -d -o irisowner -g irisowner -m 775 \
+      /usr/irissys /home/irisowner/irissys /home/irisowner/bin
+
+USER 51773
+
+# Install and quiesce in a single layer, as imageBuildSteps.sh's own header
+# requires ("your Dockerfile should call irisinstall_silent and
+# imageBuildSteps.sh in the same RUN layer, along with any other commands that
+# might modify IRIS.DAT files").
+#
+# The kit arrives as a bind mount rather than a COPY so that several GB of
+# installer never becomes an image layer. It is mounted read-write because the
+# installer writes beside itself; those writes land in the build overlay and are
+# discarded.
+#
+# The answer set reproduces parameters.isc from a published image of the same
+# line:
+#   unicode_selection.install_unicode : Y
+#   security_settings.initial_level   : Normal
+#   private_web_server.install_PWS    : N    (the images contain no web server)
+#   csp_gateway.configure_web         : N
+#   port_selection.superserver_port   : 1972
+#   port_selection.webserver_port     : 0
+#   ipm.install / docbook.install     : Y
+# The two install-time passwords are throwaways and are not credentials for
+# anything: imageBuildSteps.sh immediately overwrites every account's credential
+# with the hash the kit itself carries, which is the same hash InterSystems' own
+# images ship, and this rig's bootstrap then sets the round's real passwords at
+# container start (see secrets/README.md).
+RUN --mount=type=bind,source=.,target=/mnt/kit,rw \
+    set -eux; \
+    cd /mnt/kit; \
+    ISC_PACKAGE_UNICODE=Y \
+    ISC_PACKAGE_INITIAL_SECURITY=Normal \
+    ISC_PACKAGE_USER_PASSWORD=SYS1sTheD3fault \
+    ISC_PACKAGE_CSPSYSTEM_PASSWORD=SYS1sTheD3fault \
+    ISC_PACKAGE_INSTALL_PWS=N \
+    ISC_PACKAGE_WEB_CONFIGURE=N \
+    ISC_PACKAGE_SUPERSERVER_PORT=1972 \
+    ISC_PACKAGE_WEBSERVER_PORT=0 \
+    ISC_PACKAGE_IPM=Y \
+    ISC_PACKAGE_DOCBOOK_DATABASE=Y \
+    ISC_PACKAGE_STARTIRIS=N \
+    ./irisinstall_silent; \
+    ./dist/dev/Container/imageBuildSteps.sh
+
+# The container supervisor. See DEVIATION in the header.
+COPY --from=runtime-ref /tini /iris-main /irisHealth.sh /
+
+WORKDIR /home/irisowner
+
+# As published: superserver, arbiter, web server, xdbc, and the extra 54773.
+# 52773 is declared by InterSystems' images but nothing in them listens on it -
+# the HTTP surface is the Web Gateway, in its own container.
+EXPOSE 1972 2188 52773 53773 54773
+
+HEALTHCHECK --interval=60s --timeout=10s --start-period=60s --retries=3 \
+    CMD /irisHealth.sh
+
+ENTRYPOINT ["/tini", "--", "/iris-main"]
+
+LABEL com.intersystems.product-name="${IRIS_PRODUCT}" \
+      com.intersystems.product-platform="${IRIS_PLATFORM}" \
+      com.intersystems.platform-version="${IRIS_VERSION}" \
+      com.intersystems.ports.default.superserver="1972" \
+      com.intersystems.ports.default.webserver="52773" \
+      com.intersystems.ports.default.xdbc="53773" \
+      com.intersystems.ports.default.arbiter="2188" \
+      com.intersystems.ports.default.license-server="4002" \
+      name="${IRIS_PRODUCT}" \
+      vendor="InterSystems" \
+      version="${IRIS_VERSION}" \
+      de.intersystems.isik.built-by="IRIS-ISiK-Test-Suite kit/Dockerfile.iris" \
+      de.intersystems.isik.kit-file="${KIT_FILE}" \
+      de.intersystems.isik.kit-sha256="${KIT_SHA256}" \
+      de.intersystems.isik.supervisor-source="${SUPERVISOR_REF}" \
+      de.intersystems.isik.not-published-by-intersystems="true"

@@ -45,6 +45,11 @@ Verzeichnis und der nächste Durchgang überschreibt die Paketablage; ein archiv
 Bericht würde sonst auf Dateien verweisen, die nicht mehr existieren. Das
 Verzeichnis `reports/` wird von keinem Arbeitsschritt gelöscht.
 
+Zum Nachweis gehört auch das **Prüfmittel selbst**: `provenance/rig-version.txt`
+nennt Version und Stand der hier beschriebenen Prüfumgebung, die den Datensatz
+erzeugt hat. Weichen zwei Datensätze voneinander ab, ist damit unterscheidbar, ob
+sich der Prüfgegenstand oder die Messung geändert hat.
+
 ### Die beiden offiziellen Archive
 
 | `test-report.zip` — eingereicht | `debug-report.zip` — nicht eingereicht |
@@ -79,9 +84,20 @@ Jede Zahl wird zweimal berichtet, und die beiden sind nicht austauschbar:
 | prüfend | 432 | 783 | **1215** |
 | Vorbedingungsblöcke | 74 | 112 | **186** |
 
-Eine auf 1401 statt auf 1215 bezogene Erfolgsquote stellt die Konformität um etwa
-13 % **zu günstig** dar, weil die 186 Vorbedingungsblöcke ausnahmslos bestehen. Ein
-zu günstiger Fehler ist derjenige, nach dem eine prüfende Stelle zuerst sucht.
+Die 186 Vorbedingungsblöcke sind 13 % der ausgeführten Fälle und bestehen
+ausnahmslos. Eine auf 1401 bezogene Erfolgsquote kann daher unabhängig vom
+Verhalten des Prüfgegenstands nicht unter 13 % fallen und ist damit **zu
+günstig**; ein zu günstiger Fehler ist derjenige, nach dem eine prüfende Stelle
+zuerst sucht.
+
+Die Tabelle ist **auf Testsuite 2.7.0 gezählt**, der letzten Version, die beide
+Stufen enthält; 3.0.0 hat die Stufe-3-Tests entfernt. Alle drei Werte sind
+Eigenschaften der Testsuite-Version und ändern sich mit ihr — auf 3.0.9 lauten
+dieselben Zählungen 1 233 ausgeführt, 1 044 prüfend und 189 Vorbedingungsblöcke,
+und zwar für Stufe 5 allein. Eine Bezugsgröße darf nicht von einer
+Testsuite-Version in eine Aussage über eine andere übernommen werden;
+`results_report.py` leitet alle drei je Durchgang aus den Ergebnisdatensätzen des
+Durchgangs selbst ab.
 
 ### Die Umfangsabstimmung ist vor den Ergebnissen zu lesen
 

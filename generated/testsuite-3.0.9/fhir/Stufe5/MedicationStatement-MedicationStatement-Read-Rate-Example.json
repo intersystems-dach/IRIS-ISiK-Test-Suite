@@ -1,0 +1,75 @@
+{
+  "resourceType": "MedicationStatement",
+  "id": "MedicationStatement-Read-Rate-Example",
+  "status": "active",
+  "medicationReference": {
+    "reference": "Medication/Medication-Read-Example"
+  },
+  "subject": {
+    "reference": "Patient/Patient-Read-Example"
+  },
+  "effectiveDateTime": "2026-02-10",
+  "dosage": [
+    {
+      "text": "1000 mL Infusionslösung mit 50 mL/h intravenös",
+      "site": {
+        "coding": [
+          {
+            "system": "http://snomed.info/sct",
+            "code": "6073002",
+            "display": "Structure of left forearm",
+            "version": "http://snomed.info/sct/11000274103/version/20251115"
+          }
+        ]
+      },
+      "route": {
+        "coding": [
+          {
+            "system": "http://snomed.info/sct",
+            "code": "255560000",
+            "display": "Intravenous route",
+            "version": "http://snomed.info/sct/11000274103/version/20251115"
+          }
+        ]
+      },
+      "timing": {
+        "repeat": {
+          "when": [
+            "MORN",
+            "NOON",
+            "EVE"
+          ]
+        }
+      },
+      "doseAndRate": [
+        {
+          "doseQuantity": {
+            "value": 1000,
+            "unit": "mL",
+            "system": "http://unitsofmeasure.org",
+            "code": "mL"
+          },
+          "rateRatio": {
+            "numerator": {
+              "value": 50,
+              "unit": "mL",
+              "system": "http://unitsofmeasure.org",
+              "code": "mL"
+            },
+            "denominator": {
+              "value": 1,
+              "unit": "h",
+              "system": "http://unitsofmeasure.org",
+              "code": "h"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "meta": {
+    "profile": [
+      "https://gematik.de/fhir/isik/StructureDefinition/ISiKMedikationsInformation"
+    ]
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "resourceType": "List",
+  "id": "List-Read-Example",
+  "status": "current",
+  "mode": "working",
+  "code": {
+    "coding": [
+      {
+        "system": "http://terminology.hl7.org/CodeSystem/list-example-use-codes",
+        "code": "medications",
+        "display": "Medication List"
+      }
+    ]
+  },
+  "subject": {
+    "reference": "Patient/Patient-Read-Example"
+  },
+  "encounter": {
+    "reference": "Encounter/Encounter-Read-In-Progress-Example"
+  },
+  "date": "2026-02-03T10:00:00+01:00",
+  "entry": [
+    {
+      "date": "2026-02-03T10:00:00+01:00",
+      "item": {
+        "reference": "MedicationStatement/MedicationStatement-Read-Example"
+      }
+    }
+  ],
+  "meta": {
+    "profile": [
+      "https://gematik.de/fhir/isik/StructureDefinition/ISiKMedikationsListe"
+    ]
+  }
+}

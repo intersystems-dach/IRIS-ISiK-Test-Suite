@@ -1,0 +1,47 @@
+{
+  "resourceType": "Patient",
+  "id": "Patient-Update-Cancellation-Active-Example",
+  "meta": {
+    "profile": [
+      "https://gematik.de/fhir/isik/StructureDefinition/ISiKPatient"
+    ]
+  },
+  "identifier": [
+    {
+      "type": {
+        "coding": [
+          {
+            "system": "http://terminology.hl7.org/CodeSystem/v2-0203",
+            "code": "MR"
+          }
+        ]
+      },
+      "system": "https://test.krankenhaus.de/fhir/sid/patientennummer",
+      "value": "P-0005"
+    },
+    {
+      "system": "http://isiktest.gematik.de/fhir/sid/Patient",
+      "value": "IdentifierPatientUpdateCancellation"
+    }
+  ],
+  "active": true,
+  "name": [
+    {
+      "use": "official",
+      "family": "Stornokandidat",
+      "_family": {
+        "extension": [
+          {
+            "url": "http://hl7.org/fhir/StructureDefinition/humanname-own-name",
+            "valueString": "Stornokandidat"
+          }
+        ]
+      },
+      "given": [
+        "Stefan"
+      ]
+    }
+  ],
+  "gender": "male",
+  "birthDate": "1975-07-19"
+}

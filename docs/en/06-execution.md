@@ -390,10 +390,20 @@ interchangeable:
 | Asserting | 432 | 783 | **1215** |
 | Precondition blocks | 74 | 112 | **186** |
 
-A pass rate quoted over 1401 rather than 1215 understates conformance by ~13%,
-because the 186 precondition blocks pass unconditionally — they assert nothing.
-Quoting them as test results would be a favourable error, which is the kind an
-inspector looks for first.
+The 186 precondition blocks are 13 % of the executed count and they pass
+unconditionally, because they assert nothing. A rate computed over 1401 therefore
+cannot fall below 13 % however the SUT behaves: it is **too favourable**, which is
+the kind of error an inspector looks for first. 1215 is the only denominator a
+conformance statement may use.
+
+**That table is counted on suite 2.7.0**, the last version to carry both levels;
+3.0.0 removed the Stufe 3 tests outright ([04-testtool.md](04-testtool.md)). All
+three figures are properties of the suite version and move with it — on 3.0.9 the
+same counts are 1 233 executed, 1 044 asserting and 189 precondition blocks, for
+Stufe 5 alone. Never carry a denominator from one suite version into a statement
+about another. `results_report.py` derives all three per round from that round's
+own outcome records rather than assuming any of them, which is what makes the
+reconciliation below a straight equality check.
 
 A `Scenario Outline` counts **one case per `Examples` row**. That is Serenity's own
 rule (`TestOutcome.getTestCount()` returns `testSteps.size()` for a data-driven

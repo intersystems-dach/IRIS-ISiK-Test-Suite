@@ -1,0 +1,61 @@
+{
+  "resourceType": "Observation",
+  "status": "final",
+  "category": [
+    {
+      "coding": [
+        {
+          "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+          "code": "vital-signs"
+        }
+      ]
+    }
+  ],
+  "code": {
+    "coding": [
+      {
+        "system": "http://loinc.org",
+        "version": "2.81",
+        "code": "8867-4",
+        "display": "Heart rate"
+      }
+    ]
+  },
+  "subject": {
+    "reference": "Patient/Patient-Read-Extended-Example"
+  },
+  "encounter": {
+    "reference": "Encounter/Encounter-Read-In-Progress-Example"
+  },
+  "effectiveDateTime": "2026-03-05T09:30:00+01:00",
+  "performer": [
+    {
+      "reference": "Practitioner/Practitioner-Read-Example"
+    }
+  ],
+  "valueQuantity": {
+    "value": 63,
+    "unit": "per minute",
+    "system": "http://unitsofmeasure.org",
+    "code": "/min"
+  },
+  "method": {
+    "coding": [
+      {
+        "system": "http://snomed.info/sct",
+        "version": "http://snomed.info/sct/11000274103/version/20251115",
+        "code": "268400002",
+        "display": "12 lead electrocardiogram"
+      }
+    ]
+  },
+  "device": {
+    "reference": "Device/Device-Read-Example"
+  },
+  "id": "Heart-Rate-Read-Example",
+  "meta": {
+    "profile": [
+      "https://gematik.de/fhir/isik/StructureDefinition/ISiKHerzfrequenz"
+    ]
+  }
+}

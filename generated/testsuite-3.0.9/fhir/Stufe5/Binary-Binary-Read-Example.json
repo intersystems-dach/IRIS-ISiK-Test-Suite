@@ -1,0 +1,11 @@
+{
+  "resourceType": "Binary",
+  "id": "Binary-Read-Example",
+  "contentType": "text/plain",
+  "data": "VGVzdA==",
+  "meta": {
+    "profile": [
+      "https://gematik.de/fhir/isik/StructureDefinition/ISiKBinary"
+    ]
+  }
+}

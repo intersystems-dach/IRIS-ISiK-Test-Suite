@@ -1,0 +1,16 @@
+{
+  "resourceType": "Appointment",
+  "id": "Appointment-Replaced-Example",
+  "status": "cancelled",
+  "start": "2026-12-01T11:00:00Z",
+  "end": "2026-12-01T12:00:00Z",
+  "participant": [
+    {
+      "actor": {
+        "reference": "Patient/Patient-Read-Example",
+        "display": "Prof. Dr. Max Graf von und zu Mustermann"
+      },
+      "status": "accepted"
+    }
+  ]
+}

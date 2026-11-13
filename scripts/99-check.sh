@@ -931,6 +931,19 @@ internal = {
     "SUITE_TESTDATA_ROOT", "SUITE_TIGER_DIR", "SUITE_FHIR_ROOTS",
     "SUITE_TESTDATA_REL", "SUITE_TIGER_REL", "CHECK_SRC", "SR_TAGS",
     "RENDERED_ANY",
+    # 02-build-image-from-kit.sh. Deliberately NOT in .env.example: every one of
+    # these describes one kit and one build of one image, not the deployment. The
+    # script runs before a round exists and writes nothing a round reads, so an
+    # .env entry for KIT would be a setting that silently went stale the moment
+    # the image was built - which is the failure mode .env.resolved exists to
+    # prevent everywhere else. They are passed per invocation, as `make
+    # image-from-kit KIT=... SUPERVISOR_REF=...`, and the Makefile forwards them.
+    "KIT", "COMPONENT", "SUPERVISOR_REF", "IMAGE_PREFIX", "IMAGE_TAG",
+    "BASE_IMAGE", "KIT_WORK", "KEEP_EXTRACT",
+    # ...and its locals: what it read out of the kit, and its bookkeeping.
+    "KIT_CONTEXT", "KIT_TOP", "KIT_VERSION", "KIT_PRODUCT", "KIT_PLATFORM",
+    "PLATFORM_DISPLAY", "KIT_FILE_LABEL", "KIT_SHA256", "KIT_DIR_TEMPLATES",
+    "CLEAN_EXTRACT", "IRIS_TAG", "GATEWAY_TAG", "DOCKER_BUILDKIT",
     # 60-run-tests.sh. TESTS_TO_RUN is derived from the documented
     # TESTS_TO_RUN_STUFE3/5 and exported for compose, so it is an internal name
     # even though the container reads it as its own setting.
@@ -1101,6 +1114,195 @@ print(", ".join(sorted((yaml.safe_load(sys.stdin) or {}).get("services", {}))))'
     fail "docker compose config rejected the configuration:"
     printf '%s\n' "$out" | sed 's/^/        /' | head -n 20
   fi
+fi
+
+# -----------------------------------------------------------------------------
+section "8. Release hygiene"
+# -----------------------------------------------------------------------------
+# What this repository may and may not contain, enforced rather than remembered.
+# The rules are stated for readers in README.md, "What this repository does not
+# contain"; this is the mechanical half. They took effect at version 1.0.0, and
+# every one of them exists because the alternative is a repository that cannot be
+# handed to a third party:
+#
+#   * a product image or installation kit is licensed material and this is not a
+#     distribution channel for it;
+#   * the gematik test suite is gematik's, pinned and pulled, never vendored;
+#   * a credential in git history cannot be withdrawn;
+#   * a round bundle belongs to whoever took it. Ours are not secret - they are
+#     simply not what this repository is for, which is the instrument.
+#
+# Checked against the INDEX, not the working tree: the point is what a commit
+# would carry. An operator's own `reports/`, `build/` and `vendor/` are expected
+# to exist locally and are none of this check's business.
+if ! command -v git >/dev/null 2>&1 || ! git rev-parse --git-dir >/dev/null 2>&1; then
+  skip "not a git working tree (or git absent) - the release-hygiene checks need one"
+else
+  # --- No images, kits or any other bulk archive --------------------------
+  # Extension-based, because that is what someone adds by accident. A kit is a
+  # .tar.gz and an image is a .tar; both are caught by the same rule, and so is
+  # the round bundle shape (.zip) that rule 4 covers from the other direction.
+  bulk="$(git ls-files -- '*.tar' '*.tar.gz' '*.tgz' '*.tar.zst' '*.tar.bz2' \
+                          '*.tar.xz' '*.zip' '*.iso' '*.7z' '*.rar' 2>/dev/null || true)"
+  if [[ -n "$bulk" ]]; then
+    fail "archive or image files are tracked - no product image, kit or bundle belongs in this repository:"
+    printf '%s\n' "$bulk" | sed 's/^/        /'
+  else
+    pass "no image, kit or archive file is tracked"
+  fi
+
+  # --- No licence keys, and no private keys at all ------------------------
+  # Section 6 already covers secrets/iris.key by name. This covers the forms a
+  # key actually arrives in: the .ISCkey InterSystems issues, under whatever long
+  # descriptive file name it was issued with, and the SSH/TLS private keys that
+  # accumulate in a rig's working tree.
+  keys="$(git ls-files -- '*.ISCkey' '*.isckey' '*.key' '*.pem' '*.p12' '*.pfx' \
+                          'id_rsa*' 'id_ed25519*' 2>/dev/null || true)"
+  if [[ -n "$keys" ]]; then
+    fail "key material is tracked:"
+    printf '%s\n' "$keys" | sed 's/^/        /'
+  else
+    pass "no licence key and no private key is tracked"
+  fi
+
+  # --- No measured results -------------------------------------------------
+  # A round bundle is recognisable three ways and all three are checked, because
+  # any one of them can be defeated by moving a directory: the path reports/, a
+  # run-id directory anywhere (run-<ISO8601>), and the file names the generators
+  # write. The last is the one that catches a single report pasted in "just for
+  # reference", which is how this rule gets broken in practice.
+  results="$(git ls-files -- reports/ 2>/dev/null || true)"
+  results+="$(git ls-files 2>/dev/null | grep -E '(^|/)run-20[0-9]{6}T[0-9]{6}Z(/|$)' || true)"
+  results+="$(git ls-files -- '*/analysis/results.md' '*/analysis/results.json' \
+                              '*scenario-verdicts.csv' '*test-report.zip' \
+                              '*debug-report.zip' 'GAP-ANALYSIS.md' \
+                              'CASE-EVIDENCE.md' 2>/dev/null || true)"
+  if [[ -n "$results" ]]; then
+    fail "measured results are tracked - the machinery belongs here, the measurement does not:"
+    printf '%s\n' "$results" | sed 's/^/        /'
+  else
+    pass "no round bundle, report or verdict is tracked"
+  fi
+
+  # --- The working paths stay ignored -------------------------------------
+  # These are not credentials, so section 6 does not cover them; they are the
+  # paths a round writes through. If one of them stopped being ignored, the next
+  # `git add -A` after a round would commit several gigabytes of somebody's
+  # measurement, and the operator would have no warning at all.
+  hygiene_fails=0
+  for path in reports/ run/ vendor/ build/ gap-analysis/index.json \
+              docs/en/generated/REQUIREMENTS-Stufe5.md; do
+    git check-ignore -q "$path" 2>/dev/null \
+      || { fail "${path} is NOT gitignored - a round's output could be committed"; \
+           hygiene_fails=$((hygiene_fails+1)); }
+  done
+  (( hygiene_fails > 0 )) || pass "the paths a round writes through are all gitignored"
+
+  # --- Nothing large, except the labelled snapshot ------------------------
+  # The largest hand-written file in this repository is a generator of about
+  # 140 kB, so a megabyte is a wide margin rather than a tight budget. generated/
+  # is exempt by design: it holds version-labelled snapshots of what the rig
+  # produces, and the attribution index alone is several megabytes. Anything else
+  # over the limit is a payload that arrived by accident.
+  big=''
+  while IFS= read -r f; do
+    [[ -f "$f" ]] || continue
+    case "$f" in generated/*) continue ;; esac
+    sz="$(stat -c %s "$f" 2>/dev/null || echo 0)"
+    (( sz > 1048576 )) && big+="${f} (${sz} bytes)"$'\n'
+  done < <(git ls-files)
+  if [[ -n "$big" ]]; then
+    fail "tracked files outside generated/ exceed 1 MiB - is this a payload rather than source?"
+    printf '%s' "$big" | sed 's/^/        /'
+  else
+    pass "no tracked file outside generated/ exceeds 1 MiB"
+  fi
+
+  # --- The labelled snapshots verify --------------------------------------
+  # A snapshot whose checksums do not verify is worse than no snapshot: its whole
+  # purpose is that a third party can diff their own render against it and trust
+  # the comparison.
+  snap_fails=0; snap_seen=0
+  for sums in generated/*/SHA256SUMS; do
+    [[ -f "$sums" ]] || continue
+    snap_seen=$((snap_seen+1))
+    if ( cd "$(dirname "$sums")" && sha256sum -c --quiet SHA256SUMS ) >/dev/null 2>&1; then
+      note "$(dirname "$sums"): $(wc -l < "$sums") files verify"
+    else
+      fail "$(dirname "$sums"): SHA256SUMS does not verify"
+      snap_fails=$((snap_fails+1))
+    fi
+  done
+  if (( snap_seen == 0 )); then
+    skip "no generated/*/SHA256SUMS to verify"
+  elif (( snap_fails == 0 )); then
+    pass "every snapshot under generated/ verifies against its own SHA256SUMS"
+  fi
+
+  # --- No deployment host baked in ----------------------------------------
+  # A lab host's address is not a secret, but it is also not reproducible by
+  # anyone else: a reader who finds one in here cannot tell whether it is an
+  # example or something they are supposed to be able to reach.
+  #
+  # Scanning for IPv4 literals is NOT the way to check this, and the attempt is
+  # instructive: the tracked files legitimately contain `1.2.276.0` (the root OID
+  # of the German healthcare identifier namespaces), `129.6.58.42` (inside an
+  # OID), and build strings of the shape `2026.2.0.221.0`. All three match any
+  # dotted-quad pattern, none is an address. So the two things that can be
+  # checked exactly are checked exactly instead:
+  #
+  #   1. the rig's own configured addresses are private, so a deployment host
+  #      cannot arrive through .env.example;
+  #   2. no tracked file carries a remote shell invocation, which is the form a
+  #      host actually gets baked in as.
+  #
+  # Account names are deliberately not checked: the committed attribution index
+  # records the absolute paths of the host it was generated on, verbatim and on
+  # purpose, and generated/testsuite-3.0.9/README.md says so.
+  host_fails=0
+  for var in IRIS_IP TESTSUITE_IP; do
+    val="$(sed -n "s/^${var}=//p" .env.example | head -n1)"
+    if [[ -z "$val" ]]; then
+      fail "${var} is not set in .env.example"; host_fails=$((host_fails+1))
+    elif [[ ! "$val" =~ ^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.) ]]; then
+      fail "${var}=${val} in .env.example is not an RFC 1918 address - the rig's subnet must be private"
+      host_fails=$((host_fails+1))
+    fi
+  done
+
+  remote="$(git grep -lIE '(ssh|scp|rsync)[^|;&]*[[:alnum:]_.-]+@[[:alnum:]_.:-]+' \
+              -- . ':(exclude)generated' 2>/dev/null || true)"
+  if [[ -n "$remote" ]]; then
+    fail "tracked files carry a remote shell invocation - a deployment host must not be baked in:"
+    printf '%s\n' "$remote" | sed 's/^/        /'
+    host_fails=$((host_fails+1))
+  fi
+
+  (( host_fails > 0 )) || pass "the rig's subnet is private and no deployment host is baked in"
+
+  # --- The version is a statement, not a decoration -----------------------
+  # VERSION is copied into every round's provenance/rig-version.txt, so a reader
+  # of a bundle resolves it against this repository's CHANGELOG to find out what
+  # the rig did at the time. That only works while the two agree, and the way they
+  # stop agreeing is a release that bumps one of them.
+  ver_fails=0
+  if [[ ! -f VERSION ]]; then
+    fail "VERSION is missing - a round's provenance would record the rig as 'unrecorded'"
+    ver_fails=$((ver_fails+1))
+  else
+    ver="$(head -n1 VERSION | tr -d '[:space:]')"
+    if [[ ! "$ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+      fail "VERSION='${ver}' is not a semantic version"
+      ver_fails=$((ver_fails+1))
+    elif [[ ! -f CHANGELOG.md ]]; then
+      fail "CHANGELOG.md is missing - VERSION='${ver}' then documents nothing"
+      ver_fails=$((ver_fails+1))
+    elif ! grep -qE "^## +${ver//./\\.}( |\$)" CHANGELOG.md; then
+      fail "CHANGELOG.md has no '## ${ver}' section - the released version is undocumented"
+      ver_fails=$((ver_fails+1))
+    fi
+  fi
+  (( ver_fails > 0 )) || pass "VERSION ${ver} has a CHANGELOG.md section"
 fi
 
 # -----------------------------------------------------------------------------

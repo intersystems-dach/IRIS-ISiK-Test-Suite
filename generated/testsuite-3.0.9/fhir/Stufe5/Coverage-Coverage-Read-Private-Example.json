@@ -1,0 +1,32 @@
+{
+  "resourceType": "Coverage",
+  "id": "Coverage-Read-Private-Example",
+  "status": "active",
+  "type": {
+    "coding": [
+      {
+        "system": "http://fhir.de/CodeSystem/versicherungsart-de-basis",
+        "code": "SEL",
+        "display": "Selbstzahler"
+      }
+    ]
+  },
+  "subscriber": {
+    "reference": "Patient/Patient-Read-Example",
+    "display": "Graf von und zu Mustermann"
+  },
+  "beneficiary": {
+    "reference": "Patient/Patient-Read-Example"
+  },
+  "payor": [
+    {
+      "reference": "Patient/Patient-Read-Example",
+      "display": "Graf von und zu Mustermann"
+    }
+  ],
+  "meta": {
+    "profile": [
+      "https://gematik.de/fhir/isik/StructureDefinition/ISiKVersicherungsverhaeltnisSelbstzahler"
+    ]
+  }
+}

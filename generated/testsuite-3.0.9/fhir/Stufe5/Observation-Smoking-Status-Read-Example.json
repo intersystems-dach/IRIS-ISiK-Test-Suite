@@ -1,0 +1,58 @@
+{
+  "resourceType": "Observation",
+  "status": "final",
+  "code": {
+    "coding": [
+      {
+        "system": "http://snomed.info/sct",
+        "version": "http://snomed.info/sct/11000274103/version/20251115",
+        "code": "77176002",
+        "display": "Smoker"
+      },
+      {
+        "system": "http://loinc.org",
+        "version": "2.81",
+        "code": "72166-2",
+        "display": "Tobacco smoking status"
+      }
+    ]
+  },
+  "subject": {
+    "reference": "Patient/Patient-Read-Extended-Example"
+  },
+  "encounter": {
+    "reference": "Encounter/Encounter-Read-In-Progress-Example"
+  },
+  "effectiveDateTime": "2026-01-06T08:00:00+01:00",
+  "performer": [
+    {
+      "reference": "Practitioner/Practitioner-Read-Example"
+    }
+  ],
+  "category": [
+    {
+      "coding": [
+        {
+          "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+          "code": "social-history"
+        }
+      ]
+    }
+  ],
+  "valueCodeableConcept": {
+    "coding": [
+      {
+        "system": "http://loinc.org",
+        "version": "2.81",
+        "code": "LA15920-4",
+        "display": "Former smoker"
+      }
+    ]
+  },
+  "id": "Smoking-Status-Read-Example",
+  "meta": {
+    "profile": [
+      "https://gematik.de/fhir/isik/StructureDefinition/ISiKRaucherStatus"
+    ]
+  }
+}

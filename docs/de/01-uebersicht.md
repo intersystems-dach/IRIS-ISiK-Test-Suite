@@ -189,6 +189,10 @@ ausdrücklich fest, dass der Bericht **kein Konformitätsergebnis** ist und nich
 
 ### Umfang in Zahlen
 
+Gezählt auf Testsuite **2.7.0**, der letzten Version, die beide Stufen enthält.
+Jede Zahl ist eine Eigenschaft der Testsuite-Version; siehe
+[03-ergebnisse.md](03-ergebnisse.md) für die Zählung auf 3.0.9.
+
 | | Stufe 3 | Stufe 5 | Summe |
 |---|---:|---:|---:|
 | Feature-Dateien | 96 | 124 | 220 |
@@ -200,8 +204,10 @@ ausdrücklich fest, dass der Bericht **kein Konformitätsergebnis** ist und nich
 **Zwei Bezugsgrößen, die nicht austauschbar sind.** Die 186
 `@vorbedingung`-Blöcke sind echte Szenarien und werden ausgeführt, halten aber
 lediglich die benötigten Testdaten als Prosa fest und prüfen den Prüfgegenstand
-nicht. Eine Erfolgsquote, die auf 1401 statt auf 1215 bezogen wird, stellt die
-Konformität um etwa 13 % zu günstig dar, weil diese Blöcke ausnahmslos bestehen.
+nicht. Die 186 Blöcke sind 13 % der ausgeführten Fälle und bestehen ausnahmslos;
+eine auf 1401 bezogene Erfolgsquote kann daher unabhängig vom Verhalten des
+Prüfgegenstands nicht unter 13 % fallen und ist damit **zu günstig** — ein zu
+günstiger Fehler ist derjenige, nach dem eine prüfende Stelle zuerst sucht.
 **Maßgebliche Bezugsgröße für eine Konformitätsaussage ist 1215.**
 
 Ein `Scenario Outline` zählt **je Zeile des `Examples`-Blocks als ein Testfall**.

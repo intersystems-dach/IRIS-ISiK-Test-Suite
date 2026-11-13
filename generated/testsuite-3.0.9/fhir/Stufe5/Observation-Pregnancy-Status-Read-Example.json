@@ -1,0 +1,47 @@
+{
+  "resourceType": "Observation",
+  "status": "final",
+  "code": {
+    "coding": [
+      {
+        "system": "http://loinc.org",
+        "version": "2.81",
+        "code": "82810-3",
+        "display": "Pregnancy status"
+      }
+    ]
+  },
+  "subject": {
+    "reference": "Patient/Patient-Read-Extended-Example"
+  },
+  "encounter": {
+    "reference": "Encounter/Encounter-Read-In-Progress-Example"
+  },
+  "effectiveDateTime": "2026-01-06T08:00:00+01:00",
+  "performer": [
+    {
+      "reference": "Practitioner/Practitioner-Read-Example"
+    }
+  ],
+  "valueCodeableConcept": {
+    "coding": [
+      {
+        "system": "http://loinc.org",
+        "version": "2.81",
+        "code": "LA15173-0",
+        "display": "Pregnant"
+      }
+    ]
+  },
+  "hasMember": [
+    {
+      "reference": "Observation/Expected-Pregnancy-Delivery-Date-Read-Example"
+    }
+  ],
+  "id": "Pregnancy-Status-Read-Example",
+  "meta": {
+    "profile": [
+      "https://gematik.de/fhir/isik/StructureDefinition/ISiKSchwangerschaftsstatus"
+    ]
+  }
+}

@@ -103,6 +103,7 @@ the one this project generated. The configuration is deliberately not copied int
 | `package-plan.json` | Which package version went to which endpoint, and why |
 | `env.resolved.txt` | The deployment's whole resolved configuration — image digests, versions pulled, generated credentials. The single file from which the round can be reconstructed |
 | `requirements.json` | Every scenario, precondition block and assertion extracted from the suite's own feature files — what makes the scope figures checkable without the suite image |
+| `rig-version.txt` | The measuring instrument: this rig's `VERSION`, the commit that ran, and whether its tracked files were modified. `unrecorded` where the deployment is not a git checkout |
 | `CREDENTIALS.md` | The credential sheet as generated at deployment |
 
 `env.resolved.txt` is copied byte-for-byte, not filtered, and named `.txt` rather
@@ -600,9 +601,10 @@ carry. Run against a slim bundle, the generator produces a complete document in
 which every clause states its input, its expectation and the recorded error and
 no clause quotes a request or a response; §1 of that document says so, and §5
 separates those cases from the ones whose own traffic log is genuinely empty.
-Measured on round K's slim archive on 2026-11-12: 41 clauses, 0 exchanges. The
-annex therefore has to be generated where the full bundle is, or from one that
-was archived with its debug archives.
+Measured on the slim archive of a finished round: one clause per failing case,
+and not one of them quoting an exchange. The annex therefore has to be
+generated where the full bundle is, or from one that was archived with its debug
+archives.
 
 A Scenario Outline writes one outcome record for all of its examples, so the record
 is first narrowed to the example's own step subtree by the label the suite gave it.
@@ -635,8 +637,9 @@ for one round.
 The feature-scoped-response coupling has a visible consequence here. A case whose
 assertion is made about a response obtained in an *earlier scenario* of the same
 feature has no exchange of its own: its own traffic log records zero messages.
-Those cases are reported in §5 by name, with the reason, rather than dropped — four
-of round K's 41 failures are of this class.
+Those cases are reported in §5 by name, with the reason, rather than dropped. It
+is not a rare shape: it arises wherever the suite asserts across scenario
+boundaries, which is a property of the suite and not of the SUT.
 
 §5 keeps three circumstances apart, because they are not equivalent and only the
 first is a statement about the run: the traffic log is **present and empty**, which

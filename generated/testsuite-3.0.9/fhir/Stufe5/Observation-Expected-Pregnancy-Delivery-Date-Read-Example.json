@@ -1,0 +1,33 @@
+{
+  "resourceType": "Observation",
+  "status": "final",
+  "code": {
+    "coding": [
+      {
+        "system": "http://loinc.org",
+        "version": "2.81",
+        "code": "11779-6",
+        "display": "Delivery date Estimated from last menstrual period"
+      }
+    ]
+  },
+  "subject": {
+    "reference": "Patient/Patient-Read-Extended-Example"
+  },
+  "encounter": {
+    "reference": "Encounter/Encounter-Read-In-Progress-Example"
+  },
+  "effectiveDateTime": "2026-01-06T08:00:00+01:00",
+  "performer": [
+    {
+      "reference": "Practitioner/Practitioner-Read-Example"
+    }
+  ],
+  "valueDateTime": "2026-01-06",
+  "id": "Expected-Pregnancy-Delivery-Date-Read-Example",
+  "meta": {
+    "profile": [
+      "https://gematik.de/fhir/isik/StructureDefinition/ISiKSchwangerschaftErwarteterEntbindungstermin"
+    ]
+  }
+}

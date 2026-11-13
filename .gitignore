@@ -23,6 +23,34 @@ YKE44*
 id_rsa
 id_ed25519
 
+# --- Bulk archives: product images, installation kits, report bundles ------
+# No archive belongs in this repository: an image tarball or an installation kit
+# is licensed product and this is not a distribution channel for it, and a report
+# archive is a measurement rather than source. Operators do drop such files into
+# the working tree - that is what the working tree is for - so they are ignored
+# here rather than left to be caught by `make check` after a careless `git add`.
+*.tar
+*.tar.gz
+*.tgz
+*.tar.zst
+*.tar.bz2
+*.tar.xz
+*.zip
+*.iso
+*.7z
+
+# --- Forge access tokens ----------------------------------------------------
+# A GitHub personal access token (or any other forge credential) an operator
+# keeps in the tree to push with. Same rule as every other credential here: it
+# never reaches source control. Nothing in this rig reads one - `git push` takes
+# it from the operator's own credential helper or askpass, never from a path
+# inside the repository.
+github-PAT.txt
+*-PAT.txt
+*.pat
+*_token
+*.token
+
 # --- Resolved configuration (per-deployment, machine specific) -------------
 .env
 .env.resolved
@@ -45,6 +73,11 @@ run/
 # version's profile canonicals and resource IDs into the repository, where they
 # would silently disagree with a run that pinned a different TESTSUITE_VERSION.
 # The authored sources under testdata/fhir/ are tracked; this is not.
+#
+# generated/<suite-version>/ is the deliberate exception and does not contradict
+# this: a copy under a path that NAMES the version it belongs to cannot be
+# mistaken for the current render, which is the only objection above. It is read
+# by nothing. See generated/testsuite-3.0.9/README.md.
 build/
 
 # --- Test results ----------------------------------------------------------

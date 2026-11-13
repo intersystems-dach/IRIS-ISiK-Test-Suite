@@ -1,0 +1,70 @@
+{
+  "resourceType": "MedicationAdministration",
+  "id": "MedicationAdministration-Read-Example",
+  "status": "completed",
+  "medicationReference": {
+    "reference": "Medication/Medication-Read-Example"
+  },
+  "subject": {
+    "reference": "Patient/Patient-Read-Example"
+  },
+  "context": {
+    "reference": "Encounter/Encounter-Read-In-Progress-Example",
+    "identifier": {
+      "system": "https://test.krankenhaus.de/fhir/sid/fallnr",
+      "value": "0123456789"
+    }
+  },
+  "effectiveDateTime": "2026-02-03T08:00:00+01:00",
+  "performer": [
+    {
+      "actor": {
+        "reference": "Practitioner/Practitioner-Read-Example"
+      }
+    }
+  ],
+  "note": [
+    {
+      "text": "Test note"
+    }
+  ],
+  "dosage": {
+    "text": "1 effervescent tablet, oral",
+    "site": {
+      "coding": [
+        {
+          "system": "http://snomed.info/sct",
+          "code": "738956005",
+          "version": "http://snomed.info/sct/11000274103/version/20251115",
+          "display": "Oral"
+        }
+      ]
+    },
+    "route": {
+      "coding": [
+        {
+          "system": "http://snomed.info/sct",
+          "code": "26643006",
+          "version": "http://snomed.info/sct/11000274103/version/20251115",
+          "display": "Oral route"
+        }
+      ]
+    },
+    "dose": {
+      "value": 1,
+      "unit": "effervescent tablet",
+      "system": "http://unitsofmeasure.org",
+      "code": "1"
+    }
+  },
+  "reasonReference": [
+    {
+      "reference": "Condition/Condition-Read-Active-Example"
+    }
+  ],
+  "meta": {
+    "profile": [
+      "https://gematik.de/fhir/isik/StructureDefinition/ISiKMedikationsVerabreichung"
+    ]
+  }
+}

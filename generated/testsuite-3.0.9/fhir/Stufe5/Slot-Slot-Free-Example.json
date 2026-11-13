@@ -1,0 +1,15 @@
+{
+  "resourceType": "Slot",
+  "id": "Slot-Free-Example",
+  "meta": {
+    "profile": [
+      "https://gematik.de/fhir/isik/StructureDefinition/ISiKTerminblock"
+    ]
+  },
+  "schedule": {
+    "reference": "Schedule/Schedule-Read-Example"
+  },
+  "status": "free",
+  "start": "2027-01-01T09:00:00Z",
+  "end": "2027-01-01T20:00:00Z"
+}

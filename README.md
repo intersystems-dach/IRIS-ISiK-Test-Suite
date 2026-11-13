@@ -4,10 +4,10 @@ A docker-compose lab rig that runs the **official Gematik ISiK test suite** agai
 an **InterSystems IRIS for Health** FHIR repository, for **ISiK Stufe 3** and
 **ISiK Stufe 5**, and turns the result into an evidence bundle.
 
-One command brings up the unit under test, installs both endpoints and the 35 FHIR
+One command brings up the unit under test, installs the endpoints and the FHIR
 packages the Gematik reference validator validates against, seeds a fabricated test
-corpus derived from the suite's own preconditions, runs both conformance levels, and
-writes the reports:
+corpus derived from the suite's own preconditions, runs every conformance level the
+pinned suite carries, and writes the reports:
 
 ```sh
 make all
@@ -26,14 +26,40 @@ Per round, in `reports/<run-id>/`:
 | `analysis/results.md` | The cited results document: every claim traced to a path inside those archives |
 | `GAP-ANALYSIS.md` | Per distinct defect: the test step, the FHIR feature and the package that supplies it, expected vs. actual. For product developers, in English |
 | `CASE-EVIDENCE.md` | Its annex, per failing case: the input data used, the output expected and received with both bodies verbatim, and a command that replays the request |
-| `analysis/scenario-verdicts.csv` | One row per test case, 1401 of them |
+| `analysis/scenario-verdicts.csv` | One row per test case |
 | `analysis/MANIFEST.txt` | sha256 of every file in the bundle |
-| `provenance/` | Resolved versions and image digests, the seed record, the SUT's own install record, the package manifest, the credentials used |
+| `provenance/` | Resolved versions and image digests, the seed record, the SUT's own install record, the package manifest, the credentials used, and the version of this rig that produced the round |
 
 The derived documents are pure functions of the archives and can be regenerated on
-any machine from an archived bundle. IRIS for Health is *expected* to fail parts of
-this, which is why the gap analysis is a first-class deliverable rather than an
-appendix.
+any machine from an archived bundle. 
+
+ISiK is designed to be a constantly evolving, moving target, rather than a static set of one-time rules. IRIS for Health is therefore *expected* to fail parts of
+this at times, which is why the gap analysis is a first-class deliverable rather than an appendix.
+
+## What this repository does not contain
+
+Four categories of thing are absent **by rule**. Each has
+machinery here to obtain or produce it, and a document saying how.
+
+| Absent | Why | Where to get it |
+|---|---|---|
+| **IRIS / IRIS for Health images and installation kits** | they are licensed product, and this repository is not a distribution channel for them | `containers.intersystems.com` for images, `downloads.intersystems.com` for kits, both with your own credentials. An image you already hold as a local file is supported too — [kit/README.md](kit/README.md) |
+| **The gematik ISiK test suite** | it is gematik's, pinned and pulled, never vendored | `make resolve` pulls `gematik1/isik-testsuite:<version>` from Docker Hub; no credential needed. [docs/en/04-testtool.md](docs/en/04-testtool.md) |
+| **Licence keys, registry tokens and passwords** | a credential in git history cannot be withdrawn | described, never shipped: [secrets/README.md](secrets/README.md) states the format, the validity and the source of each. `make check` fails if one is ever tracked |
+| **Round bundles, reports and verdicts** | out of scope: this repository is the instrument, not the measurement. The measuring is yours to do, and a result shipped here would be a result about somebody else's system | `make all` produces them, into `reports/`, which is `.gitignore`d |
+
+The one thing generated that *is* committed is a version-labelled snapshot of the
+rendered test corpus, under [generated/](generated/) — so that you can diff your
+own render against ours before taking a round and know whether a difference you
+then measure is a difference in the test data. It is read by nothing and is not
+an input to a round.
+
+This rule took effect with version 1.0.0 (see [CHANGELOG.md](CHANGELOG.md)).
+Commits before it carry our own working data and reports. They are not
+confidential — they are simply out of scope for this repository, which is
+tooling — so they are left in place rather than rewritten. Read them as a record
+of a particular round on a particular build, taken on our rig, at that date; not
+as a statement about any build you are about to test.
 
 ## Hardware
 
@@ -47,6 +73,8 @@ roughly an hour and five on the minimum one, and leaves 26 GB of disk in use. Si
 upward rather than downward: a Stufe 5 run short of scenario heap does not slow
 down, it silently loses the level after hours. [INSTALL.md](INSTALL.md#2-hardware)
 traces every figure to a measurement.
+
+This tooling was developed using an Azure VM and its Ubuntu 24.04 LTS x86_64 image as the lab rig, starting from its mid-2026 stock configuration. There is nothing particular about Azure that is required, but it is what supplied our installation baseline. If your baseline differs, you might need to adapt the installation procedure accordingly.
 
 ## Quick start
 
@@ -64,7 +92,7 @@ make check && make all
 
 Two things are per-installation secrets you supply: the **IRIS licence key** and a
 **`containers.intersystems.com` login**. Two things are per-installation choices,
-resolved independently: the SUT build floats to the newest 2026-line release, and
+resolved independently: the SUT build currently floats to the newest 2026-line release, and
 the **test suite version stays pinned** — the authored test corpus is coupled to one
 release's feature files, and floating it can misattribute our own data defect to the
 product. [INSTALL.md section 6](INSTALL.md#6-the-two-version-choices-both-yours) has
@@ -85,7 +113,10 @@ make clean           # teardown; never touches reports/ or secrets/
 | [docs/en/](docs/en/) | The rig in full: [architecture](docs/en/01-architecture.md), [setup](docs/en/02-setup.md), [the SUT](docs/en/03-sut-iris.md), [the test tool](docs/en/04-testtool.md), [the test data](docs/en/05-testdata.md), [execution](docs/en/06-execution.md), [reports](docs/en/07-reports.md), [limitations](docs/en/08-known-limitations.md) |
 | [docs/de/](docs/de/) | Regulatorische Dokumentation zum *Bestätigungsverfahren* — auf Deutsch, weil die ISiK-Spezifikation es ist |
 | [secrets/README.md](secrets/README.md) | What goes in `secrets/`, and what is generated |
+| [kit/README.md](kit/README.md) | How to obtain the unit under test: pull a published image, side-load one you hold, or build one from an installation kit |
+| [generated/](generated/) | Version-labelled snapshots of what the rig generates, for diffing against your own |
 | [.env.example](.env.example) | Every deploy-time setting, with its reasoning next to it |
+| [CHANGELOG.md](CHANGELOG.md) | What each version of the rig changed. The version in [VERSION](VERSION) is recorded in every round's `provenance/rig-version.txt`, so a bundle says which rig produced it |
 
 Source comments and technical description are English; regulatory documentation is
 German, because ISiK's own specification is German-only on purpose and translating a

@@ -1,0 +1,92 @@
+{
+  "resourceType": "Appointment",
+  "id": "Appointment-Read-Example",
+  "meta": {
+    "tag": [
+      {
+        "system": "http://fhir.de/CodeSystem/common-meta-tag-de",
+        "code": "external",
+        "display": "Externally created data"
+      }
+    ],
+    "profile": [
+      "https://gematik.de/fhir/isik/StructureDefinition/ISiKTermin"
+    ]
+  },
+  "extension": [
+    {
+      "url": "http://hl7.org/fhir/5.0/StructureDefinition/extension-Appointment.replaces",
+      "valueReference": {
+        "reference": "Appointment/Appointment-Replaced-Example"
+      }
+    }
+  ],
+  "status": "cancelled",
+  "cancelationReason": {
+    "coding": [
+      {
+        "system": "http://terminology.hl7.org/CodeSystem/appointment-cancellation-reason",
+        "code": "pat",
+        "display": "Patient"
+      }
+    ]
+  },
+  "serviceType": [
+    {
+      "coding": [
+        {
+          "system": "http://terminology.hl7.org/CodeSystem/service-type",
+          "code": "177",
+          "display": "Neurology"
+        }
+      ],
+      "text": "Neurology consultation"
+    }
+  ],
+  "specialty": [
+    {
+      "coding": [
+        {
+          "system": "http://ihe-d.de/CodeSystems/AerztlicheFachrichtungen",
+          "code": "NEUR",
+          "display": "Neurologie"
+        }
+      ]
+    }
+  ],
+  "_priority": {
+    "extension": [
+      {
+        "url": "https://gematik.de/fhir/isik/StructureDefinition/ISiKTerminPriorityExtension",
+        "valueCodeableConcept": {
+          "coding": [
+            {
+              "system": "http://snomed.info/sct",
+              "version": "http://snomed.info/sct/11000274103/version/20251115",
+              "code": "394848005",
+              "display": "Normal priority"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "start": "2027-01-01T11:00:00Z",
+  "end": "2027-01-01T12:00:00Z",
+  "slot": [
+    {
+      "reference": "Slot/Slot-Read-Example"
+    }
+  ],
+  "comment": "This is a test comment!",
+  "patientInstruction": "Please come empty-stomached for your visit",
+  "participant": [
+    {
+      "actor": {
+        "reference": "Patient/Patient-Read-Example",
+        "display": "Prof. Dr. Max Graf von und zu Mustermann"
+      },
+      "status": "accepted"
+    }
+  ]
+}

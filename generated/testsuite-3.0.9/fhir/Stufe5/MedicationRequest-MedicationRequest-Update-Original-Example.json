@@ -1,0 +1,48 @@
+{
+  "resourceType": "MedicationRequest",
+  "id": "MedicationRequest-Update-Original-Example",
+  "meta": {
+    "profile": [
+      "https://gematik.de/fhir/isik/StructureDefinition/ISiKMedikationsVerordnung"
+    ]
+  },
+  "status": "completed",
+  "intent": "order",
+  "medicationReference": {
+    "reference": "Medication/Medication-Read-Example"
+  },
+  "subject": {
+    "reference": "Patient/Patient-Read-Example"
+  },
+  "authoredOn": "2021-07-01",
+  "requester": {
+    "reference": "Practitioner/Practitioner-Read-Example"
+  },
+  "note": [
+    {
+      "text": "Testnotiz"
+    }
+  ],
+  "dosageInstruction": [
+    {
+      "text": "1 Brausetablette morgens",
+      "timing": {
+        "repeat": {
+          "when": [
+            "MORN"
+          ]
+        }
+      },
+      "doseAndRate": [
+        {
+          "doseQuantity": {
+            "value": 1,
+            "unit": "Brausetablette",
+            "system": "http://unitsofmeasure.org",
+            "code": "1"
+          }
+        }
+      ]
+    }
+  ]
+}

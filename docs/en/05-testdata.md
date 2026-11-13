@@ -602,7 +602,10 @@ rather than reporting every Bundle assertion as an unattributable profile.
 ## Scope, measured
 
 Numbers below come from `vendor/requirements.json`, i.e. from the pinned image's
-own feature files. They are what the results document reconciles against.
+own feature files. They are what the results document reconciles against. They
+are counted on suite **2.7.0**, the last version to carry both levels; every one
+of them is a property of the suite version, and `make packages` recounts them
+from whichever version is pinned — see [06-execution.md](06-execution.md#the-two-denominators).
 
 | | Stufe 3 | Stufe 5 | Total |
 |---|---|---|---|

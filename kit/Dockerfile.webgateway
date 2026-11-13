@@ -1,0 +1,217 @@
+# =============================================================================
+# InterSystems Web Gateway - container image built from an installation kit
+# =============================================================================
+# Built from the Web Gateway component of an IRIS / IRIS for Health installation
+# kit. Driven by `scripts/02-build-image-from-kit.sh`; see kit/README.md.
+#
+# WHEN TO USE IT. The rig does not need this image: it defaults to the published
+# `webgateway` image from containers.intersystems.com, and a published image of
+# the matching release line is the better front end for a round of record. Build
+# this one either because no published gateway image is available to you for the
+# line you must test, or deliberately - to establish by measurement rather than
+# by assertion whether the HTTP front end's provenance affects the conformance
+# verdict. If both are available, let the published image carry the round of
+# record and this one carry the comparison.
+#
+# BEFORE TRUSTING A COMPARISON, verify that the four Web Gateway binaries which
+# implement the routing and the IRIS connection are byte-identical between your
+# kit and the published image:
+#
+#   for f in CSPa24.so CSPa24Sys.so CSPnsd CSPcgi; do
+#     sha256sum "<kit>/dist/csp/$f"
+#     docker run --rm --entrypoint sha256sum <published-webgateway> \
+#       "/opt/webgateway/bin/$f"
+#   done
+#
+# Expect the *designation strings* to differ even when the binaries do not: a kit
+# records its own build string in dist/csp/buildver, and a published image
+# records that image's build string in /opt/webgateway/buildver. Differing
+# designations with identical binaries are comparable; differing binaries are
+# not, and must be reported as such rather than explained away.
+#
+# The gateway is installed by the kit's own unattended installer,
+# dist/csp/GatewayInstall, which accepts ISC_PACKAGE_MODE=unattended (see its
+# main(), which sets is_unattended=y and reads the ISC_PACKAGE_* variables used
+# below). Nothing is placed by hand that the installer places itself.
+#
+# DEVIATION, deliberate and unavoidable: /startWebGateway in the published
+# images is a compiled ELF executable, not a script, and no kit ships it. This
+# image therefore uses its own entrypoint, which does what the published image's
+# Apache configuration implies and nothing else: render nothing, start Apache in
+# the foreground under the configuration mounted by the test rig. The rig
+# supplies both configuration files it depends on - CSP.ini at
+# /opt/webgateway/bin/CSP.ini and the virtual host at
+# /etc/apache2/sites-enabled/000-default.conf - so no configuration generated at
+# build time survives into a round in either image. That is what makes the two
+# images comparable.
+# =============================================================================
+
+ARG BASE_IMAGE=ubuntu:24.04
+FROM ${BASE_IMAGE}
+
+ARG GATEWAY_VERSION
+ARG IRIS_PLATFORM=dockerubuntux64
+
+# apache2 supplies the web server. The published images use the Apache the
+# matching Ubuntu LTS ships - 2.4.58 on Ubuntu 24.04 - which is what this
+# repository's apache2 package provides. wget is required by the rig's health
+# check for this service.
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      apache2 ca-certificates wget \
+ && rm -rf /var/lib/apt/lists/*
+
+# As published: the gateway's own installation directory, and the variable the
+# Apache directives below dereference.
+ENV ISC_PACKAGE_INSTALLDIR=/opt/webgateway
+
+# The kit arrives as a bind mount rather than a COPY so that several GB of
+# installer never becomes an image layer. It is mounted read-write because the
+# installer writes its log beside itself; those writes land in the build overlay
+# and are discarded.
+#
+# ISC_PACKAGE_HOSTNAME / SUPERSERVER_PORT / INSTANCENAME only seed the CSP.ini
+# the installer generates, and the rig replaces that file wholesale at run time.
+# They are set to the rig's values regardless - `iris` is the compose service
+# name of the SUT - so that an image started without the mount is not silently
+# pointed somewhere else.
+RUN --mount=type=bind,source=.,target=/mnt/kit,rw \
+    set -eux; \
+    cd /mnt/kit; \
+    ISC_PACKAGE_MODE=unattended \
+    ISC_PACKAGE_PLATFORM="${IRIS_PLATFORM}" \
+    ISC_PACKAGE_WEB_CONFIGURE=Y \
+    ISC_PACKAGE_HOSTNAME=iris \
+    ISC_PACKAGE_SUPERSERVER_PORT=1972 \
+    ISC_PACKAGE_INSTANCENAME=IRIS \
+    ISC_PACKAGE_INITIAL_SECURITY=Normal \
+    ISC_PACKAGE_CSPSYSTEM_PASSWORD=SYS1sTheD3fault \
+    ./dist/csp/GatewayInstall quiet; \
+    cp dist/csp/buildver /opt/webgateway/buildver
+
+# The installer appends a configuration block of its own directly into
+# /etc/apache2/apache2.conf, delimited by "#### BEGIN-ApacheCSP-SECTION ####"
+# and "#### END-ApacheCSP-SECTION-<instance> ####". It carries a second
+# LoadModule for the same module (Apache logs "AH01574: module csp_module_sa is
+# already loaded, skipping"), a <Location /iris> mapping, and two Redirect
+# directives sending /csp/docbook/ to docs.intersystems.com.
+#
+# The published images have none of it: their only CSP wiring is
+# mods-available/CSP.load and conf-available/CSP.conf. The block is therefore
+# removed, so that the effective configuration of this image and of a published
+# image are the same and a measured difference between them cannot be an
+# artefact of how each was built. The build then asserts the removal.
+RUN set -eux; \
+    sed -i '/^#### BEGIN-ApacheCSP-SECTION/,/^#### END-ApacheCSP-SECTION-.* ####$/d' \
+      /etc/apache2/apache2.conf; \
+    ! grep -q "ApacheCSP-SECTION" /etc/apache2/apache2.conf; \
+    ! grep -q "csp_module_sa" /etc/apache2/apache2.conf
+
+# Apache wiring, stated explicitly rather than left to whatever the installer
+# detected: the module is loaded from the gateway's own directory under the
+# handler name the rig's virtual host references (csp-handler-sa), and the two
+# paths the gateway serves for itself are mapped. These directives reproduce
+# /etc/apache2/mods-available/CSP.load and /etc/apache2/conf-available/CSP.conf
+# as a published webgateway image ships them. If you have a published image to
+# hand, diff them against it before relying on a comparison.
+RUN set -eux; \
+    printf '%s\n' \
+      'LoadModule csp_module_sa "${ISC_PACKAGE_INSTALLDIR}/bin/CSPa24.so"' \
+      > /etc/apache2/mods-available/CSP.load; \
+    printf '%s\n' \
+      '# CSP config file' \
+      '' \
+      'CSPModulePath "${ISC_PACKAGE_INSTALLDIR}/bin/"' \
+      'CSPConfigPath "${ISC_PACKAGE_INSTALLDIR}/bin/"' \
+      '' \
+      '<Location "/csp/bin/Systems/">' \
+      '    SetHandler csp-handler-sa' \
+      '</Location>' \
+      '<Location "/csp/bin/RunTime/">' \
+      '    SetHandler csp-handler-sa' \
+      '</Location>' \
+      '' \
+      '<Directory "${ISC_PACKAGE_INSTALLDIR}/bin/">' \
+      '    AllowOverride None' \
+      '    Options None' \
+      '    Require all granted' \
+      '    <FilesMatch "\.(log|ini|pid|exe)$">' \
+      '         Require all denied' \
+      '    </FilesMatch>' \
+      '</Directory>' \
+      > /etc/apache2/conf-available/CSP.conf; \
+    a2enmod CSP; \
+    a2enconf CSP; \
+    a2dismod mpm_event; \
+    a2enmod mpm_worker; \
+    install -d -o www-data -g www-data /opt/webgateway/logs /opt/webgateway/bin/temp
+
+# The gateway writes its event log and its temporary files under its own
+# directory, as the Apache user. The published images run Apache as www-data
+# (APACHE_RUN_USER in /etc/apache2/envvars) and so does this one.
+RUN chown -R www-data:www-data /opt/webgateway
+
+# Start Apache in the foreground. apache2ctl is not used: it daemonises, which
+# would leave PID 1 as a shell and break container-level stop and restart.
+#
+# /etc/apache2/envvars defines APACHE_RUN_USER, APACHE_RUN_GROUP, APACHE_RUN_DIR
+# and APACHE_LOG_DIR, which the shipped configuration and the rig's virtual host
+# both dereference, so it must be sourced.
+#
+# APACHE_RUN_DIR (/var/run/apache2) must be created here and not at build time:
+# apache2.conf's DefaultRuntimeDir points at it and Apache refuses to start
+# without it ("DefaultRuntimeDir must be a valid directory"), while /var/run is
+# frequently a fresh tmpfs at container start, which would discard a directory
+# baked into the image. The published images do not contain the directory
+# either, so their /startWebGateway necessarily creates it the same way.
+#
+# The ownership of CSP.ini is taken over for the same reason, and it is not
+# cosmetic. The file arrives as a bind mount from the host, carrying the host
+# user's uid and mode 0600 - it holds the IRIS credential, so it must not be
+# world-readable. Apache's worker children run as www-data, which can then
+# neither read nor rewrite it, and the Gateway's symptom is remote from the
+# cause: with no readable server definition it reaches IRIS without a valid
+# credential, IRIS answers `403 Access Denied`, the Gateway logs `Connection
+# Validation Failed: mode=0; context=11;` and every FHIR request returns
+# HTTP 500.
+#
+# The published images' /startWebGateway does exactly this, which is why the rig
+# works with them unchanged. Measured, not assumed: a CSP.ini bind-mounted as
+# uid 1000 mode 0600 is owned by www-data:www-data once a published image has
+# started, and the endpoint then answers HTTP 200.
+#
+# The file must be writable and not merely readable: on its first connection the
+# Gateway replaces the plain-text `Password=` the rig renders with its own
+# obfuscated form, rewriting the file in place.
+RUN printf '%s\n' \
+      '#!/bin/bash' \
+      'set -e' \
+      '. /etc/apache2/envvars' \
+      'install -d -o "$APACHE_RUN_USER" -g "$APACHE_RUN_GROUP" -m 0755 "${APACHE_RUN_DIR:-/var/run/apache2}"' \
+      'install -d -o "$APACHE_RUN_USER" -g "$APACHE_RUN_GROUP" -m 0755 "${APACHE_LOG_DIR:-/var/log/apache2}"' \
+      'for f in /opt/webgateway/bin/CSP.ini /opt/webgateway/bin/CSP.conf; do' \
+      '  if [ -e "$f" ]; then chown "$APACHE_RUN_USER:$APACHE_RUN_GROUP" "$f"; fi' \
+      'done' \
+      'rm -f "${APACHE_PID_FILE:-/var/run/apache2/apache2.pid}"' \
+      'exec /usr/sbin/apache2 -DFOREGROUND' \
+      > /startWebGateway \
+ && chmod 0755 /startWebGateway
+
+EXPOSE 80
+
+# Healthy means Apache answers and mod_csp is loaded. The rig overrides this with
+# its own equivalent check; it is declared so that the image is self-describing
+# when run outside the rig.
+HEALTHCHECK --interval=60s --timeout=10s --start-period=60s --retries=3 \
+    CMD wget -q -O /dev/null http://localhost/csp/bin/RunTime/ || exit 1
+
+ENTRYPOINT ["/startWebGateway"]
+
+LABEL com.intersystems.product-name="WebGateway" \
+      com.intersystems.product-platform="${IRIS_PLATFORM}" \
+      com.intersystems.platform-version="${GATEWAY_VERSION}" \
+      name="WebGateway" \
+      vendor="InterSystems" \
+      version="${GATEWAY_VERSION}" \
+      de.intersystems.isik.built-by="IRIS-ISiK-Test-Suite kit/Dockerfile.webgateway" \
+      de.intersystems.isik.not-published-by-intersystems="true"

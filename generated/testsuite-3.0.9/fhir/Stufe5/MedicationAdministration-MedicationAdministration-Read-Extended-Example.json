@@ -1,0 +1,40 @@
+{
+  "resourceType": "MedicationAdministration",
+  "id": "MedicationAdministration-Read-Extended-Example",
+  "status": "completed",
+  "medicationCodeableConcept": {
+    "coding": [
+      {
+        "system": "http://fhir.de/CodeSystem/bfarm/atc",
+        "version": "2024",
+        "code": "V03AB23",
+        "display": "Acetylcystein"
+      }
+    ],
+    "text": "Acetylcystein 200 mg Brausetabletten"
+  },
+  "subject": {
+    "reference": "Patient/Patient-Read-Example",
+    "identifier": {
+      "system": "http://fhir.de/sid/gkv/kvid-10",
+      "value": "X485231029"
+    }
+  },
+  "effectiveDateTime": "2026-02-03T08:00:00+01:00",
+  "performer": [
+    {
+      "actor": {
+        "reference": "Practitioner/Practitioner-Read-Example",
+        "identifier": {
+          "system": "https://fhir.kbv.de/NamingSystem/KBV_NS_Base_ANR",
+          "value": "123456789"
+        }
+      }
+    }
+  ],
+  "meta": {
+    "profile": [
+      "https://gematik.de/fhir/isik/StructureDefinition/ISiKMedikationsVerabreichung"
+    ]
+  }
+}

@@ -1,0 +1,54 @@
+{
+  "resourceType": "Coverage",
+  "id": "Coverage-Read-Statutory-Example",
+  "status": "active",
+  "type": {
+    "coding": [
+      {
+        "system": "http://fhir.de/CodeSystem/versicherungsart-de-basis",
+        "code": "GKV",
+        "display": "gesetzliche Krankenversicherung"
+      }
+    ]
+  },
+  "subscriber": {
+    "reference": "Patient/Patient-Read-Example",
+    "identifier": {
+      "type": {
+        "coding": [
+          {
+            "system": "http://fhir.de/CodeSystem/identifier-type-de-basis",
+            "code": "KVZ10"
+          }
+        ]
+      },
+      "system": "http://fhir.de/sid/gkv/kvid-10",
+      "value": "A123456789"
+    }
+  },
+  "beneficiary": {
+    "reference": "Patient/Patient-Read-Example"
+  },
+  "payor": [
+    {
+      "identifier": {
+        "type": {
+          "coding": [
+            {
+              "system": "http://terminology.hl7.org/CodeSystem/v2-0203",
+              "code": "XX"
+            }
+          ]
+        },
+        "system": "http://fhir.de/sid/arge-ik/iknr",
+        "value": "108018007"
+      },
+      "display": "AOK Baden-Württemberg"
+    }
+  ],
+  "meta": {
+    "profile": [
+      "https://gematik.de/fhir/isik/StructureDefinition/ISiKVersicherungsverhaeltnisGesetzlich"
+    ]
+  }
+}

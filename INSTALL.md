@@ -210,6 +210,12 @@ pulled elsewhere and side-loaded with `docker save` / `docker load`; `make resol
 supports this and records the substitution in the provenance. The procedure is in
 [docs/en/02-setup.md](docs/en/02-setup.md#if-the-licensed-registry-is-unreachable-side-loading-the-iris-image).
 
+And if the build you have to test is not available to you as a container image at
+all, but is available as an **installation kit** from
+`downloads.intersystems.com`, `make image-from-kit` builds one. Read
+[kit/README.md](kit/README.md) first: it works, and a round taken on the result
+is not a round taken on a published product image, which the reports have to say.
+
 ## 6. The two version choices, both yours
 
 Two versions decide what a round means: the build of the **unit under test**, and
