@@ -17,6 +17,18 @@
 #   run/tiger/TESTDATA-PARITY.txt             our contract files vs the release's
 #   run/CREDENTIALS.md                        the credential sheet for the tester
 #
+# and, only for a round with CONNECT_ENABLE=true (see section 7 of .env.example):
+#
+#   run/tiger/tiger-isik-stufe5-connect.yaml  the Connect module's own invocation
+#   run/tiger/manual/…-connect.yaml           its MODE=manual variant
+#   run/webgateway/isik-vhost-tls.conf        Apache: the HTTPS listener bearer
+#                                             tokens require
+#   run/as/realm-isik.json                    the authorization server's realm
+#
+# None of those four is produced otherwise, and that is what makes a round
+# without the authorization server byte-identical to every round taken before
+# the Connect module could be run at all.
+#
 # <level> is every level the pinned suite contains - suite_levels() in lib.sh,
 # which is Stufe3 and Stufe5 up to 2.7.0 and Stufe5 alone from 3.0.0, that
 # release having removed ISiK Level 3 entirely. Nothing here enumerates levels
@@ -70,6 +82,7 @@ OUT_WEBGATEWAY="${RUN_DIR}/webgateway"
 OUT_TIGER="${RUN_DIR}/tiger"
 OUT_TIGER_MANUAL="${OUT_TIGER}/manual"
 OUT_TESTDATA="${RUN_DIR}/testdata"
+OUT_AS="${RUN_DIR}/as"              # Connect rounds only; see section 2b
 
 WORKFLOW_UI_PORT=9010     # the port INSIDE the container; see compose/testsuite.yml
 PROXY_ADMIN_PORT=9011
@@ -205,6 +218,41 @@ for stufe in $(suite_levels_lc); do
 done
 ok "rendered $((nlevels*2)) Tiger configuration files (${nlevels} unattended, ${nlevels} manual)"
 
+# The Connect module's own invocation. One level, two configurations - the only
+# place in this rig where that happens, and it is forced by the module rather
+# than chosen: its feature files carry their own `Authorization: Bearer` header,
+# and a Tiger route with an `authentication:` block REPLACES that header. Measured
+# on 2026-11-13: run through the ordinary Stufe 5 configuration the recorded
+# traffic contained no bearer token at all, and the SUT answered 200 to every
+# request including the one the feature requires to be refused - four of six
+# scenarios "passed" on the harness's credential rather than on the token under
+# test. The full reasoning, including why this configuration addresses the HTTPS
+# listener, is in the template's own header.
+#
+# Rendered as a sibling of the per-level configurations and added to
+# RENDERED_CONFIGS, so the test-data staging and the baseKey check below treat it
+# exactly like any other rendered configuration.
+if connect_enabled; then
+  require_var SUT_TLS_HOST
+
+  connect_tmpl="${TIGER_TMPL_DIR}/tiger-isik-stufe5-connect.yaml.tmpl"
+  [[ -f "$connect_tmpl" ]] || die "template missing: ${connect_tmpl#$REPO_ROOT/}
+  CONNECT_ENABLE is true, which requires the Connect module's own Tiger
+  configuration. Templates are per generation: see suite_tiger_dir() in
+  scripts/lib.sh. The Connect module exists in suite generation 3.x only."
+
+  case " $(suite_levels_lc) " in
+    *" stufe5 "*) ;;
+    *) die "CONNECT_ENABLE is true but the pinned suite ${TESTSUITE_VERSION} carries no Stufe 5 ($(suite_levels)) - the Connect module is part of ISiK Stufe 5" ;;
+  esac
+
+  connect_base_url="$(sut_base_url_tls stufe5)"
+  render "$connect_tmpl" "${OUT_TIGER}/tiger-isik-stufe5-connect.yaml" true "$connect_base_url"
+  render "$connect_tmpl" "${OUT_TIGER_MANUAL}/tiger-isik-stufe5-connect.yaml" false "$connect_base_url"
+  RENDERED_CONFIGS+=("${OUT_TIGER}/tiger-isik-stufe5-connect.yaml")
+  ok "rendered the Connect module's own Tiger configuration (SUT is ${connect_base_url})"
+fi
+
 # -----------------------------------------------------------------------------
 # 1b. Render the Web Gateway configuration
 # -----------------------------------------------------------------------------
@@ -230,6 +278,8 @@ render_gateway() {
   GATEWAY_IRIS_PASSWORD="$GATEWAY_IRIS_PASSWORD" \
   FHIR_BASE_STUFE3="$FHIR_BASE_STUFE3" \
   FHIR_BASE_STUFE5="$FHIR_BASE_STUFE5" \
+  SUT_TLS_HOST="${SUT_TLS_HOST:-}" \
+  SUT_PORT_HTTPS_INTERNAL="${SUT_PORT_HTTPS_INTERNAL:-443}" \
   python3 - "$tmpl" "$out" <<'PY'
 import os
 import re
@@ -244,6 +294,11 @@ SUBST = {
     "GATEWAY_IRIS_PASSWORD": os.environ["GATEWAY_IRIS_PASSWORD"],
     "FHIR_BASE_STUFE3":      os.environ["FHIR_BASE_STUFE3"],
     "FHIR_BASE_STUFE5":      os.environ["FHIR_BASE_STUFE5"],
+    # Used by the HTTPS virtual host only, which is rendered for a Connect round
+    # only. Present in the table unconditionally so that the two gateway
+    # templates share one substitution contract; an unused key renders nothing.
+    "SUT_TLS_HOST":            os.environ["SUT_TLS_HOST"],
+    "SUT_PORT_HTTPS_INTERNAL": os.environ["SUT_PORT_HTTPS_INTERNAL"],
 }
 
 with open(tmpl_path, encoding="utf-8") as fh:
@@ -276,7 +331,19 @@ GATEWAY_IRIS_PASSWORD="$IRIS_MGMT_PASSWORD"
 rm -rf "$OUT_WEBGATEWAY"
 mkdir -p "$OUT_WEBGATEWAY"
 
-for f in CSP.ini isik-vhost.conf; do
+# The HTTPS virtual host is rendered for a Connect round only. It is a SECOND
+# file beside the :80 virtual host, never a replacement: the other nine Stufe 5
+# modules and both Stufe 3 rounds keep being served by exactly the configuration
+# they were served by before this listener existed, which is what makes their
+# results comparable across rounds. compose/authserver.yml is the only thing that
+# mounts it.
+GATEWAY_FILES=(CSP.ini isik-vhost.conf)
+if connect_enabled; then
+  require_var SUT_TLS_HOST
+  GATEWAY_FILES+=(isik-vhost-tls.conf)
+fi
+
+for f in "${GATEWAY_FILES[@]}"; do
   tmpl="${WEBGATEWAY_TMPL_DIR}/${f}.tmpl"
   [[ -f "$tmpl" ]] || die "template missing: ${tmpl#$REPO_ROOT/}"
   render_gateway "$tmpl" "${OUT_WEBGATEWAY}/${f}"
@@ -284,9 +351,13 @@ done
 
 # CSP.ini carries the gateway's IRIS credential. Same treatment as the rendered
 # Tiger configuration: the value is documented in the reports by design, but the
-# live file mimics production. The vhost config holds no secret.
+# live file mimics production. The vhost configs hold no secret.
 chmod 0600 "${OUT_WEBGATEWAY}/CSP.ini"
 chmod 0644 "${OUT_WEBGATEWAY}/isik-vhost.conf"
+if connect_enabled; then
+  chmod 0644 "${OUT_WEBGATEWAY}/isik-vhost-tls.conf"
+  ok "rendered the Web Gateway HTTPS virtual host (${SUT_TLS_HOST}:${SUT_PORT_HTTPS_INTERNAL:-443})"
+fi
 ok "rendered the Web Gateway configuration (IRIS at ${IRIS_IP}:1972 as ${GATEWAY_IRIS_USER})"
 
 # -----------------------------------------------------------------------------
@@ -465,6 +536,176 @@ PY
 ok "staged ${staged} test-data contract files into run/testdata/"
 
 # -----------------------------------------------------------------------------
+# 2b. Connect: the authorization server's realm
+# -----------------------------------------------------------------------------
+# Rendered here, after the test-data contract has been staged, because one of its
+# values comes from that contract: the `patient` launch-context claim of the two
+# patient-context clients must be the patient the suite's own test data declares
+# as the patient in context. In a production SMART launch that claim is
+# established by the authorization server during the launch; there is no launch
+# in a client-credentials round, so it is configured - and configured from the
+# suite's file rather than from ours, so that the realm cannot drift away from
+# the scenarios that read it.
+#
+# Not rendered at all unless CONNECT_ENABLE=true, and compose/authserver.yml is
+# the only thing that mounts it. Removed unconditionally first, like every other
+# output directory here, so that turning Connect off leaves no realm behind for a
+# later round to import by accident.
+rm -rf "$OUT_AS"
+
+# A function, like render() and render_gateway() above, and for a reason beyond
+# symmetry: `make check` reads each render function's substitution table on its
+# own and holds exactly one template directory to it, so a placeholder that
+# belongs to the realm cannot be silently accepted in an Apache configuration or
+# the other way round. Pooling the tables would defeat that separation, and the
+# function boundary is what the check uses to find them.
+render_realm() {
+  local tmpl="$1" out="$2" contract="$3"
+
+  AS_REALM="$AS_REALM" \
+  AS_TOKEN_LIFESPAN="${AS_TOKEN_LIFESPAN:-3600}" \
+  AS_CLIENT_SECRET="$AS_CLIENT_SECRET" \
+  AS_RESOURCE_CLIENT_ID="$AS_RESOURCE_CLIENT_ID" \
+  SUT_AUDIENCE="$SUT_AUDIENCE" \
+  CONNECT_TOKEN_MAP="$(connect_token_clients)" \
+  python3 - "$tmpl" "$out" "$contract" <<'PY'
+import json
+import os
+import re
+import sys
+
+import yaml
+
+tmpl_path, out_path, contract_path = sys.argv[1], sys.argv[2], sys.argv[3]
+
+with open(contract_path, encoding="utf-8") as fh:
+    contract = yaml.safe_load(fh) or {}
+patient = str(contract.get("read-patient-in-context-id", "") or "").strip()
+if not patient:
+    sys.exit(f"30-render-config.sh: {contract_path}: no read-patient-in-context-id - "
+             "the patient-context clients cannot be configured")
+
+SUBST = {
+    "AS_REALM":                 os.environ["AS_REALM"],
+    "AS_TOKEN_LIFESPAN":        os.environ["AS_TOKEN_LIFESPAN"],
+    "AS_CLIENT_SECRET":         os.environ["AS_CLIENT_SECRET"],
+    "AS_RESOURCE_CLIENT_ID":    os.environ["AS_RESOURCE_CLIENT_ID"],
+    "SUT_AUDIENCE":             os.environ["SUT_AUDIENCE"],
+    "CONNECT_PATIENT_IN_CONTEXT": patient,
+}
+
+with open(tmpl_path, encoding="utf-8") as fh:
+    text = fh.read()
+
+unknown = sorted(set(re.findall(r"@@([A-Z0-9_]+)@@", text)) - set(SUBST))
+if unknown:
+    sys.exit(f"30-render-config.sh: {tmpl_path}: unknown placeholder(s): {', '.join(unknown)}")
+
+for key, value in SUBST.items():
+    # Every placeholder but one sits inside a JSON string literal, and the
+    # generated client secret is the only value not under our control
+    # character by character. json.dumps gives the correct escaping for the
+    # literal; the numeric lifespan is left bare and is validated by the parse
+    # below.
+    if key == "AS_TOKEN_LIFESPAN":
+        text = text.replace(f"@@{key}@@", value)
+    else:
+        text = text.replace(f"@@{key}@@", json.dumps(value)[1:-1])
+
+left = re.findall(r"@@[^@]*@@", text)
+if left:
+    sys.exit(f"30-render-config.sh: {out_path}: unresolved placeholder(s): {', '.join(left)}")
+
+try:
+    realm = json.loads(text)
+except Exception as exc:
+    sys.exit(f"30-render-config.sh: {out_path}: rendered file is not valid JSON: {exc}")
+
+if not isinstance(realm.get("accessTokenLifespan"), int):
+    sys.exit("30-render-config.sh: AS_TOKEN_LIFESPAN must be an integer number of "
+             f"seconds, got {os.environ['AS_TOKEN_LIFESPAN']!r}")
+
+# The realm must define exactly the clients the mint step will ask for, each
+# holding exactly the one scope its token is under test for. The two are stated
+# in different files - connect_token_clients() in scripts/lib.sh and this
+# template - and neither failure direction is visible at run time: a missing
+# client fails the mint with an opaque `invalid_client`, and a client holding
+# two scopes silently makes a refusal scenario pass for the wrong reason.
+expected = {}
+for line in os.environ["CONNECT_TOKEN_MAP"].splitlines():
+    if not line.strip():
+        continue
+    _key, client, scope = line.split("|")
+    expected[client] = scope
+
+clients = {c.get("clientId"): c for c in realm.get("clients") or []}
+problems = []
+for client, scope in sorted(expected.items()):
+    if client not in clients:
+        problems.append(f"no client '{client}' (needed for scope {scope})")
+        continue
+    have = clients[client].get("defaultClientScopes") or []
+    if have != [scope]:
+        problems.append(f"client '{client}' has default scopes {have}, expected exactly ['{scope}']")
+
+declared = {s.get("name") for s in realm.get("clientScopes") or []}
+for scope in sorted(set(expected.values()) - declared):
+    problems.append(f"scope '{scope}' is used by a client but not declared in clientScopes")
+
+if problems:
+    sys.exit("30-render-config.sh: the authorization server realm does not match "
+             "connect_token_clients() in scripts/lib.sh:\n  - " + "\n  - ".join(problems))
+
+# The `_comment` arrays carry this file's rationale, which belongs with the
+# artefact rather than only in the template - but they are not part of
+# Keycloak's RealmRepresentation. Rather than relying on the importer to
+# tolerate unknown properties, they are removed here: the template keeps the
+# explanation, the rendered file keeps only what Keycloak defines.
+def strip_comments(node):
+    if isinstance(node, dict):
+        return {k: strip_comments(v) for k, v in node.items() if k != "_comment"}
+    if isinstance(node, list):
+        return [strip_comments(v) for v in node]
+    return node
+
+with open(out_path, "w", encoding="utf-8") as fh:
+    json.dump(strip_comments(realm), fh, indent=2, ensure_ascii=False)
+    fh.write("\n")
+
+print(f"  realm '{realm['realm']}': {len(clients)} clients, "
+      f"{len(realm.get('clientScopes') or [])} scopes, patient in context {patient}")
+PY
+}
+
+if connect_enabled; then
+  require_var AS_REALM AS_CLIENT_SECRET AS_RESOURCE_CLIENT_ID SUT_AUDIENCE
+
+  CONNECT_CONTRACT="${OUT_TESTDATA}/Stufe5/connect.yaml"
+  [[ -f "$CONNECT_CONTRACT" ]] || die "the Connect test-data contract was not staged (${CONNECT_CONTRACT#$RUN_DIR/}) - the rendered Tiger configuration must list testdata/Stufe5/connect.yaml"
+
+  mkdir -p "$OUT_AS"
+
+  render_realm "${REPO_ROOT}/keycloak/realm-isik.json.tmpl" \
+               "${OUT_AS}/realm-isik.json" \
+               "$CONNECT_CONTRACT"
+
+  # 0644, and forced by the consumer exactly as the rendered Tiger configuration
+  # is: the file is bind-mounted into the Keycloak container, which runs as its
+  # own unprivileged account, and a bind mount carries the host inode's mode and
+  # owner straight through. An unreadable import file makes Keycloak start with
+  # an empty realm, which presents as every token request failing with
+  # `invalid_client` rather than as a file permission problem.
+  #
+  # It carries the clients' shared secret. That secret is generated per
+  # deployment by scripts/10-resolve-versions.sh, is listed in
+  # run/CREDENTIALS.md on purpose, and grants nothing beyond minting a token for
+  # this round's own test realm. run/ is gitignored and `make check` verifies
+  # that mechanically.
+  chmod 0644 "${OUT_AS}/realm-isik.json"
+  ok "rendered the authorization server realm into run/as/realm-isik.json"
+fi
+
+# -----------------------------------------------------------------------------
 # 3. Prove upstream parity of the contract files
 # -----------------------------------------------------------------------------
 # The claim "our test-data contract is the official one" underpins the
@@ -602,15 +843,63 @@ fi
   printf '  GATEWAY_IRIS_PASSWORD  %s\n' "$GATEWAY_IRIS_PASSWORD"
   printf '  WEBGATEWAY_IP          %s\n' "$WEBGATEWAY_IP"
   printf '\n'
+  if connect_enabled; then
+    printf '# ISiK Stufe 5 "Connect". This round runs the Connect module, which requires\n'
+    printf '# an authorization server, an HTTPS listener and six pre-minted access tokens.\n'
+    printf '# The module runs as its own invocation with its own Tiger configuration; the\n'
+    printf '# header of that file states why. No token value is recorded here or anywhere\n'
+    printf '# else - run/tiger/TOKENS.txt identifies each one by SHA-256.\n'
+    printf '#\n'
+    printf '  CONNECT_ENABLE         %s\n' "${CONNECT_ENABLE}"
+    printf '  SUT_BASE_URL (connect) %s\n' "$(sut_base_url_tls stufe5)"
+    printf '  SUT_AUDIENCE           %s\n' "${SUT_AUDIENCE}"
+    printf '  SUT_TLS_HOST           %s\n' "${SUT_TLS_HOST}"
+    printf '  SUT_PORT_HTTPS_INTERNAL %s\n' "${SUT_PORT_HTTPS_INTERNAL:-443}"
+    printf '  AS_IMAGE               %s:%s\n' "${AS_IMAGE:-?}" "${AS_VERSION:-?}"
+    printf '  AS_HOSTNAME            %s\n' "${AS_HOSTNAME:-?}"
+    printf '  AS_REALM               %s\n' "${AS_REALM}"
+    printf '  AS_TOKEN_LIFESPAN      %s\n' "${AS_TOKEN_LIFESPAN:-3600}"
+    printf '  AS_RESOURCE_CLIENT_ID  %s\n' "${AS_RESOURCE_CLIENT_ID}"
+    printf '  AS_CLIENT_SECRET       %s\n' "${AS_CLIENT_SECRET}"
+    printf '  patient in context     %s  (read from the staged testdata/Stufe5/connect.yaml)\n' \
+           "$(python3 -c 'import sys,yaml;print(yaml.safe_load(open(sys.argv[1]))["read-patient-in-context-id"])' "${OUT_TESTDATA}/Stufe5/connect.yaml")"
+    printf '\n'
+    printf '# The TLS material this listener and the authorization server present:\n'
+    printf '# see run/tls/TLS.txt.\n'
+    printf '\n'
+  fi
   printf '# Whether the staged test-data contract matches the official release:\n'
   printf '# see TESTDATA-PARITY.txt beside this file.\n'
   printf '\n'
   printf '# %-50s %s\n' 'FILE' 'SHA256'
+  # Templates, then the files rendered from them. Both lists are built rather
+  # than written out, because which of them exist depends on CONNECT_ENABLE and a
+  # round must not record a checksum for a file it did not render.
+  #
+  # The Connect templates are listed only for a round that rendered them, even
+  # though they are present in the repository either way: two rounds of the same
+  # configuration must produce the same record, so that a diff between them
+  # shows a difference in what was tested rather than a difference in the
+  # repository's inventory.
+  template_files=()
   for f in "${TIGER_TMPL_DIR}"/*.tmpl "${WEBGATEWAY_TMPL_DIR}"/*.tmpl; do
+    case "$(basename "$f")" in
+      tiger-isik-stufe5-connect.yaml.tmpl|isik-vhost-tls.conf.tmpl)
+        connect_enabled || continue ;;
+    esac
+    template_files+=( "$f" )
+  done
+  rendered_files=( "${OUT_TIGER}"/*.yaml "${OUT_TIGER_MANUAL}"/*.yaml
+                   "${OUT_WEBGATEWAY}/CSP.ini" "${OUT_WEBGATEWAY}/isik-vhost.conf" )
+  if connect_enabled; then
+    template_files+=( "${REPO_ROOT}/keycloak/realm-isik.json.tmpl" )
+    rendered_files+=( "${OUT_WEBGATEWAY}/isik-vhost-tls.conf"
+                      "${OUT_AS}/realm-isik.json" )
+  fi
+  for f in "${template_files[@]}"; do
     printf '  %-50s %s\n' "$(basename "$(dirname "$f")")/$(basename "$f")" "$(sha256_of "$f")"
   done
-  for f in "${OUT_TIGER}"/*.yaml "${OUT_TIGER_MANUAL}"/*.yaml \
-           "${OUT_WEBGATEWAY}/CSP.ini" "${OUT_WEBGATEWAY}/isik-vhost.conf"; do
+  for f in "${rendered_files[@]}"; do
     printf '  %-50s %s\n' "${f#$RUN_DIR/}" "$(sha256_of "$f")"
   done
   while IFS= read -r f; do
@@ -711,11 +1000,19 @@ wrong, every FHIR request returns a bare HTTP 500 and the only trace is
 | Level | From the host | From inside the subnet (what the suite uses) | Exercised |
 |---|---|---|---|
 ${ENDPOINT_ROWS}
-Both endpoints are installed and verified by every round, because they are a
-property of the system under test. The right-hand column says whether the pinned
-test suite, \`${TESTSUITE_VERSION}\`, carries that level at all: ISiK Level 3 was
-removed from the suite in release 3.0.0, so a 3.x round exercises Stufe 5 only
-and the Stufe 3 endpoint stays installed but untested.
+Both endpoints are installed by every round and their configuration is verified
+before any test runs, because they are a property of the system under test. The
+right-hand column says whether the pinned test suite, \`${TESTSUITE_VERSION}\`,
+carries that level at all: ISiK Level 3 was removed from the suite in release
+3.0.0, so a 3.x round exercises Stufe 5 only and the Stufe 3 endpoint stays
+installed but untested.
+
+What is verified is not identical for both, and it depends on the round. In an
+ordinary round both endpoints are left requiring HTTP Basic authentication, which
+is the credential in the first row above. In a round with \`CONNECT_ENABLE=true\`
+the Stufe 5 endpoint additionally accepts OAuth 2.0 bearer tokens, because the
+ISiK Stufe 5 \`Connect\` module presents them - see the section below. The Stufe 3
+endpoint is unaffected either way.
 
 Both address columns address the **Web Gateway**, not IRIS. The IRIS for Health images ship
 no web server at all, so the gateway at \`${WEBGATEWAY_IP}\` is the FHIR server's
@@ -762,6 +1059,78 @@ A terminal on the instance, no password needed (\`docker exec\` is already root)
 make shell-iris
 \`\`\`
 
+EOF
+
+  # The Connect section exists only for a round that has an authorization
+  # server. A sheet that described one that was never started would send the
+  # tester looking for a container that does not exist.
+  if connect_enabled; then
+    cat <<EOF
+## ISiK Stufe 5 "Connect" - the authorization server
+
+This round runs the \`Connect\` module, so it has a second credential domain: an
+authorization server issues the access tokens the module presents to the FHIR
+server. Everything here is generated per deployment and is thrown away with the
+round.
+
+| Purpose | User / client | Secret | Used by | Stored in |
+|---|---|---|---|---|
+| Authorization server admin console | \`${AS_ADMIN_USER:-kcadmin}\` | \`${AS_ADMIN_PASSWORD:-?}\` | the human tester | \`secrets/as-admin.password\` |
+| The six token-holder clients | see \`run/as/realm-isik.json\` | \`${AS_CLIENT_SECRET}\` | \`make tokens\` | \`secrets/as-client.secret\` |
+| The FHIR server's own client | \`${AS_RESOURCE_CLIENT_ID}\` | \`${AS_CLIENT_SECRET}\` (shared) | IRIS, to introspect a presented token | \`secrets/as-client.secret\` |
+
+The third row is infrastructure, not a login: it is the client IRIS authenticates
+with when it asks the authorization server about a token it has been presented.
+Without it the introspection call goes out unauthenticated and every Connect
+scenario fails with a bare 401 that looks like a rejected signature.
+
+| What | Where |
+|---|---|
+| Authorization server, from the host | \`https://127.0.0.1:${AS_PORT_HTTPS:-8443}/\` (certificate issued for \`${AS_HOSTNAME}\`) |
+| Admin console | \`https://127.0.0.1:${AS_PORT_HTTPS:-8443}/admin/\` |
+| Issuer, as IRIS discovered it | \`https://${AS_HOSTNAME}:${AS_PORT_HTTPS_INTERNAL:-8443}/realms/${AS_REALM}\` |
+| The SUT over TLS, which is what the module addresses | \`$(sut_base_url_tls stufe5)\` |
+| Token audience | \`${SUT_AUDIENCE}\` |
+| CA, certificates and fingerprints | \`run/tls/TLS.txt\` |
+
+The browser will not trust that certificate: it is issued by this round's own
+local CA (\`run/tls/ca.crt\`), because the isolated test subnet has no publicly
+resolvable name a public certificate could be issued for.
+
+### The access tokens
+
+The module's feature files send their own \`Authorization: Bearer\` header, taking
+the token from the suite's test data - which ships the six values as
+\`SET-YOUR-TOKEN-HERE\` for the operator to fill in. \`make tokens\` does that:
+
+\`\`\`bash
+make tokens                            # mint six tokens and stage them
+scripts/55-mint-tokens.sh --verify     # check what is staged, change nothing
+make test-connect                      # run the module straight afterwards
+\`\`\`
+
+A token lives ${AS_TOKEN_LIFESPAN:-3600} seconds. \`make test-connect\` refuses to
+start with less than ten minutes left on any of them, because an expired token
+presents as a total authorization failure in the system under test rather than
+as a stale credential. Note the order: \`make render\` re-stages the test data
+from the official contract and therefore restores the placeholders, so it is
+always render first, then tokens.
+
+| Where the tokens are | What it holds |
+|---|---|
+| \`run/testdata/Stufe5/connect.yaml\` | the six token values, staged for the suite |
+| \`run/tiger/TOKENS.txt\` | which token was minted for which scope, by SHA-256 only |
+| each round's \`debug-report.zip\` | the recorded traffic, which contains the headers |
+
+Unlike every other credential in this document, an access token is **not** to be
+reproduced in a report or a document: it is a bearer credential, and the first
+two rows above are the only records a round keeps. See
+\`scripts/70-collect-report.sh\`.
+
+EOF
+  fi
+
+  cat <<EOF
 ## Where else these values appear
 
 Every one of them on purpose:

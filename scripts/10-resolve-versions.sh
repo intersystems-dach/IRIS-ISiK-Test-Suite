@@ -251,6 +251,95 @@ IRIS_MGMT_PASSWORD="$(resolve_password "${IRIS_MGMT_PASSWORD:-}" "$MGMT_PW_FILE"
 IRIS_MGMT_USER="${IRIS_MGMT_USER:-_SYSTEM}"
 
 # -----------------------------------------------------------------------------
+# Authorization server settings (ISiK Stufe 5 "Connect")
+# -----------------------------------------------------------------------------
+# Only for a round that asked for the authorization server. Nothing in this
+# block runs otherwise, no secret is generated, and .env.resolved gets no
+# additional key - which is what keeps a round without Connect comparable,
+# byte for byte, with every round taken before the Connect module could be run
+# at all.
+#
+# These two credentials are generated HERE rather than where they are used,
+# because docker compose interpolates them: compose() in lib.sh passes
+# .env.resolved as --env-file, and compose/authserver.yml refers to
+# ${AS_ADMIN_PASSWORD:?} and ${AS_CLIENT_SECRET:?}. A value generated later - at
+# render time, say - would not exist when `make up` reads this file, and compose
+# would stop with a message about an unset variable rather than about a missing
+# step.
+#
+#   as-admin.password   the authorization server's own admin console, for the
+#                       human tester. Keycloak requires a bootstrap admin at
+#                       first start and refuses to start without one.
+#   as-client.secret    the shared secret of this realm's confidential clients:
+#                       the six token holders `make tokens` mints from, and the
+#                       client IRIS authenticates with when it introspects a
+#                       token it has been presented.
+#
+# One secret for all seven clients rather than seven secrets. They are seven
+# clients only because a token must carry exactly one scope (see
+# connect_token_clients() in lib.sh); they are not seven trust domains, they all
+# belong to this one round, and seven generated secrets would be seven values to
+# carry through the realm, the mint step and the credential sheet without making
+# any statement about the system under test more or less true.
+AS_ADMIN_PW_FILE="${SECRETS_DIR}/as-admin.password"
+AS_CLIENT_SECRET_FILE="${SECRETS_DIR}/as-client.secret"
+
+# The keys this block is responsible for. Empty for a round without Connect, and
+# the writer below only appends what this list names.
+CONNECT_KEYS=()
+
+if connect_enabled; then
+  AS_ADMIN_USER="${AS_ADMIN_USER:-kcadmin}"
+  AS_ADMIN_PASSWORD="$(resolve_password "${AS_ADMIN_PASSWORD:-}" "$AS_ADMIN_PW_FILE" \
+                          "authorization server admin password")"
+  AS_CLIENT_SECRET="$(resolve_password "${AS_CLIENT_SECRET:-}" "$AS_CLIENT_SECRET_FILE" \
+                          "authorization server client secret")"
+
+  # Defaulted for the same reason as the Web Gateway block below: a .env written
+  # before this feature existed has no line for these, and the append loop in the
+  # writer warns for each one it has to add, so a stale .env is reported rather
+  # than silently compensated for. The values match .env.example section 7.
+  AS_IMAGE="${AS_IMAGE:-quay.io/keycloak/keycloak}"
+  AS_VERSION="${AS_VERSION:-26.4.7}"
+  AS_HOSTNAME="${AS_HOSTNAME:-isik-as}"
+  AS_PORT_HTTPS="${AS_PORT_HTTPS:-8443}"
+  AS_PORT_HTTPS_INTERNAL="${AS_PORT_HTTPS_INTERNAL:-8443}"
+  AS_REALM="${AS_REALM:-isik}"
+  AS_TOKEN_LIFESPAN="${AS_TOKEN_LIFESPAN:-3600}"
+  AS_CLIENT_NAME="${AS_CLIENT_NAME:-ISIKConnect}"
+  AS_RESOURCE_CLIENT_ID="${AS_RESOURCE_CLIENT_ID:-isik-resource-server}"
+  AS_MEM_LIMIT="${AS_MEM_LIMIT:-1g}"
+  AS_HEAP_MAX="${AS_HEAP_MAX:-512m}"
+
+  # Derived from IRIS_IP for the same reason WEBGATEWAY_IP is: the subnet is the
+  # operator's choice, and a hard-coded literal would be outside a relocated one.
+  # .40 is free by construction - .10, .20 and .30 are IRIS, the test suite and
+  # the gateway.
+  AS_IP="${AS_IP:-${IRIS_IP%.*}.40}"
+
+  SUT_TLS_HOST="${SUT_TLS_HOST:-isik-webgateway}"
+  SUT_PORT_HTTPS="${SUT_PORT_HTTPS:-52443}"
+  SUT_PORT_HTTPS_INTERNAL="${SUT_PORT_HTTPS_INTERNAL:-443}"
+
+  # Derived, not defaulted to a literal: the audience in a token must be the URL
+  # the test suite actually addresses, and sut_base_url_tls() is the one place
+  # that URL is constructed. 55-mint-tokens.sh checks the two against each other
+  # and refuses to mint if they have been made to disagree by hand.
+  SUT_AUDIENCE="${SUT_AUDIENCE:-$(sut_base_url_tls stufe5)}"
+
+  CONNECT_KEYS=(CONNECT_ENABLE
+                AS_IMAGE AS_VERSION AS_IP AS_HOSTNAME
+                AS_PORT_HTTPS AS_PORT_HTTPS_INTERNAL
+                AS_REALM AS_TOKEN_LIFESPAN AS_MEM_LIMIT AS_HEAP_MAX
+                AS_CLIENT_NAME AS_RESOURCE_CLIENT_ID
+                AS_ADMIN_USER AS_ADMIN_PASSWORD AS_CLIENT_SECRET
+                SUT_TLS_HOST SUT_PORT_HTTPS SUT_PORT_HTTPS_INTERNAL SUT_AUDIENCE)
+
+  ok "authorization server: ${AS_IMAGE}:${AS_VERSION} at ${AS_HOSTNAME}:${AS_PORT_HTTPS_INTERNAL}, realm ${AS_REALM}"
+  log "  the SUT over TLS: $(sut_base_url_tls stufe5)"
+fi
+
+# -----------------------------------------------------------------------------
 # Web Gateway settings
 # -----------------------------------------------------------------------------
 # Defaulted here so that a .env predating the Web Gateway still produces a
@@ -332,6 +421,18 @@ read -r R_TESTSUITE_DIGEST R_TESTSUITE_SOURCE         < <(pull_and_digest "$TEST
 # answered without it.
 read -r R_WEBGATEWAY_DIGEST R_WEBGATEWAY_SOURCE       < <(pull_and_digest "$WEBGATEWAY_REF")
 
+# The authorization server, for a Connect round only. Its digest is recorded with
+# the same machinery as the other three, but it carries a different meaning and
+# the provenance record says so: this image is neither the system under test nor
+# the test tool. It is the external component the ISiK Stufe 5 `Connect` module
+# presupposes, and a token's properties - issuer, audience, scope, lifetime -
+# depend on which build issued it, so "what exactly did you test against?" is not
+# fully answered without it.
+if connect_enabled; then
+  AS_REF="${AS_IMAGE}:${AS_VERSION}"
+  read -r R_AS_DIGEST R_AS_SOURCE < <(pull_and_digest "$AS_REF")
+fi
+
 # The exact IRIS build string, read out of the pulled image without starting it.
 # This is the version an inspector will compare against the SUT documentation, and
 # it is more specific than the tag: "2026.2.0.221.0" for tag "2026.2".
@@ -358,6 +459,9 @@ fi
 ok "IRIS      ${IRIS_REF}  sha256:${R_IRIS_DIGEST:0:19}..."
 ok "gateway   ${WEBGATEWAY_REF}  sha256:${R_WEBGATEWAY_DIGEST:0:19}..."
 ok "test tool ${TESTSUITE_REF}  sha256:${R_TESTSUITE_DIGEST:0:19}..."
+if connect_enabled; then
+  ok "auth srv  ${AS_REF}  sha256:${R_AS_DIGEST:0:19}..."
+fi
 
 # -----------------------------------------------------------------------------
 # Write .env.resolved
@@ -403,6 +507,11 @@ EOF
       IRIS_MGMT_PASSWORD=*) printf 'IRIS_MGMT_PASSWORD=%s\n' "$IRIS_MGMT_PASSWORD" ;;
       MODE=*)              printf 'MODE=%s\n' "$MODE" ;;
       PACKAGE_SOURCE=*)    printf 'PACKAGE_SOURCE=%s\n' "${PACKAGE_SOURCE:-refv}" ;;
+      # .env.example ships both of these empty, to be generated per deployment.
+      # For a round without the authorization server the variables are unset and
+      # the line is therefore reproduced exactly as it stands, empty included.
+      AS_ADMIN_PASSWORD=*) printf 'AS_ADMIN_PASSWORD=%s\n' "${AS_ADMIN_PASSWORD:-}" ;;
+      AS_CLIENT_SECRET=*)  printf 'AS_CLIENT_SECRET=%s\n' "${AS_CLIENT_SECRET:-}" ;;
       *)                   printf '%s\n' "$line" ;;
     esac
   done <"$ENV_FILE"
@@ -413,9 +522,14 @@ EOF
   # otherwise fail with a message pointing at compose rather than at the stale .env.
   # The WEBGATEWAY_* keys are the ones most likely to be missing, since a .env
   # copied from an earlier version of this rig predates the Web Gateway entirely.
+  #
+  # CONNECT_KEYS is empty unless this round asked for the authorization server,
+  # so a round without it appends nothing and its .env.resolved is unchanged by
+  # the existence of this feature.
   for key in SUT_PASSWORD IRIS_MGMT_USER IRIS_MGMT_PASSWORD \
              WEBGATEWAY_IMAGE WEBGATEWAY_VERSION WEBGATEWAY_IP \
-             WEBGATEWAY_PORT_INTERNAL GATEWAY_IRIS_USER; do
+             WEBGATEWAY_PORT_INTERNAL GATEWAY_IRIS_USER \
+             ${CONNECT_KEYS[@]+"${CONNECT_KEYS[@]}"}; do
     grep -q "^${key}=" "$ENV_FILE" && continue
     printf '%s=%s\n' "$key" "${!key}"
     warn "${ENV_FILE#$REPO_ROOT/} defines no ${key}; appended it to .env.resolved (compare against .env.example)"
@@ -468,6 +582,31 @@ IRIS_VERSION_SOURCE=${R_IRIS_VERSION_SOURCE}
 TESTSUITE_VERSION_SOURCE=${R_TESTSUITE_VERSION_SOURCE}
 TESTSUITE_LATEST_AVAILABLE=${R_TESTSUITE_LATEST}
 EOF
+
+  # The authorization server, appended only for a round that has one.
+  if connect_enabled; then
+    cat <<EOF
+
+# -----------------------------------------------------------------------------
+# Authorization server (ISiK Stufe 5 "Connect")
+# -----------------------------------------------------------------------------
+# A fourth image, recorded like the other three but meaning something different:
+# it is neither the system under test nor the test tool. The ISiK Stufe 5
+# \`Connect\` module presupposes an external authorization server, and the
+# properties of the tokens it issues - issuer, audience, scope, lifetime - are
+# what the system under test is measured against, so the build that issued them
+# belongs in the provenance record.
+#
+#   docker pull ${AS_IMAGE}@sha256:${R_AS_DIGEST}
+#
+# The realm it imported, the TLS material in play and the tokens that were
+# minted are recorded alongside the round: run/as/realm-isik.json,
+# run/tls/TLS.txt and run/tiger/TOKENS.txt.
+AS_IMAGE_REF=${AS_REF}
+AS_IMAGE_DIGEST=sha256:${R_AS_DIGEST}
+AS_IMAGE_SOURCE=${R_AS_SOURCE}
+EOF
+  fi
 } >"$TMP"
 
 # .env.resolved carries the API password, so it is never world-readable.

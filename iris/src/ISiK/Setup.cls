@@ -42,6 +42,20 @@ Parameter FHIRROLE = "ISiKFHIRUser";
 /// under test here.
 Parameter STRATEGY = "HS.FHIRServer.Storage.JsonAdvSQL.InteractionsStrategy";
 
+/// <code>AutheEnabled</code> = password only.
+/// <method>Security.Datatype.Authentication.LogicalToDisplay</method> renders it
+/// as <code>Password</code>.
+Parameter AUTHEPASSWORD = 32;
+
+/// <code>AutheEnabled</code> as the FHIR server's own endpoint installer leaves
+/// it: 8288, which the same method renders as
+/// <code>Unauthenticated,Password,Delegated</code>. This is the value a stock
+/// IRIS for Health FHIR endpoint carries, and it is the value a token-accepting
+/// endpoint needs - a bearer request arrives with no IRIS credential, and the
+/// product's token handling runs under delegated authentication. See
+/// <method>SecureEndpoint</method>.
+Parameter AUTHEINSTALLED = 8288;
+
 // =========================================================================
 // Entry point
 // =========================================================================
@@ -133,6 +147,22 @@ ClassMethod ReadConfig() As %DynamicObject
     set config.maxPageSize       = +..Env("ISIK_MAX_PAGE_SIZE", 500)
     set config.maxSearchResults  = +..Env("ISIK_MAX_SEARCH_RESULTS", 10000)
     set config.preferHandling    = ..Env("ISIK_PREFER_HANDLING", "lenient")
+
+    // Authorization server, for the ISiK Stufe 5 `Connect` module. Absent unless
+    // compose/authserver.yml is in play, i.e. unless CONNECT_ENABLE=true; a round
+    // without it is configured exactly as every round before this file existed.
+    // Each value is then required, for the reason stated above: a Connect round
+    // that installs cleanly against a half-configured authorization server would
+    // report the product as failing scenarios it was never given a chance at.
+    set config.connectEnable = (..Env("ISIK_CONNECT_ENABLE", "0") = 1)
+    if config.connectEnable {
+        set config.asIssuer       = ..RequireEnv("ISIK_AS_ISSUER")
+        set config.asClientName   = ..RequireEnv("ISIK_AS_CLIENT_NAME")
+        set config.asClientId     = ..RequireEnv("ISIK_AS_CLIENT_ID")
+        set config.asClientSecret = ..RequireEnv("ISIK_AS_CLIENT_SECRET")
+        set config.asCAFile       = ..RequireEnv("ISIK_AS_CA_FILE")
+        set config.sutAudience    = ..RequireEnv("ISIK_SUT_AUDIENCE")
+    }
 
     quit config
 }
@@ -476,7 +506,20 @@ ClassMethod InstallLevel(level As %String, config As %DynamicObject, plan As %Dy
     $$$ThrowOnError(..ImportPackages(namespace, spec, config))
     $$$ThrowOnError(..EnsureEndpoint(namespace, endpoint, spec))
     $$$ThrowOnError(..ConfigureEndpoint(namespace, endpoint, config))
-    $$$ThrowOnError(..SecureEndpoint(endpoint))
+    $$$ThrowOnError(..SecureEndpoint(endpoint, config))
+
+    // Token acceptance, for Stufe 5 only and only when an authorization server
+    // was deployed with the round. Stufe 5 only because `Connect` is a Stufe 5
+    // module: ISiK Stufe 3 specifies no OAuth 2.0 requirement, and configuring
+    // its endpoint for tokens would change the configuration the other modules
+    // are measured in without any test asking for it.
+    //
+    // Last in the chain, after SecureEndpoint: ISiK.OAuth verifies its own work
+    // by retrieving the authorization server's metadata through the configured
+    // client, which only answers once the endpoint itself is complete.
+    if config.connectEnable, level = "stufe5" {
+        $$$ThrowOnError(##class(ISiK.OAuth).Configure(namespace, endpoint, config))
+    }
 
     quit $$$OK
 }
@@ -762,27 +805,64 @@ ClassMethod ConfigureEndpoint(namespace As %String, endpoint As %String, config 
     quit $$$OK
 }
 
-/// Puts the endpoint's web application behind password authentication.
+/// Sets the endpoint's authentication posture.
 ///
-/// <p><method>EnsureEndpoint</method>'s InstallInstance call creates the CSP
-/// application, with unauthenticated access enabled - the IRIS default
-/// (<code>AutheEnabled</code> initial expression 64 = AutheUnauthenticated). This
-/// switches it to password-only (bit 5, value 32), so a missing or wrong
-/// credential is a 401 rather than a silently anonymous request.</p>
+/// <p><b>Two postures, one per round configuration.</b> Which one applies is
+/// decided by <code>ISIK_CONNECT_ENABLE</code>, and the round's provenance record
+/// states which was in force, because the two are not equivalent and a result
+/// obtained under one must not be read as a result obtained under the other.</p>
 ///
-/// <p>The application's own <property>Resource</property> is preserved when the
-/// installer set one, and granted to the API user's role instead of being
-/// replaced. Overwriting it would change how a stock IRIS FHIR endpoint is
-/// protected, and the SUT must stay stock: an inspector comparing this
-/// installation to a normal one should find the difference to be authentication
-/// mode and nothing else.</p>
+/// <p><b>Without an authorization server (the default).</b> The endpoint is put
+/// behind password authentication only:
+/// <code>AutheEnabled</code> = <parameter>AUTHEPASSWORD</parameter>, so a missing
+/// or wrong credential is a 401 rather than a silently anonymous request, and the
+/// test suite's own HTTP Basic credential is the only way in. This is a
+/// deliberate tightening relative to what the FHIR server's installer leaves
+/// behind (see below), and it is what nine of the ten ISiK test modules are
+/// measured against.</p>
 ///
-/// <p><property>MatchRoles</property> is deliberately untouched. That is where
-/// InstallInstance puts the database and SQL privileges the FHIR service needs, and
-/// they apply to the request by virtue of the application, not of the caller - so
-/// the API user needs no database roles of its own and cannot use them anywhere
-/// else.</p>
-ClassMethod SecureEndpoint(endpoint As %String) As %Status
+/// <p><b>With an authorization server (the ISiK Stufe 5 <code>Connect</code>
+/// module).</b> The endpoint is left exactly as the product's own installer
+/// created it: <code>AutheEnabled</code> = <parameter>AUTHEINSTALLED</parameter>
+/// and no application <property>Resource</property>. This is not a relaxation
+/// chosen to make a test pass; it is the configuration a bearer token requires
+/// and the one a customer who connects this endpoint to an identity provider
+/// runs:</p>
+/// <ul>
+/// <li>a request carrying only <code>Authorization: Bearer ...</code> presents no
+///     IRIS credential, so it cannot pass a password-only application, and the
+///     product's token handling runs under delegated authentication - which is
+///     why the installer enables all three bits;</li>
+/// <li>an application resource is a privilege check against the authenticated
+///     IRIS user, and the user a token resolves to holds no such privilege, so a
+///     resource added by this rig turns every token-bearing request into a 404.</li>
+/// </ul>
+/// <p>That 8288 and an empty resource are the installer's own choice and not this
+/// rig's was established by measurement: calling
+/// <method>HS.FHIRServer.Installer.InstallCSPApp</method> for a scratch
+/// application path - with and without an OAuth client name - yields
+/// <code>AutheEnabled</code> 8288 and <property>Resource</property> empty in both
+/// cases. The endpoint is therefore more stock in this configuration than in the
+/// other, and unauthenticated access is nonetheless refused: with an OAuth client
+/// associated, the FHIR server answers an unauthenticated resource request with
+/// 401 itself. Both facts are recorded in docs/en/08-connect.md.</p>
+///
+/// <p>An endpoint found in neither posture is a failure, not something to
+/// overwrite: it means something other than this class configured it, and
+/// silently normalising it would make the round's own record of its
+/// configuration false.</p>
+///
+/// <p>In the password posture, the application's own <property>Resource</property>
+/// is preserved when the installer set one, and granted to the API user's role
+/// instead of being replaced. Overwriting it would change how a stock IRIS FHIR
+/// endpoint is protected.</p>
+///
+/// <p><property>MatchRoles</property> is deliberately untouched in both. That is
+/// where InstallInstance puts the database and SQL privileges the FHIR service
+/// needs, and they apply to the request by virtue of the application, not of the
+/// caller - so the API user needs no database roles of its own and cannot use
+/// them anywhere else.</p>
+ClassMethod SecureEndpoint(endpoint As %String, config As %DynamicObject) As %Status
 {
     new $namespace
     set $namespace = "%SYS"
@@ -795,10 +875,13 @@ ClassMethod SecureEndpoint(endpoint As %String) As %Status
         $$$ThrowStatus($$$ERROR($$$GeneralError, "web application " _ endpoint _ " does not exist after InstallInstance"))
     }
 
+    if config.connectEnable {
+        quit ..LeaveEndpointAsInstalled(endpoint, app)
+    }
+
     #dim installerResource As %String = app.Resource
 
-    // 32 = AuthePassword. Explicitly not 64 (AutheUnauthenticated).
-    set app.AutheEnabled = 32
+    set app.AutheEnabled = ..#AUTHEPASSWORD
     set app.Enabled = 1
     if installerResource = "" {
         set app.Resource = ..#FHIRRESOURCE
@@ -826,6 +909,74 @@ ClassMethod SecureEndpoint(endpoint As %String) As %Status
             _ installerResource _ " (set by InstallInstance, granted to "
             _ ..#FHIRROLE _ ")")
     }
+
+    quit $$$OK
+}
+
+/// Returns the endpoint to the authentication posture the FHIR server's own
+/// installer creates, for a round that deploys an authorization server.
+///
+/// <p>See <method>SecureEndpoint</method> for why this posture is the required
+/// one and why it is not a weakening. Three cases, and only three:</p>
+/// <ul>
+/// <li>already as installed - nothing to do, which is the normal case on a first
+///     Connect round and on every re-run of one;</li>
+/// <li>the password posture this class sets for a round without an authorization
+///     server - restored, which is what a host that ran a non-Connect round and
+///     is now running a Connect one against the same volume will find;</li>
+/// <li>anything else - refused. An unrecognised value means something outside
+///     this class configured the endpoint, and in that case neither keeping nor
+///     changing it can be justified in the round's record.</li>
+/// </ul>
+ClassMethod LeaveEndpointAsInstalled(endpoint As %String, app As Security.Applications) As %Status
+{
+    new $namespace
+    set $namespace = "%SYS"
+
+    #dim authe As %Integer = app.AutheEnabled
+    #dim resource As %String = app.Resource
+
+    if (authe '= ..#AUTHEINSTALLED) && (authe '= ..#AUTHEPASSWORD) {
+        #dim unexpected As %String = endpoint _ ": AutheEnabled is " _ authe
+        set unexpected = unexpected _ " (" _ ##class(Security.Datatype.Authentication).LogicalToDisplay(authe) _ ")"
+        set unexpected = unexpected _ ", which is neither the installer's " _ ..#AUTHEINSTALLED _ " nor this rig's " _ ..#AUTHEPASSWORD
+        set unexpected = unexpected _ " - the endpoint was configured by something other than ISiK.Setup; resolve that before running a Connect round"
+        $$$ThrowStatus($$$ERROR($$$GeneralError, unexpected))
+    }
+
+    // Likewise for the resource: an empty one is the installer's, ours is known
+    // by name, and a third value is not ours to interpret.
+    if (resource '= "") && (resource '= ..#FHIRRESOURCE) {
+        #dim foreign As %String = endpoint _ ": application resource is '" _ resource _ "'"
+        set foreign = foreign _ ", which the FHIR installer does not set and this rig does not use"
+        set foreign = foreign _ " - a Connect round cannot clear a resource it did not create; resolve that first"
+        $$$ThrowStatus($$$ERROR($$$GeneralError, foreign))
+    }
+
+    if (authe = ..#AUTHEINSTALLED) && (resource = "") {
+        do ..Log("left " _ endpoint _ " as installed: AutheEnabled " _ authe
+            _ " (" _ ##class(Security.Datatype.Authentication).LogicalToDisplay(authe)
+            _ "), no application resource")
+        quit $$$OK
+    }
+
+    set app.AutheEnabled = ..#AUTHEINSTALLED
+    set app.Resource = ""
+    set app.Enabled = 1
+    $$$ThrowOnError(app.%Save())
+
+    // Read back from the instance: this value decides whether a token-bearing
+    // request can reach the FHIR server at all, and the round's documentation
+    // cites it.
+    #dim props As %String
+    $$$ThrowOnError(##class(Security.Applications).Get(endpoint, .props))
+    if (+$get(props("AutheEnabled")) '= ..#AUTHEINSTALLED) || ($get(props("Resource"), "") '= "") {
+        $$$ThrowStatus($$$ERROR($$$GeneralError, endpoint _ ": the installer's authentication posture could not be restored"))
+    }
+
+    do ..Log("restored " _ endpoint _ " to the posture the FHIR installer creates: AutheEnabled "
+        _ ..#AUTHEINSTALLED _ " (" _ ##class(Security.Datatype.Authentication).LogicalToDisplay(..#AUTHEINSTALLED)
+        _ "), application resource cleared (was '" _ resource _ "')")
 
     quit $$$OK
 }
@@ -908,18 +1059,30 @@ ClassMethod VerifyEndpoints() As %Status
                 set sc = $$$ERROR($$$GeneralError, msg)
                 quit
             }
-            // 32 = AuthePassword. The suite authenticates with HTTP Basic, and an
-            // endpoint that also allowed unauthenticated access would silently make
-            // every authorisation-related scenario pass for the wrong reason.
-            if $get(props("AutheEnabled")) '= 32 {
+            // The authentication posture, which depends on the round's
+            // configuration - see SecureEndpoint(). Without an authorization
+            // server: password only, because the suite authenticates with HTTP
+            // Basic and an endpoint that also allowed unauthenticated access
+            // would silently make every authorisation-related scenario pass for
+            // the wrong reason. With one, for the Stufe 5 endpoint: the
+            // installer's own posture, because a bearer token cannot pass a
+            // password-only application. Verified here rather than assumed: this
+            // single value decides whether the round measured what it reports.
+            #dim wantAuthe As %Integer = ..#AUTHEPASSWORD
+            if config.connectEnable, level = "stufe5" {
+                set wantAuthe = ..#AUTHEINSTALLED
+            }
+            if +$get(props("AutheEnabled")) '= wantAuthe {
                 set msg = endpoint _ " has AutheEnabled=" _ $get(props("AutheEnabled"))
-                set msg = msg _ ", expected 32 (password only)"
+                set msg = msg _ ", expected " _ wantAuthe _ " (" _ ##class(Security.Datatype.Authentication).LogicalToDisplay(wantAuthe) _ ")"
                 set sc = $$$ERROR($$$GeneralError, msg)
                 quit
             }
 
             do ..Log(endpoint _ ": application enabled, dispatch HS.FHIRServer.RestHandler, ns "
-                _ namespace _ ", password auth, resource " _ $get(props("Resource")))
+                _ namespace _ ", authentication "
+                _ ##class(Security.Datatype.Authentication).LogicalToDisplay(wantAuthe)
+                _ ", resource " _ $select($get(props("Resource")) = "": "(none)", 1: $get(props("Resource"))))
 
             // --- The FHIR service itself ---
             // Reached through the strategy, which is what RestHandler resolves the
@@ -963,6 +1126,37 @@ ClassMethod VerifyEndpoints() As %Status
             }
             do ..Log(endpoint _ ": CapabilityStatement fhirVersion " _ caps.fhirVersion
                 _ ", " _ resourceCount _ " resource types")
+
+            // --- Token acceptance, for a Connect round's Stufe 5 endpoint ---
+            // Re-read from the instance, for the same reason as everything else
+            // here: ISiK.OAuth already verified its own work, and this is the
+            // independent confirmation bootstrap.sh gates the container on. An
+            // endpoint that is live but not associated with the authorization
+            // server would make all 25 Connect scenarios fail identically, and
+            // the cause would be indistinguishable from a product defect.
+            if config.connectEnable, level = "stufe5" {
+                // Its own status variable, deliberately: `sc` is this method's
+                // verdict accumulator, and URLIndexOpen reports a missing record
+                // through the status it is passed.
+                #dim tsc As %Status = $$$OK
+                #dim rest As HS.Util.RESTCSPConfig = ##class(HS.Util.RESTCSPConfig).URLIndexOpen(endpoint, , .tsc)
+                if '$isobject(rest) || (rest.OAuthClientName '= config.asClientName) {
+                    set msg = endpoint _ ": OAuthClientName is '" _ $select($isobject(rest): rest.OAuthClientName, 1: "(no record)")
+                    set msg = msg _ "', expected " _ config.asClientName _ " - the endpoint would not look at a bearer token"
+                    set sc = $$$ERROR($$$GeneralError, msg)
+                    quit
+                }
+                #dim cfg As HS.FHIRServer.API.ConfigData = strategy.GetServiceConfigData()
+                if (cfg.Audiences.Count() '= 1) || (cfg.Audiences.GetAt(1) '= config.sutAudience) {
+                    set msg = endpoint _ ": expected exactly one token audience " _ config.sutAudience
+                    set msg = msg _ ", found " _ cfg.Audiences.Count() _ " - tokens would be rejected or accepted too broadly"
+                    set sc = $$$ERROR($$$GeneralError, msg)
+                    quit
+                }
+                do ..Log(endpoint _ ": OAuth client " _ rest.OAuthClientName
+                    _ ", token audience " _ cfg.Audiences.GetAt(1)
+                    _ ", SearchFiltering " _ cfg.SearchFiltering)
+            }
         }
 
         $$$ThrowOnError(sc)

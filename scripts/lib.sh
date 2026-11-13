@@ -371,17 +371,72 @@ suite_tiger_baselines() {
   esac
 }
 
+# --- The authorization server (ISiK Stufe 5 `Connect`) ----------------------
+# Whether this round deploys an OAuth 2.0 authorization server, which is what
+# the suite's `Connect` module needs and what no other module does.
+#
+# One function rather than `[[ "$CONNECT_ENABLE" == true ]]` in a dozen places:
+# this is the switch that decides which compose files are in play, which
+# configuration files are rendered, which TLS material is issued and which
+# authentication posture the SUT is left in. A round is one configuration or the
+# other, and every script must agree on which.
+#
+# Accepts true/1/yes in any case, because this value is typed into .env by hand.
+# Anything else - including an empty or unset value - is false, so a round
+# behaves exactly as it did before this feature existed unless it was asked not
+# to. A value that is neither is rejected rather than guessed: `CONNECT_ENABLE=ture`
+# must not silently produce a round that reports Connect scenarios as excluded.
+connect_enabled() {
+  case "$(printf '%s' "${CONNECT_ENABLE:-false}" | tr '[:upper:]' '[:lower:]')" in
+    true|1|yes)   return 0 ;;
+    false|0|no|'') return 1 ;;
+    *) die "CONNECT_ENABLE='${CONNECT_ENABLE}' is not a boolean - use true or false" ;;
+  esac
+}
+
+# The compose overlay that adds the authorization server and the TLS listener.
+# Named once, here, so that compose(), `make clean` and 99-check.sh cannot
+# disagree about it.
+CONNECT_COMPOSE_FILE="compose/authserver.yml"
+
+# The six access tokens the suite's Connect scenarios present, as
+# `<testdata key>|<authorization server client id>|<SMART scope>`.
+#
+# This mapping is the single definition shared by three places that must not
+# drift apart: the realm the authorization server imports (one client per
+# scope), the mint step that fills the tokens in, and the check that the two
+# agree. The keys are the suite's own, from
+# testdata/v3/Stufe5/connect.yaml - they are a contract with the test suite and
+# not ours to rename.
+connect_token_clients() {
+  cat <<'EOF'
+read-patient-scope-allowed|isik-connect-patient-patient-rs|patient/Patient.rs
+read-patient-wildcard-scope-allowed|isik-connect-patient-wildcard-rs|patient/*.rs
+read-patient-scope-in-user-context-allowed|isik-connect-user-patient-rs|user/Patient.rs
+read-patient-wildcard-scope-in-user-context-allowed|isik-connect-user-wildcard-rs|user/*.rs
+read-patient-scope-in-system-context-allowed|isik-connect-system-patient-rs|system/Patient.rs
+read-wildcard-scope-in-system-context-allowed|isik-connect-system-wildcard-rs|system/*.rs
+EOF
+}
+
 # --- Compose ----------------------------------------------------------------
 # Always both files, always from the repository root: compose/testsuite.yml uses
 # project-root-relative bind mounts, and compose resolves those against the
 # directory of the FIRST -f argument.
+#
+# The authorization server overlay is appended only for a round that asked for
+# it. Its absence - not a profile, not a variable - is what makes a round without
+# it byte-identical to every round taken before the overlay existed.
 compose() {
   local env_file="$ENV_RESOLVED_FILE"
   [[ -f "$env_file" ]] || env_file="$ENV_FILE"
+  local -a files=( -f docker-compose.yml -f compose/testsuite.yml )
+  if connect_enabled; then
+    files+=( -f "$CONNECT_COMPOSE_FILE" )
+  fi
   ( cd "$REPO_ROOT" && docker compose \
       --env-file "$env_file" \
-      -f docker-compose.yml \
-      -f compose/testsuite.yml \
+      "${files[@]}" \
       "$@" )
 }
 
@@ -440,6 +495,37 @@ sut_base_url_host() {
     *) die "sut_base_url_host: unknown Stufe '$stufe'" ;;
   esac
   printf 'http://127.0.0.1:%s%s' "${IRIS_PORT_WEB:-52773}" "$path"
+}
+
+# The same endpoint over TLS, as the Connect module must address it.
+#
+# A separate function rather than a scheme argument to sut_base_url(): the host
+# name differs too. TLS is verified against the certificate's subjectAltName, so
+# the URL has to carry the name scripts/22-make-tls.sh issued the certificate
+# for, whereas the plain-HTTP URL carries the gateway's IP address - which is
+# what the other nine modules' rendered configuration and documentation show,
+# and which must not change.
+#
+# Only meaningful for a round with CONNECT_ENABLE=true; the listener does not
+# exist otherwise.
+sut_base_url_tls() {
+  local stufe="$1" path
+  case "$stufe" in
+    stufe3|Stufe3|3) path="${FHIR_BASE_STUFE3:?}" ;;
+    stufe5|Stufe5|5) path="${FHIR_BASE_STUFE5:?}" ;;
+    *) die "sut_base_url_tls: unknown Stufe '$stufe'" ;;
+  esac
+  # The port is omitted when it is the default for the scheme, so that the URL,
+  # the certificate's subject and the token audience read the same in the
+  # evidence. A non-default port is spelled out, because a token minted for the
+  # one would not be accepted at the other.
+  local host="${SUT_TLS_HOST:?SUT_TLS_HOST must be set - see .env.example}"
+  local port="${SUT_PORT_HTTPS_INTERNAL:-443}"
+  if [[ "$port" == "443" ]]; then
+    printf 'https://%s%s' "$host" "$path"
+  else
+    printf 'https://%s:%s%s' "$host" "$port" "$path"
+  fi
 }
 
 # --- Credentials ------------------------------------------------------------

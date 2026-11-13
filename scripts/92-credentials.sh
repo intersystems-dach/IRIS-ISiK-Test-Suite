@@ -85,6 +85,43 @@ if [[ -n "${IRIS_IP:-}" && -n "${WEBGATEWAY_IP:-}" \
   fi
 fi
 
+# --- The authorization server, for a Connect round ----------------------------
+# Only for a round that has one. Three things a tester needs and cannot derive:
+# the admin console account, the secret every client in the realm shares, and the
+# issuer - the last because it is pinned to the in-network name and is therefore
+# NOT the URL the console is reached at.
+#
+# The access tokens themselves are deliberately absent. They live for an hour,
+# they are minted on demand by `make tokens`, and run/tiger/TOKENS.txt records
+# only their SHA-256 and the parameters they were minted with - a token printed
+# into a terminal scrollback is a credential nobody can revoke.
+if connect_enabled; then
+  as_admin_pw="${AS_ADMIN_PASSWORD:-}"
+  as_secret="${AS_CLIENT_SECRET:-}"
+  if [[ -z "$as_admin_pw" && -s "${SECRETS_DIR}/as-admin.password" ]]; then
+    as_admin_pw="$(tr -d '\r\n' <"${SECRETS_DIR}/as-admin.password")"
+  fi
+  if [[ -z "$as_secret" && -s "${SECRETS_DIR}/as-client.secret" ]]; then
+    as_secret="$(tr -d '\r\n' <"${SECRETS_DIR}/as-client.secret")"
+  fi
+
+  printf '\n'
+  step "Authorization server (CONNECT_ENABLE=true)"
+  kv "admin console user" "${AS_ADMIN_USER:-kcadmin}"
+  kv "admin console password" "${as_admin_pw:-** unknown - run 'make resolve' **}"
+  kv "admin console" "https://127.0.0.1:${AS_PORT_HTTPS:-8443}/admin/  (the round's own CA: run/tls/ca.crt)"
+  kv "realm client secret" "${as_secret:-** unknown - run 'make resolve' **}"
+  kv "issuer (pinned)" "https://${AS_HOSTNAME:-isik-as}:${AS_PORT_HTTPS_INTERNAL:-8443}/realms/${AS_REALM:-isik}"
+  kv "token audience" "${SUT_AUDIENCE:-** unset - see .env.example **}"
+  # The listener the Connect module addresses, and the only one that will accept
+  # a bearer token at all. Absent from the endpoint block above, which lists the
+  # plain-HTTP URLs the other nine modules use and must keep listing unchanged.
+  if [[ -n "${SUT_TLS_HOST:-}" && -n "${FHIR_BASE_STUFE5:-}" ]]; then
+    kv "SUT over TLS (Stufe 5)" "$(sut_base_url_tls stufe5)"
+  fi
+  kv "access tokens" "minted by 'make tokens'; run/tiger/TOKENS.txt records their SHA-256 only"
+fi
+
 printf '\n'
 printf 'Run `make up` to regenerate the full sheet, with the endpoint table and the\n'
 printf 'ready-to-paste commands, at run/CREDENTIALS.md.\n\n'

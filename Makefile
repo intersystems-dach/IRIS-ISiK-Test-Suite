@@ -71,6 +71,17 @@ COMPOSE := docker compose \
 	-f $(REPO_ROOT)/docker-compose.yml \
 	-f $(REPO_ROOT)/compose/testsuite.yml
 
+# The authorization server overlay, for a round that asked for one. Evaluated by
+# asking scripts/lib.sh rather than by reading .env here, so that `make clean`
+# tears down exactly what compose() brought up and the two cannot disagree about
+# what CONNECT_ENABLE=true means. Deferred (=, not :=) so it costs nothing on an
+# invocation that does not use it, and empty on any failure - a round without the
+# overlay then behaves exactly as it did before the overlay existed.
+CONNECT_OVERLAY = $(shell . '$(SCRIPTS)/lib.sh' >/dev/null 2>&1 \
+	&& load_env >/dev/null 2>&1 \
+	&& connect_enabled >/dev/null 2>&1 \
+	&& printf -- '-f %s/%s' '$(REPO_ROOT)' "$$CONNECT_COMPOSE_FILE")
+
 # A single run id shared by every target in one `make all` invocation, so the
 # Stufe 3 and Stufe 5 reports of one round land in the same reports/ directory.
 # Recursively expanded (=) would produce a different timestamp per use, so it is
@@ -79,8 +90,9 @@ RUN_ID ?= run-$(shell date -u +%Y%m%dT%H%M%SZ)
 export RUN_ID
 
 .PHONY: help provision image-from-kit preflight resolve packages up seed \
-        test test-stufe3 test-stufe5 report gap-report case-evidence compare \
-        manual all status credentials logs shell-iris check clean destroy
+        tokens test test-stufe3 test-stufe5 test-connect report gap-report \
+        case-evidence compare manual all status credentials logs shell-iris \
+        check clean destroy
 
 # -----------------------------------------------------------------------------
 help: ## Show this help
@@ -140,6 +152,10 @@ packages: resolve ## Fetch + unpack the FHIR packages the suite validates agains
 # --- Phase 2: bring up the unit under test ----------------------------------
 
 up: packages ## Start IRIS, install both endpoints, wait until healthy
+	@# Before the configuration is rendered: the rendered virtual host names the
+	@# certificate files, and the authorization server will not start without
+	@# them. A no-op unless CONNECT_ENABLE=true.
+	@$(SCRIPTS)/22-make-tls.sh
 	@$(SCRIPTS)/30-render-config.sh
 	@$(SCRIPTS)/40-up.sh
 
@@ -158,6 +174,26 @@ test-stufe3: seed ## Run the ISiK Stufe 3 conformance suite
 test-stufe5: seed ## Run the ISiK Stufe 5 conformance suite
 	@$(SCRIPTS)/60-run-tests.sh stufe5
 
+# --- the Connect module, on real access tokens ------------------------------
+# A second invocation of Stufe 5, restricted to the one module that presents a
+# bearer token per request. The complete Stufe 5 run above is unchanged and
+# remains the round's submission artefact; this one is the evidence that the
+# module's tokens were actually validated. See the header of
+# scripts/60-run-tests.sh.
+#
+# Both targets refuse to do anything useful with CONNECT_ENABLE=false, which is
+# the default: there is no authorization server to mint against.
+
+tokens: up ## Mint this round's ISiK Connect access tokens into the staged test data
+	@$(SCRIPTS)/55-mint-tokens.sh
+
+# `seed tokens`, in that order: seeding takes minutes and a token lives an hour,
+# so the tokens are obtained last, immediately before the run that presents
+# them. 60-run-tests.sh re-checks their remaining life before it starts the
+# container and refuses a run that cannot finish inside it.
+test-connect: seed tokens ## Run the ISiK Stufe 5 Connect module with real bearer tokens
+	@$(SCRIPTS)/60-run-tests.sh connect
+
 # Every level the pinned suite carries, sequentially - they share the report
 # volume, which is why they are serialised and why each archives before the next
 # starts. The levels come from suite_levels() in scripts/lib.sh rather than being
@@ -165,13 +201,24 @@ test-stufe5: seed ## Run the ISiK Stufe 5 conformance suite
 # `60-run-tests.sh stufe3` would start a container whose tag expression selects no
 # scenario, and an empty report is the one outcome that must not be produced
 # silently in a round whose product is a statement about the SUT.
+#
+# A round with CONNECT_ENABLE=true appends one further invocation after the
+# levels, not instead of one of them: the complete scope has already run and is
+# archived, and this adds the same level's Connect module a second time on real
+# access tokens. It runs last so that the tokens are minted as late as possible,
+# and the scripts are called directly rather than through `make test-connect` so
+# that the token lifetime is not spent re-walking the preparation chain.
 test: seed ## Run every level the pinned suite carries, sequentially
 	@set -e; \
 	levels="$$(. scripts/lib.sh; load_env; suite_levels)"; \
 	[ -n "$$levels" ] || { echo "make test: suite_levels named no level - see above" >&2; exit 1; }; \
 	for level in $$levels; do \
 	  $(SCRIPTS)/60-run-tests.sh "$$(echo "$$level" | tr 'A-Z' 'a-z')"; \
-	done
+	done; \
+	if (. scripts/lib.sh >/dev/null 2>&1; load_env >/dev/null 2>&1; connect_enabled); then \
+	  $(SCRIPTS)/55-mint-tokens.sh; \
+	  $(SCRIPTS)/60-run-tests.sh connect; \
+	fi
 
 # --- Phase 4: evidence ------------------------------------------------------
 
@@ -229,7 +276,12 @@ check: ## Static self-check of this repository (syntax, YAML, compose config)
 # the results have been confirmed and archived.
 
 clean: ## Remove containers, network and the report volume (keeps reports/ and vendor/)
-	@$(COMPOSE) --profile stufe3 --profile stufe5 --profile manual down --volumes --remove-orphans
+	@# The CONNECT_OVERLAY file and --profile connect: without the overlay, compose
+	@# does not know the authserver and testsuite-connect services exist and would
+	@# leave both containers and the TLS material of the round behind. The overlay
+	@# expands to nothing when CONNECT_ENABLE is not true, so the teardown of a
+	@# round without it is unchanged.
+	@$(COMPOSE) $(CONNECT_OVERLAY) --profile stufe3 --profile stufe5 --profile connect --profile manual down --volumes --remove-orphans
 	@rm -rf $(REPO_ROOT)/run
 	@printf 'Kept: reports/ (evidence), vendor/ (packages), .env.resolved (provenance)\n'
 

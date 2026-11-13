@@ -1,0 +1,117 @@
+# =============================================================================
+# Tiger test environment configuration - ISiK Stufe 5 "Connect", generation 3.x
+# =============================================================================
+# TEMPLATE. Rendered to run/tiger/tiger-isik-stufe5-connect.yaml by
+# scripts/30-render-config.sh - and only when CONNECT_ENABLE=true. The rendered
+# file is mounted into the test suite container at /app/tiger-isik-stufe5.yaml,
+# which is the path the upstream `stufe5` Maven profile reads; the file name here
+# only distinguishes it from the other Stufe 5 configuration on the host.
+#
+# WHY A SECOND CONFIGURATION FOR ONE LEVEL. The `Connect` module is the only one
+# of the ten Stufe 5 modules that authenticates per request from the feature file
+# itself: every one of its scenarios sends its own
+#
+#     | Authorization | Bearer ${connect.read-patient-scope-allowed} |
+#
+# header, while the other nine send no credential at all and rely on the Tiger
+# proxy's route to add one. Those two requirements cannot be served by one
+# configuration, for two independently sufficient reasons:
+#
+#  1. MEASURED, 2026-11-13: a route with an `authentication:` block REPLACES the
+#     Authorization header the feature file set. The Connect features were run
+#     against the ordinary Stufe 5 configuration with placeholder tokens; the
+#     recorded traffic contained no `Bearer` at all - only the route's Basic
+#     credential - and the SUT answered 200 to every request, including
+#     `GET /Encounter?_count=10`, which the feature requires to be refused with
+#     40x. Four of that feature's six scenarios "passed". A conformance statement
+#     obtained that way would be an artefact of the test harness, not a property
+#     of the system under test, so the Connect module must be run through a route
+#     that adds nothing.
+#
+#  2. The FHIR server refuses to evaluate a bearer token on a connection it does
+#     not consider secure: HS.FHIRServer.RestHandler's PrelimTokenCheck requires
+#     HS.Local.FHIRServer.Util.BaseURL.IsRequestSecure(), which derives from
+#     %request.Secure, i.e. from TLS terminating at the Web Gateway. The Connect
+#     module therefore has to address the HTTPS listener, while the other nine
+#     modules keep using the :80 listener they have always used, so that their
+#     results stay comparable with every round taken before this one.
+#
+# `make test-connect` runs this configuration with the tag expression
+# `@Stufe5 and @Connect and (not @Optional)`. It does NOT narrow `make
+# test-stufe5`, which keeps running the complete official scope
+# `@Stufe5 and (not @Optional)` - including these same 32 Connect cases - because
+# that archive is the one the certification process asks for: upstream requires
+# "the artifact `target/test-report.zip`", in the singular. The Connect module
+# therefore runs twice in a round with this configuration, and the archive taken
+# here SUPERSEDES the Connect cases of the complete one rather than adding to
+# them. Each run.json records which of the two it is (`scopePartition`).
+#
+# Derived from tiger/v3/tiger-isik-stufe5.yaml.tmpl, which is itself the official
+# tiger-isik-stufe5.yaml of gematik/isik-testsuite 3.0.9 with its deviations
+# annotated. The deviations below are additional to those, and marked
+# [DEVIATION-CONNECT].
+# =============================================================================
+
+servers:
+  fhirserver:
+    type: externalUrl
+    source:
+      # [DEVIATION-CONNECT] The HTTPS listener, not the HTTP one. See reason 2
+      # above. Same endpoint, same IRIS instance, same namespace - a second
+      # listener in front of it, not a second server.
+      - @@SUT_BASE_URL@@
+
+    # [DEVIATION] Not present upstream. Fails fast if the SUT is unreachable
+    # instead of letting every scenario of the module fail one by one.
+    #
+    # [DEVIATION-CONNECT] Over HTTPS, so that this check also proves the TLS
+    # listener itself is up before the run starts - the listener every scenario
+    # below depends on. Measured: Tiger performs this check against a
+    # certificate issued by the round's local CA without further configuration.
+    healthcheckUrl: @@SUT_BASE_URL@@/metadata
+    startupTimeoutSec: 60
+
+tigerProxy: # https://gematik.github.io/app-Tiger/Tiger-User-Manual.html#_configuring_the_local_test_suite_tiger_proxy
+  adminPort: @@PROXY_ADMIN_PORT@@
+
+  proxyRoutes:
+    - from: "http://fhirserver"
+      to: "@@SUT_BASE_URL@@"
+      # [DEVIATION-CONNECT] No `authentication:` block, deliberately, and this is
+      # the whole point of the file: the route must forward the feature file's own
+      # Authorization header untouched. See reason 1 above for what happens when
+      # it does not.
+      #
+      # Nothing is lost by it. The three Connect requests that carry no bearer
+      # token - the CapabilityStatement and the two SMART discovery documents -
+      # are served unauthenticated by the endpoint as the FHIR server's own
+      # installer configures it (AutheEnabled 8288, "Unauthenticated,Password,
+      # Delegated", no application resource; see ISiK.Setup.SecureEndpoint).
+      # Measured against the SUT: GET /metadata and
+      # GET /.well-known/smart-configuration both answer 200 with no credential.
+
+lib:
+  # [DEVIATION] Upstream ships `true`. False for an unattended run, true for
+  # MODE=manual: with the UI active TigerDirector waits for a browser to attach
+  # and aborts the entire run if none does, which is what happens in a detached
+  # container.
+  activateWorkflowUi: @@ACTIVATE_WORKFLOW_UI@@
+  # [DEVIATION] 9010 rather than upstream's 9012, matching the published port.
+  workflowUiPort: @@WORKFLOW_UI_PORT@@
+  trafficVisualization: true
+  runTestsOnStart: @@RUN_TESTS_ON_START@@
+
+logging:
+  level:
+    de.gematik.rbellogger.converter: WARN
+
+# [DEVIATION-CONNECT] One entry, not eleven. The Connect feature files reference
+# `${connect.*}` and nothing else, and this configuration runs no other module,
+# so loading the other namespaces would stage test data no scenario of this run
+# reads. The file itself is the official one, byte-identical, with the six token
+# keys filled in by `make tokens` - see scripts/55-mint-tokens.sh, and
+# run/tiger/TESTDATA-PARITY.txt, which reports it as PARAMETERISED rather than
+# IDENTICAL and lists exactly which keys were given a value.
+additionalConfigurationFiles:
+  - filename: testdata/Stufe5/connect.yaml
+    baseKey: connect

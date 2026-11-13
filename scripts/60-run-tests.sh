@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # =============================================================================
-# 60-run-tests.sh <stufe3|stufe5> - run one conformance level and archive its report
+# 60-run-tests.sh <stufe3|stufe5|connect> - run one invocation, archive its report
 # =============================================================================
-# `make test-stufe3` / `make test-stufe5`. One invocation runs exactly one ISiK
-# specification level, because the upstream image does: its entrypoint is
+# `make test-stufe3` / `make test-stufe5` / `make test-connect`. One invocation
+# runs exactly one ISiK specification level, because the upstream image does: its
+# entrypoint is
 #
 #     rm -rf $REPORT_DIR/* ; mvn clean verify -ntp -P${MAVEN_PROFILE} \
 #         -DTESTS_TO_RUN="${TESTS_TO_RUN}" || true ; \
@@ -36,6 +37,43 @@
 #      the timeout path stops the container gracefully and reports honestly that
 #      there is nothing to archive.
 #
+# THE THIRD VARIANT. `connect` is not a third specification level - ISiK Stufe 5
+# has ten modules and `Connect` is one of them - but it is a second invocation of
+# Stufe 5, restricted to that one module, because the module needs a Tiger
+# configuration the other nine must not have and the suite image reads one
+# configuration file per start.
+#
+#   MEASURED, 2026-11-13: a Tiger route carrying an `authentication:` block
+#   REPLACES the Authorization header the feature file set. Run through the
+#   ordinary Stufe 5 configuration, the recorded traffic contained no bearer
+#   token at all and the SUT answered 200 to every Connect request - including
+#   the one the feature file requires to be refused. See the header of
+#   tiger/v3/tiger-isik-stufe5-connect.yaml.tmpl.
+#
+# IT DOES NOT NARROW THE STUFE 5 RUN. `make test-stufe5` keeps running the
+# complete official scope `@Stufe5 and (not @Optional)`, which selects the 32
+# @Connect cases as it always has, for two reasons:
+#
+#   - that archive is the one the certification process asks for. Upstream's
+#     README: "The artifact `target/test-report.zip` is required to apply for the
+#     ISiK conformance certificate", in the singular, uploaded into one
+#     submission form on the TITUS platform.
+#   - it keeps this round comparable, case for case, with every round taken
+#     before this capability existed.
+#
+# The `connect` invocation runs the same 32 cases a SECOND time, with real bearer
+# tokens against the TLS endpoint, and its archive is what a statement about the
+# Connect module rests on. The overlap is deliberate and is recorded:
+# run.json.scopePartition is "complete" for the Stufe 5 archive and
+# "connect-only" for this one, and the analysis supersedes the Connect cases of
+# the former with the latter rather than adding the two up. Selecting the module
+# with `@Connect` is upstream's own documented mechanism (README, "Test
+# Selection"), and supplying the tokens is upstream's own documented
+# precondition: "the tests make the assumption that the System-Under-Test is up
+# and running and that an Authorization Server is available. The tests do not
+# evaluate the SMART-on-FHIR Authorization Flow, instead they require the Bearer
+# Token used for sending authenticated requests to the System-Under-Test".
+#
 # A FAILING CONFORMANCE RUN IS THE EXPECTED OUTCOME of this project: IRIS for
 # Health is known not to be fully ISiK compliant. This script therefore exits 0
 # for a run in which every scenario failed, and non-zero only for a harness error
@@ -43,7 +81,7 @@
 # which means there is no evidence to analyse. `make test` must not stop before
 # `make report`.
 #
-# Outputs, under reports/<run-id>/<stufe>/:
+# Outputs, under reports/<run-id>/<variant>/:
 #   official/*.zip      the report archives, byte-for-byte as the suite wrote them
 #   official/SHA256SUMS the checksums an inspector re-computes
 #   run.log             the container's complete stdout/stderr, verbatim
@@ -57,14 +95,24 @@
 
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
-STUFE="${1:-}"
-case "$STUFE" in
-  stufe3) LEVEL=Stufe3 ;;
-  stufe5) LEVEL=Stufe5 ;;
-  *) die "usage: 60-run-tests.sh <stufe3|stufe5>" ;;
+# Three variants, two levels. VARIANT is what the caller asked for and names the
+# compose profile, the service, the container and the archive directory; STUFE is
+# the ISiK specification level and therefore the upstream Maven profile, the
+# namespace, the endpoint and the tag that must appear in the tag expression.
+# They differ only for `connect`, which is a second invocation of Stufe 5.
+VARIANT="${1:-}"
+case "$VARIANT" in
+  stufe3)  STUFE=stufe3; LEVEL=Stufe3 ;;
+  stufe5)  STUFE=stufe5; LEVEL=Stufe5 ;;
+  connect) STUFE=stufe5; LEVEL=Stufe5 ;;
+  *) die "usage: 60-run-tests.sh <stufe3|stufe5|connect>" ;;
 esac
 
-step "Running the ISiK ${LEVEL#Stufe} conformance suite"
+if [[ "$VARIANT" == connect ]]; then
+  step "Running the ISiK ${LEVEL#Stufe} 'Connect' module"
+else
+  step "Running the ISiK ${LEVEL#Stufe} conformance suite"
+fi
 
 load_env
 require_var TESTSUITE_IMAGE TESTSUITE_VERSION TESTSUITE_IP IRIS_IP \
@@ -83,6 +131,18 @@ case " $(suite_levels_lc) " in
   write an empty report, which cannot be told apart from a level that found nothing." ;;
 esac
 
+# The Connect module presupposes an authorization server, a TLS listener and six
+# live access tokens, none of which exist in a round that did not ask for them.
+# Refused here with the one thing the operator has to change, rather than failing
+# forty minutes later on a missing bind-mount source.
+if [[ "$VARIANT" == connect ]] && ! connect_enabled; then
+  die "the Connect module cannot run with CONNECT_ENABLE=false.
+  It is the only ISiK module that authenticates with a bearer token, so it needs
+  the authorization server and the TLS listener that compose/authserver.yml adds.
+  Set CONNECT_ENABLE=true in .env (see its section 7) and run 'make up' again.
+  The other nine Stufe 5 modules are unaffected and run with 'make test-stufe5'."
+fi
+
 need_cmd docker
 need_cmd python3
 # For the archive checks in section 4 (`unzip -t`, CRC integrity) and 4b
@@ -91,11 +151,13 @@ need_cmd python3
 need_cmd unzip
 
 PROJECT="${COMPOSE_PROJECT_NAME:-isik}"
-SERVICE="testsuite-${STUFE}"
-CONTAINER="${PROJECT}-testsuite-${STUFE}"
+SERVICE="testsuite-${VARIANT}"
+CONTAINER="${PROJECT}-testsuite-${VARIANT}"
 VOLUME="${PROJECT}-tiger-report"
 
-ARCHIVE_DIR="$(run_report_dir)/${STUFE}"
+# Keyed by variant, not by level: the two Stufe 5 invocations each produce a full
+# set of archives, and one must not overwrite the other.
+ARCHIVE_DIR="$(run_report_dir)/${VARIANT}"
 OFFICIAL_DIR="${ARCHIVE_DIR}/official"
 RUN_LOG="${ARCHIVE_DIR}/run.log"
 RUN_META="${ARCHIVE_DIR}/run.json"
@@ -120,9 +182,23 @@ for s in $(suite_levels_lc); do
   tiger_expected+=("${RUN_DIR}/tiger/tiger-isik-${s}.yaml")
 done
 (( ${#tiger_expected[@]} )) || die "suite_levels() named no level for TESTSUITE_VERSION=${TESTSUITE_VERSION:-?}"
+# The Connect module's own configuration, which exists only for a round with
+# CONNECT_ENABLE=true. Mounted over /app/tiger-isik-stufe5.yaml in the container,
+# so the file name differs only here on the host.
+if connect_enabled; then
+  tiger_expected+=("${RUN_DIR}/tiger/tiger-isik-stufe5-connect.yaml")
+fi
 for f in "${tiger_expected[@]}" "${RUN_DIR}/testdata"; do
   [[ -e "$f" ]] || die "${f#$REPO_ROOT/} is missing - run 'make up' (scripts/30-render-config.sh renders it)"
 done
+
+# The one this invocation uses, named for the diagnostics in section 6: a Tiger
+# startup failure is reported against a file, and the file differs per variant.
+if [[ "$VARIANT" == connect ]]; then
+  TIGER_CONFIG="run/tiger/tiger-isik-stufe5-connect.yaml"
+else
+  TIGER_CONFIG="run/tiger/tiger-isik-${STUFE}.yaml"
+fi
 
 if ! docker inspect "${PROJECT}-iris" --format '{{.State.Status}}' 2>/dev/null | grep -q running; then
   die "the unit under test (${PROJECT}-iris) is not running - run 'make up' first"
@@ -173,12 +249,87 @@ if (( seed_invalid > 0 )); then
   are ours, not IRIS's; run.json records this so the analysis can say so."
 fi
 
+# --- preconditions specific to the Connect module ----------------------------
+# Three things the other nine modules do not need, each of which fails in a way
+# that looks like a conformance finding against the system under test if it is
+# not checked here: the authorization server IRIS introspects against, the TLS
+# listener a bearer token is only accepted on, and six unexpired tokens in the
+# staged test data.
+if [[ "$VARIANT" == connect ]]; then
+  need_cmd curl
+  require_var SUT_TLS_HOST SUT_AUDIENCE
+
+  if ! docker inspect "${PROJECT}-authserver" --format '{{.State.Status}}' 2>/dev/null | grep -q running; then
+    die "the authorization server (${PROJECT}-authserver) is not running - run 'make up' first.
+  IRIS introspects every presented token against it at request time, so without it
+  the whole module would be reported as refused by the system under test."
+  fi
+
+  # The TLS listener, as the suite will address it. Checked from the host through
+  # the published port, with the name resolved to it rather than put in the URL,
+  # so that the certificate is verified against the subjectAltName it was issued
+  # for instead of the verification being switched off.
+  #
+  # HS.FHIRServer.RestHandler.PrelimTokenCheck refuses a bearer token on a
+  # connection it does not consider secure, so a round whose :443 virtual host
+  # did not come up answers every Connect scenario with a 401 - which reads as
+  # "IRIS rejects valid tokens" and is instead a missing listener.
+  tls_probe="$(curl --silent --show-error --max-time 20 \
+                 --cacert "${RUN_DIR}/tls/ca.crt" \
+                 --resolve "${SUT_TLS_HOST}:${SUT_PORT_HTTPS:-52443}:127.0.0.1" \
+                 -o /dev/null -w '%{http_code}' \
+                 "https://${SUT_TLS_HOST}:${SUT_PORT_HTTPS:-52443}${FHIR_BASE_STUFE5}/metadata" \
+                 2>/tmp/.isik-tls-probe.$$ || true)"
+  tls_error="$(tr -d '\n' </tmp/.isik-tls-probe.$$ 2>/dev/null || true)"
+  rm -f /tmp/.isik-tls-probe.$$
+  if [[ -z "$tls_probe" || "$tls_probe" == "000" ]]; then
+    die "the TLS endpoint https://${SUT_TLS_HOST}:${SUT_PORT_HTTPS:-52443}${FHIR_BASE_STUFE5} did not answer: ${tls_error:-no response}.
+  The FHIR server accepts a bearer token only over a connection it considers
+  secure, so every scenario of this module would fail on authorization. Check the
+  webgateway container's :443 listener and run/webgateway/isik-vhost-tls.conf."
+  fi
+  log "TLS endpoint answers HTTP ${tls_probe} (certificate trusted by this round's CA)"
+
+  # The tokens. This also re-reads the authorization server's discovery document
+  # and compares its issuer with the one IRIS discovered, so a realm that was
+  # re-imported with a different hostname is caught here too.
+  #
+  # Checked immediately before the run and not at mint time only, because
+  # 'make render' re-stages run/testdata/ from the official contract and thereby
+  # restores the placeholder values - a round that rendered after minting would
+  # otherwise send the literal string SET-YOUR-TOKEN-HERE as a bearer token.
+  step "Checking the staged Connect access tokens"
+  "${SCRIPTS_DIR}/55-mint-tokens.sh" --verify \
+    || die "the staged Connect access tokens are not usable - see above.
+  Re-mint them with 'make tokens' and start this run straight after; a token
+  lives ${AS_TOKEN_LIFESPAN:-3600}s. Always render first, then mint."
+fi
+
 # --- tag expression ----------------------------------------------------------
 # The tag expression decides the scope, and the scope decides whether the run is a
 # conformance run at all. Both facts are established here, before anything starts.
-case "$STUFE" in
-  stufe3) TESTS_TO_RUN="${TESTS_TO_RUN_STUFE3:-@Stufe3 and (not @Optional)}" ;;
-  stufe5) TESTS_TO_RUN="${TESTS_TO_RUN_STUFE5:-@Stufe5 and (not @Optional)}" ;;
+#
+# The official certification scope of a level is `@<level> and (not @Optional)`,
+# as it appears in the upstream pom.xml profile defaults, and it includes the
+# Connect module: `@Connect` carries no `@Optional`, so the 32 Connect cases are
+# selected by it and were part of every round taken so far. CONNECT_ENABLE does
+# not change that expression - see the header for why the Stufe 5 archive stays
+# the complete one - so the defaults below are the same in both configurations.
+#
+# `@Stufe5 and @Connect and (not @Optional)` for the connect variant is a subset
+# of the level's official scope, not a different scope: it selects the module
+# with upstream's own documented tag and keeps upstream's `(not @Optional)`, so
+# no case runs that a complete run would not also have run.
+case "$VARIANT" in
+  stufe3)
+    DEFAULT_TAGS="@Stufe3 and (not @Optional)"
+    TESTS_TO_RUN="${TESTS_TO_RUN_STUFE3:-$DEFAULT_TAGS}" ;;
+  stufe5)
+    DEFAULT_TAGS="@Stufe5 and (not @Optional)"
+    TESTS_TO_RUN="${TESTS_TO_RUN_STUFE5:-$DEFAULT_TAGS}" ;;
+  connect)
+    DEFAULT_TAGS="@Stufe5 and @Connect and (not @Optional)"
+    TESTS_TO_RUN="${TESTS_TO_RUN_CONNECT:-$DEFAULT_TAGS}" ;;
 esac
 
 # A tag expression that does not name this level selects nothing, and the symptom
@@ -186,21 +337,79 @@ esac
 # than a warning.
 WANT_TAG="@${LEVEL}"
 [[ "$TESTS_TO_RUN" == *"$WANT_TAG"* ]] \
-  || die "TESTS_TO_RUN_${LEVEL^^} is '${TESTS_TO_RUN}' but does not mention ${WANT_TAG}.
+  || die "TESTS_TO_RUN_${VARIANT^^} is '${TESTS_TO_RUN}' but does not mention ${WANT_TAG}.
   Maven would run the ${STUFE} profile while the tag filter selected nothing, and
   the report would be empty with no error reported anywhere."
 
-# The official certification scope, as it appears in the upstream pom.xml profile
-# defaults. Anything else is a debugging run and must not be submitted.
+# The official certification scope of the level, and the two restrictions of it
+# this rig has a name for. Only the official scope itself yields the archive the
+# Bestaetigungsverfahren asks for; the other two are deliberate restrictions, and
+# anything else is a debugging run.
 OFFICIAL_SCOPE="${WANT_TAG} and (not @Optional)"
-if [[ "$TESTS_TO_RUN" == "$OFFICIAL_SCOPE" ]]; then
+SCOPE_WITHOUT_CONNECT="${WANT_TAG} and (not @Optional) and (not @Connect)"
+SCOPE_CONNECT_ONLY="${WANT_TAG} and @Connect and (not @Optional)"
+
+case "$TESTS_TO_RUN" in
+  "$OFFICIAL_SCOPE")        SCOPE_PARTITION=complete ;;
+  "$SCOPE_WITHOUT_CONNECT") SCOPE_PARTITION=without-connect ;;
+  "$SCOPE_CONNECT_ONLY")    SCOPE_PARTITION=connect-only ;;
+  *)                        SCOPE_PARTITION=narrowed ;;
+esac
+
+# conformanceScope says one thing only: whether THIS archive is the level's
+# official certification scope. A restricted run is not, however deliberate - the
+# submission form takes one test-report.zip per level - and scopePartition is
+# what tells a deliberate restriction apart from a debugging run.
+if [[ "$SCOPE_PARTITION" == complete ]]; then
   CONFORMANCE_SCOPE=true
 else
   CONFORMANCE_SCOPE=false
-  warn "TESTS_TO_RUN is '${TESTS_TO_RUN}', not the official scope '${OFFICIAL_SCOPE}'.
+fi
+
+# One line for the summary block below, so the operator reads what this archive
+# will and will not cover next to the rest of the round's identity.
+case "$SCOPE_PARTITION" in
+  complete)
+    SCOPE_NOTE="the official certification scope of ${LEVEL}" ;;
+  without-connect)
+    SCOPE_NOTE="the official ${LEVEL} scope minus the Connect module"
+    warn "TESTS_TO_RUN excludes @Connect, so 32 mandatory cases of ${LEVEL} do not
+  run in this invocation. The archive is therefore not the level's official scope
+  and run.json records conformanceScope: false, scopePartition: without-connect.
+  'make test-stufe5' runs the complete scope; the restriction is only useful for
+  re-running the other nine modules while working on something else." ;;
+  connect-only)
+    SCOPE_NOTE="the Connect module of ${LEVEL} only, with this round's bearer tokens"
+    log "this is the Connect module's own invocation: a subset of the official
+  ${LEVEL} scope selected with upstream's @Connect tag, run with real access
+  tokens against the TLS endpoint. It is additional evidence and not the
+  submission artefact - that is the complete-scope archive of 'make test-stufe5',
+  whose Connect cases this one supersedes. run.json records scopePartition:
+  connect-only and conformanceScope: false accordingly." ;;
+  narrowed)
+    SCOPE_NOTE="NOT a conformance scope - a debugging run"
+    warn "TESTS_TO_RUN is '${TESTS_TO_RUN}', which is neither the official scope
+  '${OFFICIAL_SCOPE}' nor one of the two restrictions this rig knows by name.
   This run is a DEBUGGING run: its report is not a conformance result and must not
   be submitted for the Bestaetigungsverfahren. run.json records conformanceScope:
-  false and the generated documentation states it."
+  false and the generated documentation states it." ;;
+esac
+
+# --- the endpoint this invocation addresses ----------------------------------
+# The Connect module addresses the TLS listener; the other nine keep addressing
+# :80 exactly as they always have. Both URLs therefore appear in a Connect
+# round's evidence, and each archive states which one its scenarios used.
+#
+# The from-the-host form of the TLS URL is assembled here rather than in lib.sh
+# because it is only ever read by a human: SUT_TLS_HOST is the name the
+# certificate was issued for and is not in DNS, so a request from the host has to
+# resolve it to 127.0.0.1 itself (curl --resolve, or /etc/hosts).
+if [[ "$VARIANT" == connect ]]; then
+  SUT_URL="$(sut_base_url_tls "$STUFE")"
+  SUT_URL_HOST="https://${SUT_TLS_HOST}:${SUT_PORT_HTTPS:-52443}${FHIR_BASE_STUFE5}"
+else
+  SUT_URL="$(sut_base_url "$STUFE")"
+  SUT_URL_HOST="$(sut_base_url_host "$STUFE")"
 fi
 
 mkdir -p "$OFFICIAL_DIR"
@@ -208,7 +417,8 @@ mkdir -p "$OFFICIAL_DIR"
 log "run id      $(run_id)"
 log "level       ISiK ${LEVEL#Stufe} (Maven profile ${STUFE})"
 log "tags        ${TESTS_TO_RUN}"
-log "SUT         $(sut_base_url "$STUFE")"
+log "scope       ${SCOPE_NOTE}"
+log "SUT         ${SUT_URL}"
 log "suite       ${TESTSUITE_IMAGE}:${TESTSUITE_VERSION}"
 log "corpus      $(printf '%s' "$seed_summary" | python3 -c '
 import json, sys
@@ -222,12 +432,12 @@ log "archive     ${ARCHIVE_DIR#$REPO_ROOT/}"
 # 2. Clear the way
 # -----------------------------------------------------------------------------
 # An exited container still holds its network endpoint until it is removed, and
-# all three test suite services share one static address, so a container left
-# behind by an earlier level or an interrupted round makes `compose up` fail with
-# "Address already in use". Removing them here is safe because each level's
-# archives are lifted out before this script returns.
+# all four test suite services share one static address, so a container left
+# behind by an earlier invocation or an interrupted round makes `compose up` fail
+# with "Address already in use". Removing them here is safe because each
+# invocation's archives are lifted out before this script returns.
 for stale in "${PROJECT}-testsuite-stufe3" "${PROJECT}-testsuite-stufe5" \
-             "${PROJECT}-testsuite-manual"; do
+             "${PROJECT}-testsuite-connect" "${PROJECT}-testsuite-manual"; do
   if docker inspect "$stale" >/dev/null 2>&1; then
     log "removing the previous test suite container ${stale}"
     docker rm -f "$stale" >/dev/null 2>&1 || true
@@ -280,19 +490,20 @@ rm -f /tmp/.isik-report-volume.$$
 # TESTS_TO_RUN is exported so compose resolves it into the service environment.
 # Passing it explicitly rather than relying on the compose default keeps one
 # source of truth for the value that is also written into run.json.
-case "$STUFE" in
-  stufe3) export TESTS_TO_RUN_STUFE3="$TESTS_TO_RUN" ;;
-  stufe5) export TESTS_TO_RUN_STUFE5="$TESTS_TO_RUN" ;;
+case "$VARIANT" in
+  stufe3)  export TESTS_TO_RUN_STUFE3="$TESTS_TO_RUN" ;;
+  stufe5)  export TESTS_TO_RUN_STUFE5="$TESTS_TO_RUN" ;;
+  connect) export TESTS_TO_RUN_CONNECT="$TESTS_TO_RUN" ;;
 esac
 
 STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 started_epoch="$(date +%s)"
 
 step "Starting ${CONTAINER}"
-compose --profile "$STUFE" up -d "$SERVICE" \
+compose --profile "$VARIANT" up -d "$SERVICE" \
   || die "could not start ${CONTAINER} - see the output above.
   If compose reports the address is in use, remove leftover containers with
-  'docker rm -f ${PROJECT}-testsuite-stufe3 ${PROJECT}-testsuite-stufe5'."
+  'docker rm -f ${PROJECT}-testsuite-stufe3 ${PROJECT}-testsuite-stufe5 ${PROJECT}-testsuite-connect'."
 
 # The container's output is the primary human-readable record of the run and the
 # only place a Tiger startup failure is explained, so it is captured in full from
@@ -603,12 +814,17 @@ step "Recording the run"
 # message can contain anything at all; substituting those into source would be one
 # stray quote away from a syntax error in the step that writes the evidence.
 M_RUN_ID="$(run_id)" \
-M_LEVEL="$LEVEL" M_STUFE="$STUFE" \
+M_LEVEL="$LEVEL" M_STUFE="$STUFE" M_VARIANT="$VARIANT" \
 M_STARTED="$STARTED_AT" M_FINISHED="$FINISHED_AT" M_DURATION="$DURATION" \
 M_TIMED_OUT="$TIMED_OUT" M_EXIT="$EXIT_CODE" \
 M_TAGS="$TESTS_TO_RUN" M_OFFICIAL_SCOPE="$OFFICIAL_SCOPE" \
-M_CONFORMANCE="$CONFORMANCE_SCOPE" \
-M_SUT_URL="$(sut_base_url "$STUFE")" M_SUT_URL_HOST="$(sut_base_url_host "$STUFE")" \
+M_CONFORMANCE="$CONFORMANCE_SCOPE" M_PARTITION="$SCOPE_PARTITION" \
+M_CONNECT="$(connect_enabled && printf 'true' || printf 'false')" \
+M_AS_IMAGE="$([[ -n "${AS_IMAGE:-}" ]] && printf '%s:%s' "$AS_IMAGE" "${AS_VERSION:-}" || true)" \
+M_AS_DIGEST="${AS_IMAGE_DIGEST:-}" \
+M_AS_ISSUER="$([[ -n "${AS_HOSTNAME:-}" ]] && printf 'https://%s:%s/realms/%s' "$AS_HOSTNAME" "${AS_PORT_HTTPS_INTERNAL:-8443}" "${AS_REALM:-}" || true)" \
+M_AS_AUDIENCE="${SUT_AUDIENCE:-}" \
+M_SUT_URL="$SUT_URL" M_SUT_URL_HOST="$SUT_URL_HOST" \
 M_IRIS_IMAGE="${IRIS_IMAGE}:${IRIS_VERSION}" \
 M_IRIS_DIGEST="${IRIS_IMAGE_DIGEST:-}" M_IRIS_BUILD="${IRIS_BUILD_VERSION:-}" \
 M_IRIS_VERSION_SOURCE="${IRIS_VERSION_SOURCE:-}" \
@@ -639,6 +855,10 @@ official = pathlib.Path(env["M_OFFICIAL_DIR"])
 rec = {
     "runId": env["M_RUN_ID"],
     "level": env["M_LEVEL"],
+    # Which of the round's invocations this archive is: "stufe3", "stufe5" or
+    # "connect". Two of them carry level Stufe5, which is why the archive
+    # directory is named after this and not after the level.
+    "variant": env["M_VARIANT"],
     "mavenProfile": env["M_STUFE"],
     "startedAt": env["M_STARTED"],
     "finishedAt": env["M_FINISHED"],
@@ -652,6 +872,23 @@ rec = {
     # false marks a narrowed, debugging run whose report is not a conformance
     # result. The generated documentation states this explicitly.
     "conformanceScope": env["M_CONFORMANCE"] == "true",
+    # How this archive's scope relates to the official scope of the level:
+    #
+    #   complete         the official scope. The submission artefact.
+    #   connect-only     the @Connect module alone, selected with upstream's own
+    #                    tag and run with real bearer tokens against the TLS
+    #                    endpoint. A subset of the official scope, run a second
+    #                    time: additional evidence that SUPERSEDES the Connect
+    #                    cases of the round's complete archive, and is not added
+    #                    to them.
+    #   without-connect  the official scope minus the @Connect module. A
+    #                    deliberate restriction, not a submission artefact.
+    #   narrowed         none of these - a debugging run.
+    #
+    # scripts/lib/results_report.py reads this rather than inferring it from the
+    # tag expression, so that a restricted archive is never presented as a
+    # statement about the whole level.
+    "scopePartition": env["M_PARTITION"],
     "sut": {
         "baseUrl": env["M_SUT_URL"],
         "baseUrlFromHost": env["M_SUT_URL_HOST"],
@@ -686,6 +923,27 @@ rec = {
         # was unreachable, which nothing here depends on.
         "latestAvailable": env["M_SUITE_LATEST"] or None,
     },
+    # The authorization server, for a round that ran one. Null otherwise, which
+    # is what every round before this capability existed records.
+    #
+    # It is NOT part of the system under test: ISiK requires the FHIR server to
+    # consume tokens issued elsewhere, so this records the issuer whose tokens
+    # the SUT was asked to accept - the counterpart of the statement the round
+    # makes about that consumption.
+    #
+    # NO CREDENTIAL APPEARS HERE, deliberately, and unlike the lab credentials
+    # below: a bearer token carries the full authority of its scope until it
+    # expires, and the client secret mints more of them. What identifies the
+    # tokens of this run is the SHA-256 of each one, in run/tiger/TOKENS.txt,
+    # together with the issuer, audience and grant recorded here.
+    "authorizationServer": {
+        "image": env["M_AS_IMAGE"] or None,
+        "imageDigest": env["M_AS_DIGEST"] or None,
+        "issuer": env["M_AS_ISSUER"] or None,
+        "audience": env["M_AS_AUDIENCE"] or None,
+        "grant": "client_credentials",
+        "tokenRecord": "run/tiger/TOKENS.txt",
+    } if env["M_CONNECT"] == "true" else None,
     "packageSource": env["M_PACKAGE_SOURCE"],
     "mode": env["M_MODE"],
     # Run-behaviour settings given on the command line rather than read from the
@@ -777,7 +1035,7 @@ if [[ -z "$test_zip" ]]; then
   die "no test-report archive was produced by ${CONTAINER}.
   This is a harness error, not a conformance result: even a run in which every
   scenario fails produces test-report.zip. Read ${RUN_LOG#$REPO_ROOT/} - a Tiger
-  startup failure (unreachable SUT, unparseable tiger-isik-${STUFE}.yaml,
+  startup failure (unreachable SUT, unparseable ${TIGER_CONFIG},
   missing testdata file) is the usual cause and is reported there."
 fi
 
@@ -797,12 +1055,12 @@ if (( ${outcome_count:-0} == 0 )); then
   too.
 
   Known causes, in the order worth checking:
-    - Tiger could not read run/tiger/tiger-isik-${STUFE}.yaml. It is bind-mounted
+    - Tiger could not read ${TIGER_CONFIG}. It is bind-mounted
       into a container running as uid 100, so the file must be world-readable;
       scripts/30-render-config.sh writes 0644 for exactly this reason. The log says
       'AccessDeniedException'. Re-run 'make up' to re-render it.
     - the tag expression selected nothing. TESTS_TO_RUN was '${TESTS_TO_RUN}'.
-    - the SUT was unreachable from inside the subnet at $(sut_base_url "$STUFE").
+    - the SUT was unreachable from inside the subnet at ${SUT_URL}.
     - a testdata file the contract names is missing from run/testdata.
 
   The full log is at ${RUN_LOG#$REPO_ROOT/}; run.json records
@@ -818,6 +1076,17 @@ if [[ -z "$debug_zip" ]]; then
   expected result and the scenario, but not the response IRIS gave."
 fi
 
-ok "ISiK ${LEVEL#Stufe} run archived in ${ARCHIVE_DIR#$REPO_ROOT/} (${outcome_count} test outcome records)"
+# Named by what ran, so that a round's two Stufe 5 invocations are told apart in
+# the terminal as well as in the archive.
+if [[ "$VARIANT" == connect ]]; then
+  WHAT="ISiK ${LEVEL#Stufe} 'Connect' module"
+else
+  WHAT="ISiK ${LEVEL#Stufe}"
+fi
+
+ok "${WHAT} run archived in ${ARCHIVE_DIR#$REPO_ROOT/} (${outcome_count} test outcome records)"
 log "the official report is authoritative; 'make report' extracts and cross-references it"
-step "ISiK ${LEVEL#Stufe} run complete"
+if [[ "$VARIANT" == stufe5 ]] && connect_enabled; then
+  log "the Connect module also ran here on the harness's own credential; 'make tokens && make test-connect' runs it with real access tokens"
+fi
+step "${WHAT} run complete"

@@ -1,0 +1,282 @@
+{
+  "_comment": [
+    "ISiK Stufe 5 'Connect' authorization server realm - rendered by",
+    "scripts/30-render-config.sh from keycloak/realm-isik.json.tmpl.",
+    "",
+    "One client per SMART-on-FHIR v2 scope the gematik ISiK test suite needs a",
+    "token for, because the suite presents six pre-minted tokens and each must",
+    "carry exactly one scope: the scope under test. Keycloak puts a client's",
+    "default client scopes into the access token's `scope` claim, so one scope",
+    "per client is the simplest construction that yields exactly those six",
+    "tokens, and it keeps every token's authority minimal.",
+    "",
+    "The grant used is client_credentials. The suite's Connect scenarios are",
+    "resource-server tests: they present a token and assert what the FHIR server",
+    "does with it. They do not exercise the authorization code flow, and no",
+    "browser or end user is involved, so an interactive flow would add moving",
+    "parts without adding coverage. The server still advertises PKCE/S256 and",
+    "the authorization endpoint in its discovery document, which is what the",
+    "suite's SMART discovery scenario inspects.",
+    "",
+    "The patient-context clients carry a hardcoded `patient` claim. In a",
+    "production SMART launch that claim is the launch context the authorization",
+    "server establishes for the session; there is no launch here, so it is",
+    "configured. Its value is the patient the suite's own test data declares as",
+    "the patient in context (testdata/v3/Stufe5/connect.yaml,",
+    "read-patient-in-context-id), and scripts/55-mint-tokens.sh verifies that",
+    "the minted tokens actually carry that value - a realm that drifts from the",
+    "test data fails the mint rather than the test."
+  ],
+
+  "realm": "@@AS_REALM@@",
+  "enabled": true,
+  "displayName": "ISiK Stufe 5 Connect - SMART on FHIR authorization server",
+  "sslRequired": "all",
+  "registrationAllowed": false,
+  "accessTokenLifespan": @@AS_TOKEN_LIFESPAN@@,
+
+  "clientScopes": [
+    {
+      "name": "patient/Patient.rs",
+      "description": "SMART on FHIR v2 scope patient/Patient.rs",
+      "protocol": "openid-connect",
+      "attributes": { "include.in.token.scope": "true", "display.on.consent.screen": "false" }
+    },
+    {
+      "name": "patient/*.rs",
+      "description": "SMART on FHIR v2 scope patient/*.rs",
+      "protocol": "openid-connect",
+      "attributes": { "include.in.token.scope": "true", "display.on.consent.screen": "false" }
+    },
+    {
+      "name": "user/Patient.rs",
+      "description": "SMART on FHIR v2 scope user/Patient.rs",
+      "protocol": "openid-connect",
+      "attributes": { "include.in.token.scope": "true", "display.on.consent.screen": "false" }
+    },
+    {
+      "name": "user/*.rs",
+      "description": "SMART on FHIR v2 scope user/*.rs",
+      "protocol": "openid-connect",
+      "attributes": { "include.in.token.scope": "true", "display.on.consent.screen": "false" }
+    },
+    {
+      "name": "system/Patient.rs",
+      "description": "SMART on FHIR v2 scope system/Patient.rs",
+      "protocol": "openid-connect",
+      "attributes": { "include.in.token.scope": "true", "display.on.consent.screen": "false" }
+    },
+    {
+      "name": "system/*.rs",
+      "description": "SMART on FHIR v2 scope system/*.rs",
+      "protocol": "openid-connect",
+      "attributes": { "include.in.token.scope": "true", "display.on.consent.screen": "false" }
+    }
+  ],
+
+  "clients": [
+    {
+      "clientId": "isik-connect-patient-patient-rs",
+      "description": "Token holder for patient/Patient.rs (patient in context)",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "@@AS_CLIENT_SECRET@@",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "implicitFlowEnabled": false,
+      "attributes": { "pkce.code.challenge.method": "S256" },
+      "defaultClientScopes": [ "patient/Patient.rs" ],
+      "optionalClientScopes": [],
+      "protocolMappers": [
+        {
+          "name": "fhir-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.custom.audience": "@@SUT_AUDIENCE@@",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
+        },
+        {
+          "name": "patient-context",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-hardcoded-claim-mapper",
+          "config": {
+            "claim.name": "patient",
+            "claim.value": "@@CONNECT_PATIENT_IN_CONTEXT@@",
+            "jsonType.label": "String",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "userinfo.token.claim": "false"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "isik-connect-patient-wildcard-rs",
+      "description": "Token holder for patient/*.rs (patient in context)",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "@@AS_CLIENT_SECRET@@",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "implicitFlowEnabled": false,
+      "attributes": { "pkce.code.challenge.method": "S256" },
+      "defaultClientScopes": [ "patient/*.rs" ],
+      "optionalClientScopes": [],
+      "protocolMappers": [
+        {
+          "name": "fhir-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.custom.audience": "@@SUT_AUDIENCE@@",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
+        },
+        {
+          "name": "patient-context",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-hardcoded-claim-mapper",
+          "config": {
+            "claim.name": "patient",
+            "claim.value": "@@CONNECT_PATIENT_IN_CONTEXT@@",
+            "jsonType.label": "String",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "userinfo.token.claim": "false"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "isik-connect-user-patient-rs",
+      "description": "Token holder for user/Patient.rs (no patient context)",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "@@AS_CLIENT_SECRET@@",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "implicitFlowEnabled": false,
+      "attributes": { "pkce.code.challenge.method": "S256" },
+      "defaultClientScopes": [ "user/Patient.rs" ],
+      "optionalClientScopes": [],
+      "protocolMappers": [
+        {
+          "name": "fhir-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.custom.audience": "@@SUT_AUDIENCE@@",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "isik-connect-user-wildcard-rs",
+      "description": "Token holder for user/*.rs (no patient context)",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "@@AS_CLIENT_SECRET@@",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "implicitFlowEnabled": false,
+      "attributes": { "pkce.code.challenge.method": "S256" },
+      "defaultClientScopes": [ "user/*.rs" ],
+      "optionalClientScopes": [],
+      "protocolMappers": [
+        {
+          "name": "fhir-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.custom.audience": "@@SUT_AUDIENCE@@",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "isik-connect-system-patient-rs",
+      "description": "Token holder for system/Patient.rs (backend service)",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "@@AS_CLIENT_SECRET@@",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "implicitFlowEnabled": false,
+      "attributes": { "pkce.code.challenge.method": "S256" },
+      "defaultClientScopes": [ "system/Patient.rs" ],
+      "optionalClientScopes": [],
+      "protocolMappers": [
+        {
+          "name": "fhir-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.custom.audience": "@@SUT_AUDIENCE@@",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "isik-connect-system-wildcard-rs",
+      "description": "Token holder for system/*.rs (backend service)",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "@@AS_CLIENT_SECRET@@",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "implicitFlowEnabled": false,
+      "attributes": { "pkce.code.challenge.method": "S256" },
+      "defaultClientScopes": [ "system/*.rs" ],
+      "optionalClientScopes": [],
+      "protocolMappers": [
+        {
+          "name": "fhir-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.custom.audience": "@@SUT_AUDIENCE@@",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
+        }
+      ]
+    },
+    {
+      "_comment": "The resource server itself. IRIS authenticates as this client to fetch the server metadata and the signing keys, and to introspect presented tokens. It is granted no SMART scope: it never acts on a patient's behalf.",
+      "clientId": "@@AS_RESOURCE_CLIENT_ID@@",
+      "description": "ISiK Stufe 5 FHIR server (resource server)",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "@@AS_CLIENT_SECRET@@",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "implicitFlowEnabled": false,
+      "defaultClientScopes": [],
+      "optionalClientScopes": []
+    }
+  ]
+}

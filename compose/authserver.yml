@@ -1,0 +1,300 @@
+# =============================================================================
+# ISiK conformance test environment - authorization server overlay
+# =============================================================================
+# Adds the one piece of infrastructure the ISiK Stufe 5 `Connect` module needs
+# and the other nine modules do not: an OAuth 2.0 / SMART-on-FHIR authorization
+# server, plus the TLS front end without which the FHIR server refuses to accept
+# a bearer token at all.
+#
+# WHAT THIS IS NOT. The authorization server is test scaffolding, exactly like
+# the test suite container. It is NOT part of the system under test: the ISiK
+# specification requires the FHIR server to *consume* tokens issued elsewhere
+# (gematik "Connect" / SMART App Launch), and the conformance statements this
+# round produces are statements about that consumption. A customer installation
+# supplies its own identity provider; this file supplies one so that the suite's
+# Connect scenarios exercise a token the FHIR server has to validate, instead of
+# the credential the Tiger proxy injects on behalf of the other nine modules.
+# Upstream states the prerequisite itself: "the tests make the assumption that
+# the System-Under-Test is up and running and that an Authorization Server is
+# available. The tests do not evaluate the SMART-on-FHIR Authorization Flow,
+# instead they require the Bearer Token used for sending authenticated requests
+# to the System-Under-Test" (README, "Running Tests").
+#
+# WHY THIS FILE IS CONDITIONAL. It is passed to `docker compose` only when
+# CONNECT_ENABLE=true (see compose() in scripts/lib.sh). With it absent, every
+# target of this rig behaves exactly as it did before this file existed - which
+# is what keeps the 2026-08 baseline round and every round taken since
+# re-creatable from this repository. The switch is recorded in .env.resolved, so
+# each round's own provenance states which of the two configurations it ran.
+#
+# The services declared here are deliberately NOT profile-gated: the presence of
+# this file is the switch, and `iris` declares a dependency on the authorization
+# server so that `compose up iris webgateway` starts it without any caller having
+# to know it exists.
+#
+# ADDITIONAL HARDWARE. This overlay raises the host's memory requirement by
+# ~1.1 GiB (see mem_limit below and INSTALL.md): the authorization server is a
+# JVM, and IRIS's own default of 25 % of host memory is unchanged by it. A host
+# sized for a round without this overlay is not automatically large enough for
+# one with it.
+#
+# NOTE ON PATHS: compose resolves relative bind-mount paths against the PROJECT
+# directory - the directory of the first `-f` file - not against the directory of
+# the file they appear in, so the paths below are repository-root relative.
+# =============================================================================
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # Authorization server: Keycloak
+  # ---------------------------------------------------------------------------
+  # Keycloak rather than an InterSystems product, deliberately. IRIS for Health
+  # can act as an OAuth 2.0 authorization server, but configuring the SUT's own
+  # instance to issue the tokens it then validates would make the test circular
+  # and would add product configuration no customer deployment of a FHIR server
+  # has. An independent, widely deployed, open-source authorization server is
+  # both the realistic and the defendable choice, and it keeps the SUT untouched
+  # except for the client/trust configuration a customer performs anyway.
+  #
+  # Development mode (`start-dev`) is intentional and is not a weakening of the
+  # test: the realm is ephemeral, imported from run/as/realm-isik.json at every
+  # start, and the server holds no state worth persisting. What matters for the
+  # test - HTTPS only, a pinned issuer, RS256-signed access tokens, client
+  # authentication on the token and introspection endpoints - is configured
+  # explicitly below and is independent of dev/production mode.
+  authserver:
+    image: ${AS_IMAGE:-quay.io/keycloak/keycloak}:${AS_VERSION:-26.4.7}
+    container_name: ${COMPOSE_PROJECT_NAME:-isik}-authserver
+    hostname: ${AS_HOSTNAME:-isik-as}
+    restart: "no"
+
+    # --import-realm reads /opt/keycloak/data/import at startup. The realm is
+    # rendered by `make render` from keycloak/realm-isik.json.tmpl, so the client
+    # secret and the audience are deploy-time facts and not committed values.
+    command: ["start-dev", "--import-realm"]
+
+    environment:
+      # HTTPS only. The FHIR server will not accept a bearer token over a
+      # non-TLS connection (HS.FHIRServer.RestHandler.PrelimTokenCheck requires
+      # HS.Local.FHIRServer.Util.BaseURL.IsRequestSecure), and a token endpoint
+      # reachable over plain HTTP in the same network would make the round's TLS
+      # posture a half-measure that an inspector would rightly question.
+      KC_HTTP_ENABLED: "false"
+      KC_HTTPS_CERTIFICATE_FILE: /etc/tls/as.crt
+      KC_HTTPS_CERTIFICATE_KEY_FILE: /etc/tls/as.key
+
+      # Pins the issuer. Keycloak otherwise derives `iss` from the Host header of
+      # the request that minted the token, so a token minted through the
+      # published port (https://127.0.0.1:8443/...) would carry an issuer that
+      # does not match the one IRIS discovered, and validation would fail with a
+      # message about an unknown issuer rather than about the mismatch. With this
+      # set, every token carries the in-network issuer regardless of how it was
+      # requested - which is what makes minting from the host legitimate.
+      KC_HOSTNAME: https://${AS_HOSTNAME:-isik-as}:${AS_PORT_HTTPS_INTERNAL:-8443}
+
+      # The management interface (port 9000) serves /health/ready; the
+      # healthcheck below reads it.
+      KC_HEALTH_ENABLED: "true"
+
+      # Bootstrap administrator. Generated per instance by `make up`, like every
+      # other credential of this environment, and reported in run/CREDENTIALS.md.
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${AS_ADMIN_USER:-kcadmin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${AS_ADMIN_PASSWORD:?AS_ADMIN_PASSWORD must be set - run make up, which generates one}
+
+      # Measured: 596 MiB resident with this heap under the token load of a full
+      # Connect run, inside the 1 GiB limit below. Keycloak's own default heap is
+      # a percentage of container memory and would size itself to the limit.
+      JAVA_OPTS_KC_HEAP: -Xms128m -Xmx${AS_HEAP_MAX:-512m}
+
+    volumes:
+      # Server certificate + key, and the rendered realm. All produced by
+      # `make up`: scripts/22-make-tls.sh and scripts/30-render-config.sh.
+      - ./run/tls/as.crt:/etc/tls/as.crt:ro
+      - ./run/tls/as.key:/etc/tls/as.key:ro
+      - ./run/as/realm-isik.json:/opt/keycloak/data/import/realm-isik.json:ro
+
+    # Published so that `make tokens` can mint from the host over the same TLS
+    # listener the SUT introspects against, rather than through a second code
+    # path. The issuer stays the in-network one (KC_HOSTNAME above).
+    ports:
+      - "${AS_PORT_HTTPS:-8443}:${AS_PORT_HTTPS_INTERNAL:-8443}"
+
+    networks:
+      isik-net:
+        ipv4_address: ${AS_IP:-172.31.0.40}
+        aliases:
+          - ${AS_HOSTNAME:-isik-as}
+
+    # A hard limit, stated rather than inherited: this container must not be able
+    # to compete with IRIS for host memory, and the round's hardware statement
+    # has to be a number somebody can plan with.
+    mem_limit: ${AS_MEM_LIMIT:-1g}
+
+    # /dev/tcp is a bash feature, so bash is invoked explicitly rather than
+    # through CMD-SHELL (/bin/sh). The image ships no curl or wget - it is a
+    # UBI-micro base - and `kc.sh show-config` would not tell us whether the
+    # listener is up.
+    healthcheck:
+      test:
+        - CMD
+        - /bin/bash
+        - -c
+        - 'exec 3<>/dev/tcp/127.0.0.1/9000 && printf "GET /health/ready HTTP/1.0\r\n\r\n" >&3 && grep -q UP <&3'
+      interval: 10s
+      timeout: 10s
+      start_period: 2m
+      retries: 6
+
+  # ---------------------------------------------------------------------------
+  # Unit under test: additions for token validation
+  # ---------------------------------------------------------------------------
+  # Merged into the `iris` service of docker-compose.yml. Nothing here changes
+  # the SUT's image, its licence or its FHIR installation; it supplies the three
+  # facts a customer would supply when pointing their FHIR server at their
+  # identity provider: where the server is, who we are to it, and whom to trust.
+  iris:
+    # service_started, not service_healthy: the authorization server is reachable
+    # within seconds, IRIS needs tens of minutes before it reaches the step that
+    # discovers it, and ISiK.OAuth retries discovery. Waiting for health here
+    # would add a container ordering risk for no gain.
+    depends_on:
+      authserver:
+        condition: service_started
+
+    environment:
+      # Read by iris/bootstrap/bootstrap.sh -> ISiK.Setup -> ISiK.OAuth.
+      ISIK_CONNECT_ENABLE: "1"
+      ISIK_AS_ISSUER: https://${AS_HOSTNAME:-isik-as}:${AS_PORT_HTTPS_INTERNAL:-8443}/realms/${AS_REALM:-isik}
+      # The IRIS-side name of the OAuth 2.0 client definition, the client
+      # credentials it authenticates to the authorization server with, and the
+      # trust anchor for that connection.
+      ISIK_AS_CLIENT_NAME: ${AS_CLIENT_NAME:-ISIKConnect}
+      ISIK_AS_CLIENT_ID: ${AS_RESOURCE_CLIENT_ID:-isik-resource-server}
+      ISIK_AS_CLIENT_SECRET: ${AS_CLIENT_SECRET:?AS_CLIENT_SECRET must be set - run make up, which generates one}
+      ISIK_AS_CA_FILE: /opt/isik/tls/ca.crt
+      # The value a presented token's `aud` claim must carry. It is the Stufe 5
+      # endpoint's own HTTPS URL, which is also the URL the test suite addresses.
+      ISIK_SUT_AUDIENCE: ${SUT_AUDIENCE:?SUT_AUDIENCE must be set - see .env.example}
+
+    volumes:
+      # The local CA, read-only. IRIS verifies the authorization server's
+      # certificate against it when fetching metadata, the signing keys and
+      # introspection responses; VerifyPeer stays on.
+      - ./run/tls/ca.crt:/opt/isik/tls/ca.crt:ro
+
+  # ---------------------------------------------------------------------------
+  # HTTP front end: the TLS listener
+  # ---------------------------------------------------------------------------
+  # Merged into the `webgateway` service of docker-compose.yml. The :80 listener
+  # and its virtual host are untouched - the other nine modules keep using it -
+  # and :443 is added beside it.
+  webgateway:
+    ports:
+      - "${SUT_PORT_HTTPS:-52443}:${SUT_PORT_HTTPS_INTERNAL:-443}"
+
+    volumes:
+      # Server certificate + key for the SUT's HTTPS listener, and the virtual
+      # host that uses them. Rendered separately from the :80 virtual host so
+      # that the file served to a round without this overlay is byte-identical to
+      # what it has always been.
+      - ./run/tls/sut.crt:/etc/tls/sut.crt:ro
+      - ./run/tls/sut.key:/etc/tls/sut.key:ro
+      - ./run/webgateway/isik-vhost-tls.conf:/etc/apache2/sites-enabled/001-isik-tls.conf:ro
+
+  # ---------------------------------------------------------------------------
+  # Test suite: the complete Stufe 5 scope, as before
+  # ---------------------------------------------------------------------------
+  # Unchanged in scope, deliberately. This service keeps running the complete
+  # official scope `@Stufe5 and (not @Optional)` - which selects the 32 @Connect
+  # cases as it always has - because its archive is the one the certification
+  # process asks for: upstream's README requires "the artifact
+  # `target/test-report.zip`", in the singular, uploaded into one submission form.
+  # Narrowing it here would leave the round without that artefact and would make
+  # every comparison against an earlier round show 32 cases as missing.
+  #
+  # The Connect module therefore runs TWICE in a round with this overlay: here, on
+  # the harness's own credential, and in testsuite-connect below on real access
+  # tokens. The second archive supersedes the Connect cases of this one; see
+  # scripts/60-run-tests.sh, which records that relation in each run.json.
+  #
+  # The only change is the mounted CA. This service's rendered configuration still
+  # addresses the :80 listener, but a manually started Connect run through
+  # MODE=manual would not, and one mount point for the trust anchor across all
+  # four suite services keeps the paths identical.
+  testsuite-stufe5:
+    volumes:
+      - ./run/tls/ca.crt:/app/tls/ca.crt:ro
+
+  testsuite-manual:
+    volumes:
+      - ./run/tls/ca.crt:/app/tls/ca.crt:ro
+
+  # ---------------------------------------------------------------------------
+  # ISiK Stufe 5 "Connect" module, on real access tokens
+  # ---------------------------------------------------------------------------
+  # A second invocation of the same level, restricted to the one module whose
+  # feature files authenticate per request from the feature file itself - every
+  # scenario sends its own `Authorization: Bearer ${connect.<key>}` - while the
+  # other nine send no credential and rely on the Tiger proxy's route to add one.
+  #
+  # MEASURED, 2026-11-13: a route with an `authentication:` block REPLACES the
+  # header the feature file set. Run through the ordinary Stufe 5 configuration,
+  # the recorded traffic contained no bearer token at all and the SUT answered 200
+  # to every request - including the one the feature requires to be refused - so
+  # four of six scenarios "passed" on the harness's own credential. The Connect
+  # module therefore needs a route that adds nothing, which is a different
+  # configuration file, which the suite image accepts only one of per start.
+  #
+  # The same reasoning is set out in the rendered configuration's own header,
+  # tiger/v3/tiger-isik-stufe5-connect.yaml.tmpl.
+  #
+  # Declared here rather than in compose/testsuite.yml because it cannot run
+  # without this overlay: no authorization server, no tokens, and no HTTPS
+  # listener for the FHIR server to accept a token on. YAML anchors are per file,
+  # so the service is spelled out instead of extending x-testsuite-common; it is
+  # otherwise identical to testsuite-stufe5, and the differences are marked.
+  testsuite-connect:
+    image: ${TESTSUITE_IMAGE:?TESTSUITE_IMAGE must be set}:${TESTSUITE_VERSION:?TESTSUITE_VERSION must be set}
+    container_name: ${COMPOSE_PROJECT_NAME:-isik}-testsuite-connect
+    profiles: ["connect"]
+    restart: "no"
+    stop_grace_period: 120s
+
+    depends_on:
+      iris:
+        condition: service_healthy
+      # Unlike the other suite services: every scenario of this module presents a
+      # token, and IRIS introspects each one against the authorization server at
+      # request time. A run started before it is ready would report the whole
+      # module as refused by the system under test.
+      authserver:
+        condition: service_healthy
+
+    # Same static address and same published ports as the other suite services:
+    # the runs are serialised, never concurrent.
+    networks:
+      isik-net:
+        ipv4_address: ${TESTSUITE_IP:?TESTSUITE_IP must be set}
+    ports:
+      - "${TESTSUITE_PORT_WORKFLOW_UI:-9010}:9010"
+      - "${TESTSUITE_PORT_PROXY_LOG:-9011}:9011"
+
+    environment:
+      REPORT_DIR: /app/report
+      MAVEN_ARGS: ${TESTSUITE_HEAP_MAX:+-DargLine=-Xmx${TESTSUITE_HEAP_MAX}}
+      # The level is Stufe 5 - Connect is one of its modules, not a level of its
+      # own - so the upstream Maven profile is the Stufe 5 one and it reads
+      # /app/tiger-isik-stufe5.yaml, which is where the Connect configuration is
+      # mounted below.
+      MAVEN_PROFILE: stufe5
+      TESTS_TO_RUN: ${TESTS_TO_RUN_CONNECT:-@Stufe5 and @Connect and (not @Optional)}
+
+    volumes:
+      # The Connect module's own configuration, mounted at the path the Stufe 5
+      # profile reads. The file name differs only on the host, where it has to be
+      # distinguishable from the other nine modules' configuration.
+      - ./run/tiger/tiger-isik-stufe5-connect.yaml:/app/tiger-isik-stufe5.yaml:ro
+      # The staged contract, including the six tokens `make tokens` filled in.
+      - ./run/testdata:/app/testdata:ro
+      - ./run/tls/ca.crt:/app/tls/ca.crt:ro
+      - tiger-report:/app/report

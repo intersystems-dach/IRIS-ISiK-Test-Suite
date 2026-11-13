@@ -1,0 +1,90 @@
+# =============================================================================
+# Apache HTTPS virtual host for the ISiK FHIR endpoints
+# =============================================================================
+# Rendered by 30-render-config.sh to run/webgateway/isik-vhost-tls.conf and
+# mounted as /etc/apache2/sites-enabled/001-isik-tls.conf - a SECOND file beside
+# the :80 virtual host (000-default.conf), not a replacement for it. Two reasons:
+#
+#   * the :80 listener is what the other nine ISiK modules use, and the file
+#     they are served by must stay byte-identical to what it was before this
+#     listener existed, so that their results stay comparable across rounds;
+#   * this file is mounted only when CONNECT_ENABLE=true (compose/authserver.yml),
+#     and a missing mount must not be able to break the :80 listener.
+#
+# WHY HTTPS IS REQUIRED. The ISiK Stufe 5 `Connect` module presents OAuth 2.0
+# bearer tokens. HS.FHIRServer.RestHandler.PrelimTokenCheck refuses to process a
+# token unless HS.Local.FHIRServer.Util.BaseURL.IsRequestSecure() is true, which
+# is derived from %request.Secure - real TLS terminating here. Nothing in this
+# rig sets X-Forwarded-Proto or any other header that would claim a scheme the
+# connection does not have: the product's check is left to do its job, and the
+# certificate it is satisfied by is recorded in run/tls/TLS.txt.
+#
+# Everything below was established empirically against
+# containers.intersystems.com/intersystems/webgateway:2026.2 (Apache 2.4.58).
+# =============================================================================
+
+# mod_ssl ships in the webgateway image but is not enabled in mods-enabled.
+# LoadModule is legal here because apache2.conf includes sites-enabled/*.conf at
+# server-config scope, so neither the image nor mods-enabled has to be modified -
+# which matters, because the gateway is part of the system under test.
+LoadModule ssl_module /usr/lib/apache2/modules/mod_ssl.so
+LoadModule socache_shmcb_module /usr/lib/apache2/modules/mod_socache_shmcb.so
+
+# Not a duplicate of the image's own: ports.conf wraps its `Listen 443` in
+# <IfModule ssl_module>, which was evaluated before this file was read and was
+# therefore false.
+Listen @@SUT_PORT_HTTPS_INTERNAL@@
+
+# mod_ssl refuses to start without a session cache configuration once
+# mod_socache_shmcb is loaded.
+SSLSessionCache shmcb:/var/run/apache2/ssl_scache(512000)
+
+<VirtualHost *:@@SUT_PORT_HTTPS_INTERNAL@@>
+    # The name the test suite addresses and the name in the token audience. It
+    # must match the certificate's subjectAltName, which scripts/22-make-tls.sh
+    # issues from the same configuration value.
+    ServerName @@SUT_TLS_HOST@@
+    ServerAdmin webmaster@localhost
+    DocumentRoot /var/www/html
+
+    # Separate log files from the :80 virtual host, so that a Connect round's
+    # traffic can be told apart from the rest of the round in the debug archive.
+    ErrorLog ${APACHE_LOG_DIR}/error-ssl.log
+    CustomLog ${APACHE_LOG_DIR}/access-ssl.log combined
+
+    SSLEngine on
+    SSLCertificateFile /etc/tls/sut.crt
+    SSLCertificateKeyFile /etc/tls/sut.key
+
+    # TLS 1.2 and 1.3 only. Not a hardening exercise - it is what a current
+    # deployment would serve, and leaving deprecated protocol versions enabled
+    # in evidence that will be read by a certification body invites a question
+    # the round does not need to answer.
+    SSLProtocol -all +TLSv1.2 +TLSv1.3
+
+    # The Location blocks are identical to the :80 virtual host's, and must be:
+    # this is the same system under test reached over a different listener, and a
+    # difference here would mean the Connect module was measured against a
+    # differently configured endpoint than the other nine. Each directive's
+    # rationale is in webgateway/isik-vhost.conf.tmpl.
+    <Location "@@FHIR_BASE_STUFE3@@">
+        CSP On
+        CGIPassAuth On
+        SetHandler csp-handler-sa
+        Require all granted
+    </Location>
+
+    <Location "@@FHIR_BASE_STUFE5@@">
+        CSP On
+        CGIPassAuth On
+        SetHandler csp-handler-sa
+        Require all granted
+    </Location>
+
+    <Location "/csp">
+        CSP On
+        CGIPassAuth On
+        SetHandler csp-handler-sa
+        Require all granted
+    </Location>
+</VirtualHost>

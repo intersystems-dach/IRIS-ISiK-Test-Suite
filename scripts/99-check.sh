@@ -18,6 +18,11 @@
 #      scripts - `bash -n` cannot see inside a heredoc, so a broken f-string
 #      there would otherwise surface only at run time
 #   3. every YAML file parses; the Tiger templates parse once rendered
+#  3b. the authorization server's realm renders to valid JSON and defines exactly
+#      the clients, scopes and launch contexts the Connect tokens are minted
+#      from - Keycloak imports a malformed realm as an EMPTY one and starts
+#      anyway, so this failure is otherwise invisible until the first token
+#      request
 #   4. the placeholders the templates use are exactly the ones the renderer
 #      substitutes, in both directions
 #   5. the test-data contract: no undefined ${<namespace>.<key>} references, no
@@ -30,7 +35,8 @@
 #      container nor a licence key
 #   6. cross-file consistency: Makefile targets have scripts, compose mounts have
 #      renderers, .env.example defines what the scripts read
-#   7. `docker compose config` validates, if docker is available
+#   7. `docker compose config` validates BOTH configurations - with and without
+#      the authorization server overlay - if docker is available
 #
 # Exits non-zero if any check fails, so it is usable in CI.
 # =============================================================================
@@ -290,7 +296,7 @@ SUBST = {
     "RUN_TESTS_ON_START": "true",
     "ACTIVATE_WORKFLOW_UI": "false",
 }
-for p in sorted(pathlib.Path("tiger").glob("*.tmpl")):
+for p in sorted(pathlib.Path("tiger").rglob("*.tmpl")):
     text = p.read_text(encoding="utf-8")
     for k, v in SUBST.items():
         text = text.replace(f"@@{k}@@", v)
@@ -314,7 +320,141 @@ for p in sorted(pathlib.Path("tiger").glob("*.tmpl")):
 
 if fails:
     sys.exit(1)
-print(f"  PASS  {len(paths)} YAML files parse; both Tiger templates render to valid YAML")
+print(f"  PASS  {len(paths)} YAML files parse; "
+      f"{len(list(pathlib.Path('tiger').rglob('*.tmpl')))} Tiger templates render to valid YAML")
+PY
+  (( $? == 0 )) || FAILURES=$((FAILURES+1))
+fi
+
+# -----------------------------------------------------------------------------
+section "3b. Authorization server realm"
+# -----------------------------------------------------------------------------
+# The realm is a template like the Tiger configurations, and like them it is only
+# valid once rendered - `"accessTokenLifespan": @@AS_TOKEN_LIFESPAN@@` is not JSON
+# until the number is in place. The renderer performs this check too, but at
+# render time, which in a Connect round is thirty minutes before the import
+# would fail; and the two invariants below are properties of the repository
+# rather than of a round, so they are worth asserting without one.
+#
+# What makes a drift here expensive: Keycloak imports an invalid or incomplete
+# realm as an EMPTY realm and starts anyway, so the symptom is every token
+# request failing with `invalid_client` - which reads as a credential problem,
+# not as a malformed file.
+if [[ ! -f keycloak/realm-isik.json.tmpl ]]; then
+  fail "keycloak/realm-isik.json.tmpl is missing - compose/authserver.yml mounts the file rendered from it"
+elif ! python3 -c 'import yaml' 2>/dev/null; then
+  skip "PyYAML not installed - the realm's test-data cross-check needs it"
+else
+  CONNECT_TOKEN_MAP="$(REPO_ROOT="$REPO_ROOT" bash -c '. scripts/lib.sh; connect_token_clients' 2>&1)" \
+  CONNECT_CONTRACT_FILE="${SUITE_TESTDATA_ROOT}/Stufe5/connect.yaml" \
+  python3 - <<'PY'
+import json, os, pathlib, re, sys
+
+import yaml
+
+text = pathlib.Path("keycloak/realm-isik.json.tmpl").read_text(encoding="utf-8")
+
+# Stand-ins only; the shape of the result is what is being checked. The lifespan
+# is a bare number in the template, so a non-numeric stand-in here would fail the
+# parse for the wrong reason.
+SUBST = {
+    "AS_REALM": "isik",
+    "AS_TOKEN_LIFESPAN": "3600",
+    "AS_CLIENT_SECRET": "x",
+    "AS_RESOURCE_CLIENT_ID": "isik-resource-server",
+    "SUT_AUDIENCE": "https://isik-webgateway/isik5/fhir/r4",
+    "CONNECT_PATIENT_IN_CONTEXT": "Patient-Read-Example",
+}
+for k, v in SUBST.items():
+    text = text.replace(f"@@{k}@@", v)
+
+left = sorted(set(re.findall(r"@@([A-Z0-9_]+)@@", text)))
+if left:
+    print(f"  FAIL  keycloak/realm-isik.json.tmpl: placeholder(s) this check does not "
+          f"know: {', '.join(left)} - add them to render_realm() and here")
+    sys.exit(1)
+
+try:
+    realm = json.loads(text)
+except Exception as exc:
+    print(f"  FAIL  keycloak/realm-isik.json.tmpl does not render to valid JSON: {exc}")
+    sys.exit(1)
+
+fails = 0
+
+# 1. One client per token the mint step asks for, each holding exactly the one
+#    scope its token is under test for. A client holding two scopes would make a
+#    refusal scenario pass for the wrong reason, which no test output reveals.
+expected = {}
+for line in os.environ["CONNECT_TOKEN_MAP"].splitlines():
+    if line.strip():
+        _key, client, scope = line.split("|")
+        expected[client] = scope
+
+clients = {c.get("clientId"): c for c in realm.get("clients") or []}
+declared_scopes = {s.get("name") for s in realm.get("clientScopes") or []}
+for client, scope in sorted(expected.items()):
+    if client not in clients:
+        print(f"  FAIL  realm defines no client '{client}', which connect_token_clients() "
+              f"mints the {scope} token from")
+        fails += 1
+        continue
+    have = clients[client].get("defaultClientScopes") or []
+    if have != [scope]:
+        print(f"  FAIL  realm client '{client}' has default scopes {have}, "
+              f"expected exactly ['{scope}']")
+        fails += 1
+    if scope not in declared_scopes:
+        print(f"  FAIL  realm client '{client}' uses scope '{scope}', which clientScopes "
+              f"does not declare")
+        fails += 1
+
+# 2. The launch context, and only where it belongs. A `patient/...` scope is
+#    meaningless without a patient in context, and a `user/...` or `system/...`
+#    token that carried one would silently satisfy the scenarios that exist to
+#    show the difference.
+def patient_claim(client):
+    for m in client.get("protocolMappers") or []:
+        if (m.get("config") or {}).get("claim.name") == "patient":
+            return (m["config"] or {}).get("claim.value")
+    return None
+
+for client, scope in sorted(expected.items()):
+    c = clients.get(client)
+    if c is None:
+        continue
+    claim = patient_claim(c)
+    if scope.startswith("patient/") and not claim:
+        print(f"  FAIL  realm client '{client}' holds {scope} but hardcodes no `patient` "
+              f"claim - the scenarios in patient context have no patient")
+        fails += 1
+    if not scope.startswith("patient/") and claim:
+        print(f"  FAIL  realm client '{client}' holds {scope} but hardcodes a `patient` "
+              f"claim ({claim!r}) - only a patient-context token may carry one")
+        fails += 1
+
+# 3. The six keys are the SUITE's, not ours. The mapping names the test-data keys
+#    the mint step writes into, so a key the suite's own contract does not define
+#    would be written to a file nothing reads - and the scenario would then send
+#    the literal `${connect.<key>}` as its bearer token.
+contract = pathlib.Path(os.environ["CONNECT_CONTRACT_FILE"])
+if contract.is_file():
+    data = yaml.safe_load(contract.read_text(encoding="utf-8")) or {}
+    for line in os.environ["CONNECT_TOKEN_MAP"].splitlines():
+        if not line.strip():
+            continue
+        key, _client, scope = line.split("|")
+        if key not in data:
+            print(f"  FAIL  connect_token_clients() names test-data key '{key}' "
+                  f"({scope}) but {contract} does not define it")
+            fails += 1
+
+if fails:
+    sys.exit(1)
+print(f"  PASS  realm renders to valid JSON: {len(clients)} clients, "
+      f"{len(declared_scopes)} scopes, {len(expected)} token holders matching "
+      f"connect_token_clients()"
+      + ("" if contract.is_file() else f" (no {contract} in this generation)"))
 PY
   (( $? == 0 )) || FAILURES=$((FAILURES+1))
 fi
@@ -327,41 +467,58 @@ section "4. Template placeholders"
 # that suggests a rename went half-finished.
 #
 # Checked per template family, not against a pooled set of every placeholder the
-# renderer knows. There are two render functions with deliberately disjoint
+# renderer knows. There are three render functions with deliberately disjoint
 # substitution tables - render() for Tiger's YAML, render_gateway() for the Web
-# Gateway's INI and Apache config - and pooling them would accept a Tiger placeholder
-# in an Apache file, and vice versa, which is exactly the mix-up the separation
+# Gateway's INI and Apache config, render_realm() for the authorization server's
+# realm - and pooling them would accept a Tiger placeholder in an Apache file, or
+# the realm's client secret in either, which is exactly the mix-up the separation
 # exists to prevent.
 python3 - <<'PY'
 import pathlib, re, sys
 
 renderer = pathlib.Path("scripts/30-render-config.sh").read_text(encoding="utf-8")
 
+FUNCS = ("render", "render_gateway", "render_realm")
+
 # Each render function's SUBST dict is the authority for what that family can
-# substitute. Split on the function definitions so the two tables stay apart; the
+# substitute. Split on the function definitions so the tables stay apart; the
 # order of the definitions in the file is what defines the boundary.
-bounds = [(m.group(1), m.start()) for m in re.finditer(r"^(render|render_gateway)\(\) \{", renderer, re.M)]
-if len(bounds) != 2:
-    print(f"  FAIL  expected render() and render_gateway() in scripts/30-render-config.sh, found {len(bounds)}")
+bounds = [(m.group(1), m.start())
+          for m in re.finditer(r"^(%s)\(\) \{" % "|".join(FUNCS), renderer, re.M)]
+if len(bounds) != len(FUNCS):
+    print(f"  FAIL  expected {', '.join(f'{f}()' for f in FUNCS)} in "
+          f"scripts/30-render-config.sh, found {len(bounds)}")
     sys.exit(1)
 
+# The keys of the SUBST literal itself, not only the ones read from the
+# environment: one realm value is taken from the staged test data rather than
+# from a setting, and a table read as if it were environment-only would report
+# that placeholder as unsubstituted.
 tables = {}
 for i, (name, start) in enumerate(bounds):
     end = bounds[i + 1][1] if i + 1 < len(bounds) else len(renderer)
-    tables[name] = set(re.findall(r'"([A-Z0-9_]+)":\s*os\.environ\[', renderer[start:end]))
-    if not tables[name]:
+    block = re.search(r"^SUBST = \{\n(.*?)^\}", renderer[start:end], re.M | re.S)
+    if not block:
         print(f"  FAIL  could not find the SUBST table inside {name}() in scripts/30-render-config.sh")
+        sys.exit(1)
+    tables[name] = set(re.findall(r'^\s*"([A-Z0-9_]+)":', block.group(1), re.M))
+    if not tables[name]:
+        print(f"  FAIL  the SUBST table inside {name}() in scripts/30-render-config.sh is empty")
         sys.exit(1)
 
 # Which template directory each function renders.
-FAMILIES = [("tiger", "render"), ("webgateway", "render_gateway")]
+FAMILIES = [("tiger", "render"), ("webgateway", "render_gateway"),
+            ("keycloak", "render_realm")]
 
 fails = 0
 total = 0
 for directory, func in FAMILIES:
     known = tables[func]
     used = set()
-    templates = sorted(pathlib.Path(directory).glob("*.tmpl"))
+    # Recursive: the 3.x templates live in a per-generation subdirectory
+    # (tiger/v3/), and a template no check ever reads is a template whose
+    # placeholders can drift away from the renderer unnoticed.
+    templates = sorted(pathlib.Path(directory).rglob("*.tmpl"))
     if not templates:
         print(f"  FAIL  {directory}/ contains no *.tmpl files but {func}() renders from it")
         fails += 1
@@ -386,7 +543,8 @@ for directory, func in FAMILIES:
 
 if fails:
     sys.exit(1)
-print(f"  PASS  {total} placeholders across 2 template families, renderers and templates agree")
+print(f"  PASS  {total} placeholders across {len(FAMILIES)} template families, "
+      f"renderers and templates agree")
 PY
 (( $? == 0 )) || FAILURES=$((FAILURES+1))
 
@@ -404,7 +562,7 @@ import pathlib, re, sys
 renderer = pathlib.Path("scripts/30-render-config.sh").read_text(encoding="utf-8")
 fails = 0
 
-for p in sorted(pathlib.Path("tiger").glob("*.tmpl")):
+for p in sorted(pathlib.Path("tiger").rglob("*.tmpl")):
     body = [ln for ln in p.read_text(encoding="utf-8").splitlines()
             if not ln.lstrip().startswith("#")]
     hits = [ln for ln in body if "activateWorkflowUi" in ln]
@@ -791,7 +949,13 @@ ALL_LEVELS = ("stufe3", "stufe5")
 # every known level, so this check still compares something.
 levels = sys.argv[1].lower().split() or list(ALL_LEVELS)
 
-compose = pathlib.Path("compose/testsuite.yml").read_text(encoding="utf-8")
+# Both suite compose files, because the Connect module's own service lives in the
+# authorization server overlay: it cannot run without it. Read as one text, since
+# the question here is only whether SOME service mounts the file - which service,
+# and under which condition, is section 7's business.
+COMPOSE_FILES = ("compose/testsuite.yml", "compose/authserver.yml")
+compose = "".join(pathlib.Path(f).read_text(encoding="utf-8")
+                  for f in COMPOSE_FILES if pathlib.Path(f).is_file())
 mounted = set(re.findall(r"- \./run/(tiger/[A-Za-z0-9._/-]+\.yaml):", compose))
 renderer = pathlib.Path("scripts/30-render-config.sh").read_text(encoding="utf-8")
 
@@ -817,8 +981,17 @@ def expand(lvs):
     return {f.replace("<level>", lv) for f in families for lv in lvs}
 
 
-expected = expand(levels)       # rendered by THIS generation
-ever = expand(ALL_LEVELS)       # rendered by some generation
+# Outputs the header names literally rather than per level: the Connect module's
+# configuration is one file for one module of one level, so it has no family. It
+# is rendered only for a round with CONNECT_ENABLE=true and mounted only by the
+# overlay, but both sides of that are static facts about the repository and are
+# therefore checked unconditionally.
+literals = {d[len("run/"):]
+            for d in re.findall(r"#   (run/tiger/[A-Za-z0-9._/<>-]+\.yaml)", renderer)
+            if "<level>" not in d}
+
+expected = expand(levels) | literals    # rendered by THIS generation
+ever = expand(ALL_LEVELS) | literals    # rendered by some generation
 
 for d in sorted(expected - mounted):
     print(f"  FAIL  scripts/30-render-config.sh writes run/{d} but no compose service mounts it")
@@ -839,6 +1012,10 @@ for m in sorted(mounted - expected):
 # what makes the SUT answer HTTP at all, so a mount pointing at a file the renderer
 # does not write means every scenario in the round fails with a connection error.
 base = pathlib.Path("docker-compose.yml").read_text(encoding="utf-8")
+# Plus the overlay, which adds the HTTPS virtual host beside the :80 one the base
+# file mounts. Same reasoning as for the Tiger configurations above.
+if pathlib.Path("compose/authserver.yml").is_file():
+    base += pathlib.Path("compose/authserver.yml").read_text(encoding="utf-8")
 gw_mounted = set(re.findall(r"- \./run/(webgateway/[A-Za-z0-9._-]+):", base))
 gw_declared = {d[len("run/"):] for d in
                re.findall(r"#   (run/webgateway/[A-Za-z0-9._-]+)", renderer)}
@@ -945,10 +1122,35 @@ internal = {
     "PLATFORM_DISPLAY", "KIT_FILE_LABEL", "KIT_SHA256", "KIT_DIR_TEMPLATES",
     "CLEAN_EXTRACT", "IRIS_TAG", "GATEWAY_TAG", "DOCKER_BUILDKIT",
     # 60-run-tests.sh. TESTS_TO_RUN is derived from the documented
-    # TESTS_TO_RUN_STUFE3/5 and exported for compose, so it is an internal name
-    # even though the container reads it as its own setting.
+    # TESTS_TO_RUN_STUFE3/5/CONNECT and exported for compose, so it is an
+    # internal name even though the container reads it as its own setting.
+    # VARIANT is the invocation this run is (stufe3 | stufe5 | connect), taken
+    # from the command line like `make test-connect` does; the SCOPE_* names are
+    # the tag expressions it is compared against and the partition it was found
+    # to be, which are derived from the variant and must not be assertable by
+    # configuration - a round that could *declare* itself the complete scope
+    # would make the field worthless.
     "STUFE", "LEVEL", "VOLUME", "ARCHIVE_DIR", "OFFICIAL_DIR", "RUN_TIMEOUT",
     "TESTS_TO_RUN", "OFFICIAL_SCOPE", "LOG_PID", "EXIT_CODE",
+    "VARIANT", "SERVICE", "DEFAULT_TAGS", "SCOPE_PARTITION", "SCOPE_NOTE",
+    "SCOPE_WITHOUT_CONNECT", "SCOPE_CONNECT_ONLY", "CONFORMANCE_SCOPE",
+    "SUT_URL", "SUT_URL_HOST", "TIGER_CONFIG", "WHAT",
+    # 22-make-tls.sh. The subject base and the two validity periods are
+    # properties of the round's throwaway CA, not settings: the certificates are
+    # regenerated whenever they are close to expiry, and a leaf valid for years
+    # would outlive the environment it was issued for.
+    "OUT_TLS", "TLS_SUBJECT_BASE", "CA_DAYS", "LEAF_DAYS",
+    # 30-render-config.sh's output directory for the authorization server's realm.
+    "OUT_AS",
+    # 55-mint-tokens.sh. All locals: the endpoints it derives from the documented
+    # AS_HOSTNAME / AS_REALM, the request body it posts, and the values it then
+    # compares a minted token's claims against. EXPECTED_ISSUER / ACTUAL_ISSUER
+    # are the two sides of that comparison - an operator-set "expected" value
+    # would let a token from another issuer pass the check it exists to fail.
+    "AS_ORIGIN", "AS_REALM_URL", "TOKEN_ENDPOINT", "BODY_FILE", "WORK",
+    "EXPECTED_ISSUER", "ACTUAL_ISSUER", "EXPECTED_AUDIENCE", "MIN_REMAINING",
+    # Supplied by the operating system, not by this rig.
+    "TMPDIR",
     # STARTED_AT is when this invocation began, taken once and then compared
     # against the mtime of every archive the suite produced, so that a stale
     # report left in the shared volume cannot be collected as this round's.
@@ -1003,7 +1205,11 @@ internal |= {"R_IRIS_VERSION", "R_IRIS_DIGEST", "R_IRIS_ZV", "R_IRIS_SOURCE",
              # TESTSUITE_VERSION_SOURCE / TESTSUITE_LATEST_AVAILABLE, which are in
              # the `resolved` set below.
              "R_IRIS_VERSION_SOURCE", "R_TESTSUITE_VERSION_SOURCE",
-             "R_TESTSUITE_LATEST"}
+             "R_TESTSUITE_LATEST",
+             # The authorization server's image, resolved only when
+             # CONNECT_ENABLE=true. AS_REF is the tag reference composed from the
+             # documented AS_IMAGE and AS_VERSION, like IRIS_REF above.
+             "R_AS_DIGEST", "R_AS_SOURCE", "AS_REF"}
 # Computed by load_env in lib.sh: the run-behaviour settings this invocation was
 # given on the command line, as "NAME=value" pairs. An output of the configuration
 # load, not an input to it - setting it in .env would claim an override that never
@@ -1025,6 +1231,8 @@ resolved = {
     "WEBGATEWAY_IMAGE_REF", "WEBGATEWAY_IMAGE_DIGEST", "WEBGATEWAY_IMAGE_SOURCE",
     "IRIS_VERSION_SOURCE", "TESTSUITE_VERSION_SOURCE",
     "TESTSUITE_LATEST_AVAILABLE",
+    # Present only in a round with CONNECT_ENABLE=true.
+    "AS_IMAGE_REF", "AS_IMAGE_DIGEST", "AS_IMAGE_SOURCE",
 }
 
 used = set()
@@ -1060,8 +1268,13 @@ if ! command -v git >/dev/null 2>&1 || ! git rev-parse --git-dir >/dev/null 2>&1
   skip "not a git working tree (or git absent) - the gitignore check needs one"
 else
   ignore_fails=0
+  # run/as/realm-isik.json carries the realm's shared client secret and
+  # run/tls/ca.key the key of the round's local CA; both are generated per
+  # deployment, like the passwords above, and neither may ever be committed.
   for path in secrets/sut.password secrets/iris-mgmt.password secrets/iris.key \
-              .env .env.resolved run/CREDENTIALS.md; do
+              secrets/as-admin.password secrets/as-client.secret \
+              .env .env.resolved run/CREDENTIALS.md \
+              run/as/realm-isik.json run/tls/ca.key; do
     # check-ignore works on paths that do not exist, which is the point: the
     # patterns must be right before the file is ever generated.
     git check-ignore -q "$path" 2>/dev/null \
@@ -1099,7 +1312,7 @@ else
               --env-file .env.example \
               -f docker-compose.yml -f compose/testsuite.yml \
               config 2>&1)"; then
-    pass "docker compose config validates both files"
+    pass "docker compose config validates the base configuration"
     # The static addresses are the whole basis of the isolation claim, so confirm
     # they survive interpolation rather than trusting the file.
     for ip in "$(grep -E '^IRIS_IP=' .env.example | cut -d= -f2)" \
@@ -1113,6 +1326,51 @@ print(", ".join(sorted((yaml.safe_load(sys.stdin) or {}).get("services", {}))))'
   else
     fail "docker compose config rejected the configuration:"
     printf '%s\n' "$out" | sed 's/^/        /' | head -n 20
+  fi
+
+  # And the same with the authorization server overlay, which is the OTHER
+  # configuration this repository has to be able to produce. Both are checked on
+  # every invocation regardless of CONNECT_ENABLE: a round runs one of them, but
+  # the repository owes both, and the one not currently selected is exactly the
+  # one whose breakage would go unnoticed.
+  #
+  # The three generated credentials stand in as above. AS_ADMIN_PASSWORD and
+  # AS_CLIENT_SECRET are required by compose/authserver.yml's ${...:?...}
+  # interpolations and are empty in .env.example for the same reason SUT_PASSWORD
+  # is: `make up` generates them per deployment.
+  if out_as="$(SUT_PASSWORD=checkonly IRIS_MGMT_PASSWORD=checkonly \
+               AS_ADMIN_PASSWORD=checkonly AS_CLIENT_SECRET=checkonly \
+               docker compose \
+                 --env-file .env.example \
+                 -f docker-compose.yml -f compose/testsuite.yml \
+                 -f "$(bash -c '. scripts/lib.sh >/dev/null 2>&1; printf "%s" "$CONNECT_COMPOSE_FILE"')" \
+                 config 2>&1)"; then
+    pass "docker compose config validates the configuration with the authorization server"
+    # The Connect module's own suite service must be profile-gated, or `make up`
+    # would start a second suite container beside the one the round is running,
+    # both bound to the same static address. Checked on the RESOLVED
+    # configuration, because a profile can also be lost in a merge.
+    if ! conn_err="$(printf '%s' "$out_as" | python3 -c '
+import sys, yaml
+svc = (yaml.safe_load(sys.stdin) or {}).get("services", {})
+c = svc.get("testsuite-connect")
+if c is None:
+    sys.exit("the resolved configuration defines no testsuite-connect service")
+if "connect" not in (c.get("profiles") or []):
+    sys.exit("testsuite-connect is not gated by the \"connect\" profile "
+             "- it would start together with the round")
+if "authserver" not in svc:
+    sys.exit("the overlay was merged but no authserver service is present")
+' 2>&1)"; then
+      fail "the resolved configuration with the authorization server is wrong:"
+      printf '%s\n' "$conn_err" | sed 's/^/        /' | head -n 5
+    fi
+    note "services with the overlay: $(printf '%s' "$out_as" | python3 -c '
+import sys, yaml
+print(", ".join(sorted((yaml.safe_load(sys.stdin) or {}).get("services", {}))))' 2>/dev/null || echo '?')"
+  else
+    fail "docker compose config rejected the configuration with the authorization server:"
+    printf '%s\n' "$out_as" | sed 's/^/        /' | head -n 20
   fi
 fi
 
