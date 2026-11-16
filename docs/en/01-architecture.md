@@ -210,7 +210,7 @@ alone brings the whole environment up first.
 | 3 | `up` | [30-render-config.sh](../../scripts/30-render-config.sh) | `run/tiger/*.yaml`, `run/testdata/`, `run/tiger/RENDERED.txt`, `run/CREDENTIALS.md` |
 | | | [40-up.sh](../../scripts/40-up.sh) | A live, healthy SUT with both endpoints answering |
 | 4 | `seed` | [50-seed.sh](../../scripts/50-seed.sh) | `build/fhir/<level>/`, both endpoints loaded, `run/seed/*.json` |
-| 5 | `test` | [60-run-tests.sh](../../scripts/60-run-tests.sh) | `reports/<run-id>/<stufe>/official/*.zip` + `run.json` + `run.log` |
+| 5 | `test` | [60-run-tests.sh](../../scripts/60-run-tests.sh) | `reports/<run-id>/<variant>/official/*.zip` + `run.json` + `run.log` |
 | 6 | `report` | [70-collect-report.sh](../../scripts/70-collect-report.sh) | The evidence bundle: extracted archives, `analysis/results.md`, `provenance/`, `MANIFEST.txt` |
 | | | [80-gap-report.sh](../../scripts/80-gap-report.sh) | `GAP-ANALYSIS.md` + `gap-analysis.json` |
 | | | [81-case-evidence.sh](../../scripts/81-case-evidence.sh) | `CASE-EVIDENCE.md` + `case-evidence.json` — the annex of the gap analysis, one clause per failing case |

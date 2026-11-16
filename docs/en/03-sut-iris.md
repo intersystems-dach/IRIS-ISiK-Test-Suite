@@ -175,7 +175,7 @@ distances:
 | `70-collect-report.sh`, at publication | Refuses to publish a round whose archived `iris-provenance.json` disagrees with its archived `package-plan.json`, from the two files the bundle itself carries — so the check is repeatable without this rig |
 
 This is defect 31 in
-[08-known-limitations.md](08-known-limitations.md#one-further-defect-found-by-asking-what-already-installed-installed),
+[09-known-limitations.md](09-known-limitations.md#one-further-defect-found-by-asking-what-already-installed-installed),
 where the measurement that found it is recorded: a round pinned to suite 3.0.9
 that ran against an endpoint installed from the 2.7.0 plan, two ISiK package
 versions behind what it published.
@@ -334,6 +334,13 @@ rather than open access because it is closer to a real deployment, it exercises
 the REST layer's auth path, and it keeps the endpoints from being open to
 anything that reaches the subnet.
 
+One module is different and is covered separately: ISiK Stufe 5's `Connect`
+presents OAuth 2.0 bearer tokens from the feature file itself, which requires a
+different endpoint posture, a TLS listener and an authorization server. See
+[08-connect.md](08-connect.md). Everything below describes the Basic path, which
+is what the other nine modules use and what a round configured by default uses
+throughout.
+
 `EnsureSecurity()` builds, in this order:
 
 1. **Resource `ISiK_FHIR`** — guards the FHIR web applications, created with no
@@ -394,6 +401,17 @@ instance policy.
 `SecureEndpoint()` switches it to `32` (`AuthePassword`), so an unauthenticated
 request is refused rather than served anonymously.
 
+That is the posture of a round **without** an authorization server, which is the
+default and the one nine of the ten Stufe 5 modules are measured against. A round
+with `CONNECT_ENABLE=true` leaves the Stufe 5 endpoint exactly as the FHIR
+server's own installer created it — `AutheEnabled` `8288`
+(`Unauthenticated,Password,Delegated`) and no application `Resource` — because a
+request carrying only a bearer token presents no IRIS credential and so cannot
+pass a password-only application. `SecureEndpoint()` has one branch per posture,
+an endpoint found in neither is a failure rather than something to overwrite, and
+the full statement with the `InstallCSPApp` measurement behind it is in
+[08-connect.md](08-connect.md#the-endpoints-authentication-posture).
+
 #### It is refused with 404, not 401
 
 This surprises everyone who meets it, and it is worth stating precisely. Probed
@@ -441,7 +459,7 @@ Two things are deliberately left alone:
 
 Credentials themselves — how they are generated, where they are written, and why
 they are published in the reports — are in [02-setup.md](02-setup.md#credentials)
-and [08-known-limitations.md](08-known-limitations.md#credential-documentation).
+and [09-known-limitations.md](09-known-limitations.md#credential-documentation).
 
 ## The HTTP surface is not in this container
 
@@ -546,7 +564,7 @@ would have failed at the product default for a conformance reason.
 Everything else on the endpoint, on the namespace and on the instance is stock.
 The complete list of deliberate deviations across the whole rig — SUT, test tool,
 test data and reporting — is consolidated in
-[08-known-limitations.md](08-known-limitations.md).
+[09-known-limitations.md](09-known-limitations.md).
 
 ### Two write-path behaviours the gap report depends on
 

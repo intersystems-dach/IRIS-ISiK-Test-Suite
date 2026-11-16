@@ -90,6 +90,24 @@ A larger VM for a few hours is cheaper than discovering that after four of them.
   help the failure mode above: a JVM that has hit `-Xmx` does not want more pages,
   it wants a bigger heap.
 
+**Add ~1.1 GiB for a `Connect` round.** With `CONNECT_ENABLE=true` the rig also
+runs an authorization server — a JVM, limited to 1 GiB — and a TLS listener on the
+Web Gateway. IRIS's own default of 25 % of host memory is unchanged by it, so the
+extra memory has to be real and not borrowed from what IRIS already claims: **a
+host sized from the table above is not automatically large enough for a round with
+this overlay.** The 16 vCPU / 64 GiB row absorbs it without arithmetic; on the
+minimum host, budget it against the heap rather than against the margin. The
+module, what it needs and why is in
+[docs/en/08-connect.md](docs/en/08-connect.md).
+
+**HugePages are not configured by this rig, and InterSystems recommends them.**
+Without them IRIS's real memory consumption is materially higher than its
+configured shared-memory size suggests, so a host sized from that figure alone is
+not a sized host. Configuring them is a host-level decision outside this
+repository, like the firewall rules; it is named here because the figures above
+were measured *without* them and are therefore the pessimistic case, not the
+optimistic one.
+
 ## 3. Provision the host
 
 On a first login to a pristine host, `docker`, `make` and `unzip` are absent. The
@@ -442,7 +460,7 @@ hypothetical list.
 
 More: the troubleshooting table in
 [docs/en/02-setup.md](docs/en/02-setup.md#troubleshooting), and
-[docs/en/08-known-limitations.md](docs/en/08-known-limitations.md) for what this rig
+[docs/en/09-known-limitations.md](docs/en/09-known-limitations.md) for what this rig
 does not prove.
 
 ## 12. About the credentials in the reports
@@ -467,7 +485,7 @@ stand-in for a production deployment.
 The one rule that does apply: **none of it reaches source control.** `secrets/`,
 `.env`, `.env.resolved`, `run/` and `reports/` are all gitignored, and `make check`
 verifies that mechanically on every run. Stated as a deliberate deviation in
-[docs/en/08-known-limitations.md](docs/en/08-known-limitations.md#credential-documentation).
+[docs/en/09-known-limitations.md](docs/en/09-known-limitations.md#credential-documentation).
 
 ---
 

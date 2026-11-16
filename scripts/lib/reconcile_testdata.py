@@ -145,7 +145,7 @@ Two narrower readings are applied, each recorded with the body it affected:
   written as the unit text, that being the one text which cannot contradict the
   step. On the 3.0.9 corpus this applies once, to a feature whose prose and whose
   step name different units; see
-  ``docs/en/08-known-limitations.md``.
+  ``docs/en/09-known-limitations.md``.
 
 Not written by this tool
 ------------------------
@@ -200,7 +200,7 @@ SCALAR_ELEMENTS_BY_TYPE = {"Observation": {"specimen"}}
 # Reference-valued elements - `performer` is a Reference on Observation and a
 # BackboneElement on MedicationAdministration, and a list that got such a name wrong
 # would mis-shape a child element rather than fail - so it names only what is needed
-# and verified. See docs/en/08-known-limitations.md on reading this from the R4 base
+# and verified. See docs/en/09-known-limitations.md on reading this from the R4 base
 # definitions instead, as choice_type_check.py already does.
 REFERENCE_ELEMENTS = {"specimen"} | {
     path.rsplit(".", 1)[-1].removesuffix("[]") for path in REFERENCE_KEYS}

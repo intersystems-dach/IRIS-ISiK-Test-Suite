@@ -7,6 +7,10 @@ make preflight  →  resolve  →  packages  →  up  →  seed  →  test  → 
                                                               │
                                                     test-stufe3, then
                                                     test-stufe5 — serialised
+                                                              │
+                                                    then, only with
+                                                    CONNECT_ENABLE=true:
+                                                    tokens, then test-connect
 ```
 
 `make all` runs the chain end to end, and the two conformance runs dominate it —
@@ -66,6 +70,18 @@ every run, so `make test` is `test-stufe3` then `test-stufe5`, and each level's
 archives are lifted out of the container before the next one is allowed to start.
 See [04-testtool.md](04-testtool.md#what-the-entrypoint-does-and-everything-that-follows-from-it).
 
+**A round configured for `Connect` has one further invocation, appended and not
+substituted.** `make test` runs every level first, then — only if
+`connect_enabled` — mints the access tokens and runs Stufe 5's `Connect` module a
+second time, on real bearer tokens, through its own Tiger configuration. The
+complete official scope is unchanged and still includes those cases; this adds an
+archive rather than narrowing one. It runs last so the tokens are obtained as late
+as possible, and the scripts are called directly rather than through
+`make test-connect` so that their one-hour life is not spent re-walking the
+preparation chain. The archive is `connect/`, the supersede rule that relates it
+to `stufe5/` is in [08-connect.md](08-connect.md#it-does-not-narrow-the-official-run),
+and the measured wall-clock cost is under two minutes for 32 cases.
+
 ## The run identity
 
 `RUN_ID` is computed **once** per `make` invocation
@@ -79,6 +95,21 @@ It can be set to re-derive documents for a finished round:
 ```sh
 make report RUN_ID=run-20260806T093000Z
 ```
+
+**It must be set explicitly when the invocations are driven separately**, which is
+how a `Connect` round is driven by hand. Each bare `make` computes its own
+timestamp, so three unqualified invocations would scatter one round across three
+directories and the supersede rule would have nothing to apply:
+
+```sh
+RUN_ID=run-20261116T120000Z make test-stufe5
+RUN_ID=run-20261116T120000Z make test-connect
+RUN_ID=run-20261116T120000Z make report
+```
+
+`RUN_ID` is honoured from the environment by `scripts/lib.sh` rather than only
+from the `make` command line, so either form works. `make test` needs none of
+this — it drives all of them from one invocation.
 
 ## Exit codes: what "success" means here
 
@@ -161,7 +192,7 @@ are the same string.
 ## Watching a run
 
 The container's entire output is streamed to
-`reports/<run-id>/<stufe>/run.log` from the moment it starts — to a file, not to
+`reports/<run-id>/<variant>/run.log` from the moment it starts — to a file, not to
 the terminal, because this runs for up to three hours, usually detached, and the
 file is what gets archived. It is also the only place a Tiger startup failure is
 explained.
@@ -345,6 +376,9 @@ quote away from a syntax error in the very step that writes the evidence.
 | Key | Contents |
 |---|---|
 | `runId`, `level`, `mavenProfile` | Identity |
+| `variant` | **Which of the round's invocations this archive is** — `stufe3`, `stufe5` or `connect`, and the name of the archive directory. Two of them carry level `Stufe5`, which is why the directory is named after this and not after the level |
+| `scopePartition` | **How this archive's scope relates to the level's official scope.** Four values, below. Read by `results_report.py` rather than inferred from the tag expression, so a restricted archive is never presented as a statement about the whole level |
+| `authorizationServer` | Connect round only, `null` otherwise: the image and its digest, the issuer, the audience, the grant type (`client_credentials`) and where the token record is to be read — cited at its place **in the bundle**, not at the `run/` path it was written to, since `make clean` deletes that. Never a token value, and never the realm secret |
 | `startedAt`, `finishedAt`, `durationSeconds`, `timedOut` | Timing |
 | `containerExitCode` | Recorded, never acted on |
 | `testsToRun`, `officialScope`, `conformanceScope` | The scope, and whether it was the certification scope |
@@ -361,12 +395,33 @@ hashes are computed in Python during the same read that writes them, so `run.jso
 and `SHA256SUMS` describe the same bytes by construction rather than by two
 independent shell-outs.
 
+### The four scope partitions
+
+| `scopePartition` | What the archive is | `conformanceScope` |
+|---|---|---|
+| `complete` | The level's official certification scope. **The submission artefact** | `true` |
+| `connect-only` | The `@Connect` module alone, selected with upstream's own tag and run with real bearer tokens against the TLS endpoint. A subset of the official scope, run a second time: additional evidence that **supersedes** the Connect cases of the round's complete archive and is not added to them | `false` |
+| `without-connect` | The official scope minus `@Connect`. A deliberate restriction — useful for re-running the other nine modules while working on something else — and **not** a submission artefact. 32 mandatory cases do not run, and the operator is warned so on the terminal | `false` |
+| `narrowed` | None of these: a debugging run. Its report is not a conformance result and must not be submitted | `false` |
+
+`conformanceScope` says one thing only: whether *this archive* is the level's
+official scope. A restricted run is not, however deliberate, because the
+submission form takes one `test-report.zip` per level — and `scopePartition` is
+what tells a deliberate restriction apart from a debugging run.
+
+Where a round holds both a `complete` and a `connect-only` archive of the same
+level, the merged level report in `analysis/` records
+`complete+connect-superseded`, recounts its totals from the effective case set so
+that no figure is a sum over two measurements of the same case, and names the
+superseded module. The supersede rule is in
+[08-connect.md](08-connect.md#it-does-not-narrow-the-official-run).
+
 ## What is fatal at the end of a level, and what is not
 
 * **No `test-report.zip` → fatal.** Even a run in which every scenario fails
   produces it. Its absence is a harness error, and the script prints the last 30
   log lines and points at `run.log`; the usual causes are an unreachable SUT, an
-  unparseable `tiger-isik-<stufe>.yaml`, or a missing test-data file.
+  unparseable `tiger-isik-<variant>.yaml`, or a missing test-data file.
 * **No `debug-report.zip` → warning.** The certification artefact is present, so
   the round stands. But the debug archive is where the request/response bodies and
   validator messages live, so without it the gap analysis can name the failing

@@ -9,6 +9,115 @@ Scope of this file: what the tooling and the documentation do. **Results of test
 rounds are deliberately absent** — see
 [what this repository does not contain](README.md#what-this-repository-does-not-contain).
 
+## 1.1.0 — 2026-11-16
+
+The ISiK Stufe 5 module `Connect` is the only one that authenticates for itself,
+with an OAuth 2.0 access token read out of the test data, and the only one that
+therefore needs an authorization server and a TLS listener. This release makes a
+round able to supply both — **off by default**, and without narrowing the official
+run.
+
+Everything here is configuration of the system under test of the kind a customer
+performs when attaching a FHIR server to an identity provider. No code is written
+into the SUT, no extension point is overridden, and token validation, scope
+evaluation and compartment filtering remain the product's, on the request path, as
+shipped.
+
+### Added
+
+- **`CONNECT_ENABLE`** ([.env.example](.env.example) §7,
+  [scripts/lib.sh](scripts/lib.sh)) — one switch deciding which compose files are
+  in play, which configuration is rendered, which TLS material is issued and which
+  authentication posture the endpoint is left in. Default `false`: a round behaves
+  exactly as it did before this feature existed unless asked not to. A value that
+  is neither true nor false is rejected rather than guessed.
+- **An authorization server as a test instrument**
+  ([compose/authserver.yml](compose/authserver.yml),
+  [keycloak/realm-isik.json.tmpl](keycloak/realm-isik.json.tmpl)) — Keycloak,
+  deliberately not an InterSystems product: a system under test that issues the
+  tokens it then validates would make the measurement circular. One client per
+  SMART scope, six in all, rendered from the suite's own test-data contract.
+- **`make tokens`** ([scripts/55-mint-tokens.sh](scripts/55-mint-tokens.sh),
+  [scripts/lib/connect_tokens.py](scripts/lib/connect_tokens.py)) — obtains the six
+  access tokens by `client_credentials` and stages each into the test-data key the
+  feature files read it from, after proving key-by-key that the staged contract is
+  still the release's. `--verify` reports each token's key, scope and remaining
+  lifetime. Called immediately before the run, because a token lives an hour and
+  seeding takes minutes.
+- **`make test-connect`** ([Makefile](Makefile),
+  [scripts/60-run-tests.sh](scripts/60-run-tests.sh)) — a second Stufe 5
+  invocation, **appended and not substituted**, through its own Tiger
+  configuration ([tiger/v3/tiger-isik-stufe5-connect.yaml.tmpl](tiger/v3/tiger-isik-stufe5-connect.yaml.tmpl))
+  that carries no `authentication:` block, so the header the feature file sets for
+  itself reaches the SUT. Measured on 2026-11-13: run through the ordinary
+  configuration the recorded traffic carried no bearer token at all and four of six
+  scenarios "passed" on the harness's credential rather than on the token under
+  test.
+- **A TLS listener** ([scripts/22-make-tls.sh](scripts/22-make-tls.sh),
+  [webgateway/isik-vhost-tls.conf.tmpl](webgateway/isik-vhost-tls.conf.tmpl)) —
+  the FHIR server evaluates a bearer token only over a connection it considers
+  secure, which is correct product behaviour and not switchable. Real TLS from a
+  per-round local CA; **no `X-Forwarded-Proto` is set anywhere**. Every certificate's
+  subject, issuer, serial, validity, fingerprint and SAN is recorded, private keys
+  are not.
+- **OAuth 2.0 configuration of the SUT** ([iris/src/ISiK/OAuth.cls](iris/src/ISiK/OAuth.cls),
+  [iris/src/ISiK/Setup.cls](iris/src/ISiK/Setup.cls)) — an outbound TLS
+  configuration, a server definition obtained by discovery, a resource-server
+  client definition, and the expected audience with the endpoint's advertised SMART
+  capabilities. `SearchFiltering` is deliberately left at the installer's default,
+  so the measurement states what the product does as shipped.
+- **Four scope partitions and the supersede rule**
+  ([scripts/lib/results_report.py](scripts/lib/results_report.py)) — each `run.json`
+  records `scopePartition` (`complete`, `connect-only`, `without-connect`,
+  `narrowed`), and for the 32 `Connect` cases the `connect/` verdicts supersede the
+  complete run's rather than being summed with them. Totals are recounted from the
+  effective set, `measurements[]` stays unmerged, and every case record names the
+  archive that measured it in `measuredIn`.
+- **Credential withholding**
+  ([scripts/lib/redact_credentials.py](scripts/lib/redact_credentials.py)) — the two
+  credentials this rig's publish-by-design policy cannot cover: the six access
+  tokens, replaced by their test-data key and SHA-256, and the realm's client secret
+  and admin password, withheld from the bundle and left only in the live 0600 files.
+  Recognised by the shape of the value rather than by a list of what the round
+  currently holds, applied before the bundle manifest is computed, and then
+  **proved** by a re-scan whose hit is a build failure. `<variant>/official/` is
+  exempt: those archives must stay byte-for-byte as the suite wrote them.
+- **[docs/en/08-connect.md](docs/en/08-connect.md)** — what the module requires and
+  who supplies it, why the authorization server is not part of the system under
+  test, why TLS is the product's requirement, the endpoint's two authentication
+  postures with the measurement that established which is the installer's own, what
+  is configured inside IRIS and what is not, the tokens, why the invocation is
+  separate, why the official run is not narrowed, how to run it, and what a result
+  does and does not prove.
+
+### Changed
+
+- `provenance/` now also carries `tiger-TLS.txt`, the round's certificate
+  inventory. [scripts/22-make-tls.sh](scripts/22-make-tls.sh) stated that a report
+  could say which certificates a round used, but the file lived in `run/`, which
+  `make clean` deletes — the claim would have decayed with the first teardown.
+- `docs/en/08-known-limitations.md` is now
+  [docs/en/09-known-limitations.md](docs/en/09-known-limitations.md), with all
+  cross-references updated. It gains the deviations a `Connect` round introduces,
+  the two kinds of credential a round withholds, and the statement that the
+  submitted archive's `Connect` verdicts are not a statement about token handling.
+- The documents use `<variant>` where they used `<stufe>`: a bundle directory is
+  named after an invocation, not after a level, and a `Connect` round holds two
+  Stufe 5 archives.
+- [README.md](README.md) and [INSTALL.md](INSTALL.md) state the additional ~1.1 GiB
+  a `Connect` round needs, and that **HugePages are not configured by this rig**
+  although InterSystems recommends them.
+- The German documents cover the additional procedure step, the fourth container,
+  the subset tag expression, the supersede rule and the withheld credentials.
+
+### Not included, by rule
+
+Unchanged from 1.0.0, with one addition: **no access token and no realm secret is
+published in a round's evidence bundle.** What is published instead is each token's
+SHA-256 together with the scope, issuer, audience and lifetime it was minted with —
+enough to prove which credential an exchange presented, and not enough to present
+it.
+
 ## 1.0.0 — 2026-11-13
 
 First release-style milestone. The rig is intended to be handed to a third party

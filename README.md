@@ -33,6 +33,12 @@ Per round, in `reports/<run-id>/`:
 The derived documents are pure functions of the archives and can be regenerated on
 any machine from an archived bundle. 
 
+One ISiK Stufe 5 module, `Connect`, authenticates with OAuth 2.0 bearer tokens
+from the feature file itself and so needs an authorization server and a TLS
+listener that no other module needs. It is **off by default**; turning it on adds
+a `connect/` archive beside `stufe5/` without narrowing the official run. See
+[docs/en/08-connect.md](docs/en/08-connect.md).
+
 ISiK is designed to be a constantly evolving, moving target, rather than a static set of one-time rules. IRIS for Health is therefore *expected* to fail parts of
 this at times, which is why the gap analysis is a first-class deliverable rather than an appendix.
 
@@ -74,6 +80,10 @@ upward rather than downward: a Stufe 5 run short of scenario heap does not slow
 down, it silently loses the level after hours. [INSTALL.md](INSTALL.md#2-hardware)
 traces every figure to a measurement.
 
+A round with `CONNECT_ENABLE=true` needs about **1.1 GiB more** than the figures
+above, for the authorization server and the TLS listener
+([docs/en/08-connect.md](docs/en/08-connect.md#additional-hardware)).
+
 This tooling was developed using an Azure VM and its Ubuntu 24.04 LTS x86_64 image as the lab rig, starting from its mid-2026 stock configuration. There is nothing particular about Azure that is required, but it is what supplied our installation baseline. If your baseline differs, you might need to adapt the installation procedure accordingly.
 
 ## Quick start
@@ -110,7 +120,7 @@ make clean           # teardown; never touches reports/ or secrets/
 | | |
 |---|---|
 | [INSTALL.md](INSTALL.md) | From a bare Ubuntu 24.04 VM to a full report set. Start here for a new host |
-| [docs/en/](docs/en/) | The rig in full: [architecture](docs/en/01-architecture.md), [setup](docs/en/02-setup.md), [the SUT](docs/en/03-sut-iris.md), [the test tool](docs/en/04-testtool.md), [the test data](docs/en/05-testdata.md), [execution](docs/en/06-execution.md), [reports](docs/en/07-reports.md), [limitations](docs/en/08-known-limitations.md) |
+| [docs/en/](docs/en/) | The rig in full: [architecture](docs/en/01-architecture.md), [setup](docs/en/02-setup.md), [the SUT](docs/en/03-sut-iris.md), [the test tool](docs/en/04-testtool.md), [the test data](docs/en/05-testdata.md), [execution](docs/en/06-execution.md), [reports](docs/en/07-reports.md), [bearer tokens](docs/en/08-connect.md), [limitations](docs/en/09-known-limitations.md) |
 | [docs/de/](docs/de/) | Regulatorische Dokumentation zum *Bestätigungsverfahren* — auf Deutsch, weil die ISiK-Spezifikation es ist |
 | [secrets/README.md](secrets/README.md) | What goes in `secrets/`, and what is generated |
 | [kit/README.md](kit/README.md) | How to obtain the unit under test: pull a published image, side-load one you hold, or build one from an installation kit |
@@ -132,7 +142,7 @@ and at the network perimeter, not by these values, which exist — never empty, 
 absent — only so the SUT stays a faithful stand-in for a production deployment. The
 one rule that does apply: **none of it reaches source control**, and `make check`
 verifies that mechanically. Stated as a deliberate deviation in
-[docs/en/08-known-limitations.md](docs/en/08-known-limitations.md#credential-documentation).
+[docs/en/09-known-limitations.md](docs/en/09-known-limitations.md#credential-documentation).
 
 ## Licence
 

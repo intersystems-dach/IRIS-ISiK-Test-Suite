@@ -117,7 +117,7 @@ like an IRIS gap.
   authoring. Not because IRIS `$validate` runs over the corpus as well: it does,
   and on the round of record it accepted all 131 bodies with 0 errors, including
   the five the reference validator rejects (defect 15 in
-  [08-known-limitations.md](08-known-limitations.md)). The system under test is
+  [09-known-limitations.md](09-known-limitations.md)). The system under test is
   not an oracle for our test data.
 * **`{{pattern.<Profile>.<element>}}`** — resolved to the code this level's
   package set fixes at that element, read out of the StructureDefinition itself.
@@ -127,7 +127,7 @@ like an IRIS gap.
   to `#KVZ10` in `#1.5.4` (Stufe 5's pin), so a literal is wrong in one level
   whichever one is written — and the resulting failure arrives as a profile
   non-conformance of the SUT. See defect 10 in
-  [08-known-limitations.md](08-known-limitations.md) for the measurement. A name
+  [09-known-limitations.md](09-known-limitations.md) for the measurement. A name
   the level's pins define more than once, and a fixed value that repeats, are both
   refused rather than resolved by order.
 
@@ -173,7 +173,7 @@ is separated nowhere: the planned Encounter must reference the Patient of
 `Patient-Read` and must carry class `IMP` and type `normalstationaer`, so a search on those
 criteria returns it by construction and cannot pass. Those cases are reported as
 suite self-contradictions, not as product defects — see
-[08-known-limitations.md](08-known-limitations.md).
+[09-known-limitations.md](09-known-limitations.md).
 
 ### Fabrication, for the modules release 3.0.0 added
 
@@ -259,7 +259,7 @@ python3 scripts/lib/reconcile_testdata.py \
 ```
 
 Both tools have produced defects of their own, four of which are recorded with their
-causes in [08-known-limitations.md](08-known-limitations.md). One of the four is
+causes in [09-known-limitations.md](09-known-limitations.md). One of the four is
 worth repeating here, because it bounds what the checks in the next section prove:
 `assertion_check.py` classifies a `count()` assertion as `UNVERIFIED`, so a corpus
 can report every assertion satisfied while five bodies carry six components against
@@ -373,7 +373,7 @@ Two details decide whether the check is worth anything:
 Every message is written to `run/seed/corpus-validation.json` and archived with
 the round. The current corpus: 129 bodies, 123 validated, 0 invalid, and 6 that
 no scenario asserts a profile against. Defects 14, 15 and 19 in
-[08-known-limitations.md](08-known-limitations.md) record what this check found
+[09-known-limitations.md](09-known-limitations.md) record what this check found
 the first time it ran, and what it had been unable to see before.
 
 ### Seeding

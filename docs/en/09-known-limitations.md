@@ -1,4 +1,4 @@
-# 8. Known limitations and deliberate deviations
+# 9. Known limitations and deliberate deviations
 
 This document exists so that no deviation in this rig has to be discovered by
 reading source. Two kinds of statement are collected here:
@@ -31,20 +31,24 @@ produced the verdicts recorded in `test-report.zip`.
 | That a failure is IRIS's | Only after the test-data segregation in `GAP-ANALYSIS.md` §5 and the [contract parity check](05-testdata.md#contract-parity). A failure is *attributed*, and the attribution states its evidence |
 | That the IRIS locus named in a gap entry is correct | Those loci are authored by this project, not derived from any artefact. `index.json` carries that provenance statement and the report reproduces it verbatim |
 | Interoperability with any real system | This is a conformance test against a specification, not an integration test against a partner |
+| Anything about the SMART App Launch flow | The suite states it does not evaluate the flow; it requires a token and asserts what the SUT does with it. No authorization-code exchange, no app launch and no consent step is exercised ([08-connect.md](08-connect.md#what-a-connect-result-does-and-does-not-prove)) |
+| That the `Connect` verdicts of the submitted archive are a statement about token handling | They are not, and the bundle says so per case. The complete official run measures those 32 cases **without** a bearer token; the `connect/` archive measures them with one and supersedes them. The submitted `test-report.zip` is unchanged either way |
 
 ## Deviations from a production deployment
 
 ### Credential documentation
 
 **Every credential this environment uses is published, verbatim, in the generated
-reports.** Not redacted, not hashed, not referenced by filename.
+reports.** Not redacted, not hashed, not referenced by filename. Two exceptions
+exist and are stated under *The two credentials a round withholds* below; they
+are exceptions on purpose and for a reason, not a softening of this rule.
 
 Where it appears, deliberately:
 
 | Location | Form |
 |---|---|
-| `analysis/results.md` §1 *Access credentials* | A table: API user, API password, scheme, Management Portal user, Management Portal password. Sourced as `<stufe>/run.json`, key `credentials`, like every other claim in the document |
-| `<stufe>/run.json` → `credentials` | Machine-readable, top-level, with a `_comment` stating why |
+| `analysis/results.md` §1 *Access credentials* | A table: API user, API password, scheme, Management Portal user, Management Portal password. Sourced as `<variant>/run.json`, key `credentials`, like every other claim in the document |
+| `<variant>/run.json` → `credentials` | Machine-readable, top-level, with a `_comment` stating why |
 | `provenance/CREDENTIALS.md` | The credential sheet as generated at deployment, copied into the bundle because `make clean` deletes `run/` |
 | `provenance/env.resolved.txt` | The whole resolved configuration, copied byte-for-byte with no filter |
 | `GAP-ANALYSIS.md` | The `Authorization: Basic …` header verbatim inside each entry's ` ```http ` block |
@@ -107,6 +111,43 @@ the credential channel is `CREDENTIALS.md` plus `run.json`. One channel, so ther
 one thing to look at. A comment in `Setup.cls` says so, so the omission is not read
 as a suppression policy.
 
+### The two credentials a round withholds
+
+A round with `CONNECT_ENABLE=true` introduces two kinds of credential that do not
+fit the policy above, and
+[scripts/lib/redact_credentials.py](../../scripts/lib/redact_credentials.py) is
+where the difference is implemented.
+
+| Withheld | Why it does not fit | Published instead |
+|---|---|---|
+| The six access tokens | Published verbatim they would be **useless to a reader** — expired long before anyone opens the bundle — while still being a credential of the kind this rig otherwise keeps at 0600 | The test-data key the token was staged for, plus its SHA-256. Strictly more informative than the value: the reader of an exchange learns *which scope's* token was presented, which is the question a 401 or a 403 raises |
+| `AS_CLIENT_SECRET` and `AS_ADMIN_PASSWORD` | Neither expires with the round. The first mints fresh tokens for as long as the realm exists; the second opens the authorization server's admin console. Neither is needed to verify a verdict — a reader re-mints with `make tokens` | Nothing. They stay in the live 0600 files the operator works from |
+
+**What makes a string a token is the string itself**, not a list of the values the
+round currently holds: an access token carries `iss` and `exp`, and this realm's
+also carry `scope`, so the claims are read out of the token. Matching only against
+the staged values would pass a bundle re-collected after the tokens were re-minted
+while its log still carried six credentials that were live when it was written.
+
+**What is deliberately not redacted:** `<variant>/official/` — the archives the
+test suite wrote, and their verbatim extraction. Those are the artefact the
+*Bestätigungsverfahren* is based on, their checksums are the suite's own, and the
+recorded traffic in `debug-report.zip` contains the `Authorization` headers as
+sent. Rewriting them would make the bundle's central claim — that the official
+report is byte-for-byte as the suite wrote it — false. The subtree is passed as an
+explicit exemption, the bundle README states that it holds the headers, and the
+tokens in it are expired by the time the bundle is read.
+
+**It is proved, not claimed.** Three scripts write into a bundle —
+`70-collect-report.sh`, then `80-gap-report.sh` and `81-case-evidence.sh`, which
+append to it afterwards. Each gates its own output through
+`assert_no_published_credentials()`, so the statement holds for the finished
+bundle and not only for the part one stage produced. The scan caught a live token
+pair in `case-evidence.json` during development, which is why the masking now
+happens where entries are built rather than where they are rendered.
+
+See [08-connect.md](08-connect.md#tokens-are-credentials).
+
 ### Non-expiring accounts
 
 Every IRIS account is `PasswordNeverExpires 1`, `AccountNeverExpires 1`,
@@ -150,7 +191,7 @@ consequence for reading a result:
 | `DefaultPreferHandling = lenient` | **Changes what is measured.** This is the FHIR-specified default and what ISiK expects, but it hides unsupported search parameters: a search using a parameter IRIS does not index returns an unfiltered — hence wrong — result set instead of an error, and the scenario fails on bundle *content*. `FHIR_PREFER_HANDLING=strict` turns each case into an explicit `OperationOutcome` naming the parameter, which is far better for gap hunting but is not a conformance measurement. Use it for a diagnostic round and say so in the round's notes |
 | `MaxSearchPageSize = 500`, `MaxSearchResults = 10000`, `DefaultSearchPageSize = 100` | Raised, never lowered, so the run passes or fails on semantics rather than on pagination. No scenario can succeed that would have failed at a product default for a conformance reason. A truncated result set would present as "resource not in bundle" — a search-semantics gap rather than pagination |
 | `DebugMode = 0` | Keeps `OperationOutcome` bodies as a production deployment would return them. Those bodies are the evidence in the gap report |
-| `AutheEnabled = 32` on the CSP applications | The installer's default is 64 (`AutheUnauthenticated`). An unauthenticated request is refused rather than served anonymously — though it is refused with **404, not 401**, because the CSP dispatcher declines to route rather than challenging. Measured: correct credential 200, missing 404, wrong 404 ([03-sut-iris.md](03-sut-iris.md#it-is-refused-with-404-not-401)) |
+| `AutheEnabled = 32` on the CSP applications | The installer's default is 64 (`AutheUnauthenticated`). An unauthenticated request is refused rather than served anonymously — though it is refused with **404, not 401**, because the CSP dispatcher declines to route rather than challenging. Measured: correct credential 200, missing 404, wrong 404 ([03-sut-iris.md](03-sut-iris.md#it-is-refused-with-404-not-401)). **Applies to a round without an authorization server, which is the default.** With `CONNECT_ENABLE=true` the endpoint is left exactly as the FHIR server's own installer created it (`8288`, no application resource) — not a relaxation, but the posture a bearer token requires, and the *less* deviating of the two. Established by measuring `InstallCSPApp` itself ([08-connect.md](08-connect.md#the-endpoints-authentication-posture)) |
 | Two namespaces, two endpoints | Forced, not chosen: Stufe 3 pins `de.basisprofil.r4@1.4.0` and Stufe 5 `@1.5.4`, and one endpoint resolves each canonical to exactly one definition |
 | Example-only packages excluded from the endpoints | `hl7.fhir.r4.examples@4.0.1` is ~198 MB / 5310 files, and all 658 of its StructureDefinitions repeat a canonical already defined by core R4. Recorded under `excludedPackages`; still in `MANIFEST.txt`, because the validator does use it |
 | Version collisions resolved by "import all, list the highest" | Legal for the validator, which resolves canonicals across its whole set; ambiguous for an endpoint with a single canonical map. Every collision is recorded under `versionCollisions` |
@@ -199,13 +240,44 @@ can diff them against the shipped `tiger-isik-stufeN.yaml`.
 | `servers.fhirserver.source` = the static subnet address | So the same literal string appears in the config, the seed log, the gap report's quoted requests and any host firewall rule |
 | `healthcheckUrl` + `startupTimeoutSec: 60` | For `type: externalUrl` Tiger starts nothing and, with no healthcheck, waits out the timeout and proceeds — turning "IRIS is unreachable" into 506 or 895 failing cases indistinguishable from a total conformance collapse |
 | `proxyRoutes` activated | Upstream ships it commented out with the instruction to activate it if the endpoint has a URL path. Ours does |
-| Route-level Basic `authentication` | So **the official feature files stay byte-identical.** A modified feature file would invalidate the run |
+| Route-level Basic `authentication` | So **the official feature files stay byte-identical.** A modified feature file would invalidate the run. The block **replaces** any `Authorization` header a feature file sets for itself — measured 2026-11-13 — which is why the one module that authenticates for itself is run through a second configuration that carries no such block ([08-connect.md](08-connect.md#why-connect-is-a-separate-invocation)) |
 | `workflowUiPort` 9012 → 9010 | Upstream's own README and `dc-testsuite.yml` publish 9010; pinned so the bound and forwarded ports cannot disagree |
 | `runTestsOnStart: false` for `MODE=manual` | Rendered as *separate* files under `run/tiger/manual/`, mounted only by the `manual` profile, so an unattended run cannot pick one up by accident |
 | One extra `additionalConfigurationFiles` entry, listed **last** | The `zz-upstream-key-defects.yaml` overlay can only add keys, never override an upstream value |
 
 **The feature files themselves are never modified.** Neither is the image: nothing
 in this repository rebuilds it, patches a class or edits a scenario.
+
+## Deviations introduced by a `Connect` round
+
+Everything in this section applies **only** when `CONNECT_ENABLE=true`, which is
+not the default. With it false, none of it is deployed and the round is configured
+exactly as every round taken before this capability existed — which is what keeps
+the August 2026.2 baseline round, and every round taken since, re-creatable from
+this repository. The switch is recorded in `.env.resolved` and in each round's
+provenance, so a round states which of the two configurations it ran.
+
+Full detail, with the measurement behind each statement, is in
+[08-connect.md](08-connect.md).
+
+| Deviation | Consequence for reading a result |
+|---|---|
+| A third-party authorization server runs in the subnet | **It is not part of the system under test.** Keycloak 26.4.7, scaffolding exactly like the test suite container. The specification requires the FHIR server to *consume* tokens issued elsewhere, so the conformance statement is about that consumption. It is deliberately not an InterSystems product: a SUT issuing the tokens it then validates would make the test circular |
+| The SUT's endpoint is left in the installer's authentication posture, not the tightened one | `AutheEnabled` 8288 and no application resource, instead of 32 and `ISiK_FHIR`. The *less* deviating of the two postures, and the one a bearer token requires; unauthenticated access is still refused, by the FHIR server itself with 401. A round in this posture is not comparable, request for request, with one in the other |
+| TLS terminates at the Web Gateway, under a certificate from a local CA | Required by the product, not chosen: the FHIR server will not evaluate a bearer token on a connection `%request.Secure` reports as insecure. **No `X-Forwarded-Proto` is set anywhere in this rig** — the product's own check is left to do its job. The trust anchor is `run/tls/ca.crt`, so replaying a request by hand needs `--cacert`, and the certificate name is not in host DNS, so it also needs `--resolve` |
+| The other nine modules keep the `:80` listener | Two listeners in front of one endpoint, not two endpoints. Deliberate: it keeps the nine modules' results comparable with every round taken before this one |
+| One upstream test-data file is modified | `testdata/Stufe5/connect.yaml`, six keys, from the placeholder `SET-YOUR-TOKEN-HERE` to a real token — which is the suite's own documented instruction to the operator. `run/tiger/TESTDATA-PARITY.txt` reports the file as **PARAMETERISED** rather than IDENTICAL and names the six keys, so the modification is bounded and visible |
+| Two kinds of credential are withheld from the published evidence | The six access tokens, and the realm's shared client secret together with the authorization server's admin password — the **exception** to the credential policy above, stated in full under [*The two credentials a round withholds*](#the-two-credentials-a-round-withholds). The official archives are exempt and stay byte-for-byte; `assert_no_published_credentials()` proves the rest rather than asserting it |
+| The `Connect` module runs twice and a round holds two Stufe 5 archives | The complete official scope is **not** narrowed, because the certification process asks for a singular `test-report.zip`. For the 32 `Connect` cases the `connect/` archive's verdicts supersede the complete run's; they are never summed. Every derived record names the archive it read (`scopePartition`, `measuredIn`, `measurements[]`) |
+| The host needs ~1.1 GiB more memory | A host sized for a round without this overlay is not automatically large enough for one with it. IRIS's own 25 % default is unchanged by the overlay, so the extra memory has to be real |
+| The authorization server's state is ephemeral | `--db=dev-file`, realm re-imported from `run/as/realm-isik.json` at every start. Nothing in it is worth persisting; it is stated because production mode deprecates that database as a default, so the choice is explicit rather than inherited |
+
+**HugePages are not configured, and this rig does not configure them.**
+InterSystems recommends them for every host running IRIS. Without them IRIS's real
+memory consumption is materially higher than its configured shared-memory size
+suggests, and the 1.1 GiB above is on top of that. Like the firewall rules, this
+is a host-level decision made outside this repository — stated here so that a host
+sized from the shared-memory figure alone is not mistaken for a sized host.
 
 ## Limitations of the test data
 
@@ -1571,7 +1643,12 @@ So that an inspector reading only a bundle finds them:
 
 | Deviation | Stated in |
 |---|---|
-| Credentials documented on purpose | `README.md` §*Access credentials*, `analysis/results.md` §1, `<stufe>/run.json` `credentials._comment` |
+| Credentials documented on purpose | `README.md` §*Access credentials*, `analysis/results.md` §1, `<variant>/run.json` `credentials._comment` |
+| The two credentials a round withholds | The bundle `README.md` §*Access credentials*, `CASE-EVIDENCE.md` §3, and the marker at each site, which names the test-data key or the scope and the SHA-256 |
+| That the authorization server is not the SUT | `connect/run.json` `authorizationServer`, and the bundle `README.md` |
+| Which archive measured a given case | `<variant>/run.json` `scopePartition`, the merged level's `measurements[]`, and `measuredIn` on every case record |
+| Which certificates the round used | `provenance/tiger-TLS.txt` |
+| Which tokens the round presented | `provenance/tiger-TOKENS.txt` — scope, issuer, audience, lifetime and SHA-256 per token, no values |
 | Not the official scope | `results.md` §1 as a block quote, `run.json` `conformanceScope: false`, and a warning on the terminal |
 | A seeded resource failed `$validate` | `results.md` §1 as a block quote, `run.json` `seed.validationErrors` |
 | The run was incomplete | `results.md` §7 anomalies, `GAP-ANALYSIS.md` §2 as a block quote |

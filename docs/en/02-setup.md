@@ -145,7 +145,7 @@ That makes three uids to keep straight, none of them chosen by this project:
 | uid | Who | What it constrains |
 |---|---|---|
 | **51773** | `irisowner` in the IRIS image | `secrets/iris.key`, `run/iris-state/` |
-| **100** | `tiger-testsuite` in the suite image | `run/tiger/*.yaml`, which is why they are 0644 ([08-known-limitations.md](08-known-limitations.md#credential-documentation)) |
+| **100** | `tiger-testsuite` in the suite image | `run/tiger/*.yaml`, which is why they are 0644 ([09-known-limitations.md](09-known-limitations.md#credential-documentation)) |
 | **1000** | the host operator running `make` | Everything as created before the two fixes above |
 
 `make all` is `preflight → resolve → packages → up → seed → test → report`, and the
@@ -245,7 +245,7 @@ access to it is controlled physically and at the network perimeter, not by these
 values, which are kept in place — never empty, never absent — only so the SUT
 stays a faithful stand-in for a production deployment. The one rule that does
 apply: **none of it reaches source control**, and `make check` verifies that
-mechanically. See [08-known-limitations.md](08-known-limitations.md#credential-documentation)
+mechanically. See [09-known-limitations.md](09-known-limitations.md#credential-documentation)
 for this stated as a deviation.
 
 ```sh
@@ -383,6 +383,6 @@ tester verifying a result should not lose the credentials that produced it.
 | Endpoints answer 404 | Two very different causes, and the status code cannot tell them apart: the path really is absent, **or** the credential never arrived — these endpoints refuse an unauthenticated request with 404 rather than 401. Check the credential first with `make credentials` and `make status` (which prints the credential it used next to the code it got), then `make logs`; the security step is the last thing the bootstrap does. Full account in [03-sut-iris.md](03-sut-iris.md#it-is-refused-with-404-not-401) |
 | Management Portal demands a password change | The bootstrap's security step did not complete. The official image ships its predefined accounts with expired passwords; step 4 of `EnsureSecurity()` is what fixes that |
 | `make seed` reports test-data defects | Our data, not IRIS. `run/seed/SEED.txt` names each resource and the validator's issue. Nothing proceeds until it is fixed, deliberately |
-| No report archive after a run | `reports/<run-id>/<stufe>/run.log`. Maven assembles the archives in `post-integration-test`; a run killed part-way produces no archive at all, not a partial one |
+| No report archive after a run | `reports/<run-id>/<variant>/run.log`. Maven assembles the archives in `post-integration-test`; a run killed part-way produces no archive at all, not a partial one |
 | A Stufe 5 run slows to a crawl, or times out, while looking healthy | `grep OutOfMemoryError reports/<run-id>/stufe5/run.log`. The scenario JVM ran out of heap, Tiger's Rbel parser threads died, and each remaining scenario now burns a 100-second parse timeout — at 0.3% CPU, so it reads as a hang. Re-run just that level with more heap against the same round: `TESTSUITE_HEAP_MAX=32g make test-stufe5 RUN_ID=<round>`, then `make report RUN_ID=<round>`. Full account in [06-execution.md](06-execution.md#re-running-one-level-with-more-heap) |
 | A citation in `results.md` does not resolve | `70-collect-report.sh` checks every cited path and warns; re-run `make report` for the round |

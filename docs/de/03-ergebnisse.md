@@ -4,7 +4,7 @@
 
 | Dokument | Erzeugt von | Adressat | Status |
 |---|---|---|---|
-| `<stufe>/official/test-report.zip` | der offiziellen ISiK-Testsuite selbst | Gematik / TITUS | **maßgeblich** |
+| `<variant>/official/test-report.zip` | der offiziellen ISiK-Testsuite selbst | Gematik / TITUS | **maßgeblich** |
 | `analysis/results.md` | diesem Projekt, zitierend | prüfende Stelle | abgeleitet |
 | `GAP-ANALYSIS.md` | diesem Projekt, auslegend | Produktentwicklung InterSystems | abgeleitet, englischsprachig, **keine regulatorische Dokumentation** |
 | `CASE-EVIDENCE.md` | diesem Projekt, zitierend | Produktentwicklung InterSystems | abgeleitet, englischsprachig, Anhang zur Lückenanalyse, **keine regulatorische Dokumentation** |
@@ -36,6 +36,7 @@ reports/<run-id>/
   stufe3/official/extracted/…            der wörtliche Auszug beider Archive
   stufe3/run.json, run.log
   stufe5/…
+  connect/…                              nur bei CONNECT_ENABLE=true, siehe unten
   provenance/                            alles, was das Ergebnis erklärt
 ```
 
@@ -64,6 +65,45 @@ Konfigurationsdatei dieser Stufe. Sie enthält das Zugangsdatum der API — absi
 siehe unten. `provenance/tiger-RENDERED.txt` führt je erzeugte Datei ihren SHA-256,
 so dass die Konfiguration im Archiv gegen die von diesem Projekt erzeugte
 abgeglichen werden kann.
+
+### Ein Verzeichnis je Lauf, nicht je Stufe
+
+Jeder Containerstart der Testsuite legt sein eigenes Verzeichnis an, benannt nach dem
+Lauf und nicht nach der Stufe: `stufe3/`, `stufe5/` und — nur bei
+`CONNECT_ENABLE=true` — `connect/`. Jedes Verzeichnis enthält genau das, was *dieser*
+Lauf gemessen hat, und `run.json` jedes Verzeichnisses nennt im Feld `scopePartition`,
+welchen Teil des Umfangs der Lauf abgedeckt hat:
+
+| Wert | Bedeutung |
+|---|---|
+| `complete` | der vollständige offizielle Umfang der Stufe. **Dies ist das Einreichungsartefakt** |
+| `connect-only` | ausschließlich das Modul `Connect`, mit echten Zugriffstoken |
+| `without-connect` | der Umfang der Stufe ohne das Modul `Connect` |
+| `narrowed` | ein auf andere Weise eingeschränkter Umfang; keine Konformitätsaussage |
+
+**Die Ablösungsregel.** Liegen für dieselbe Stufe eine vollständige Messung und eine
+Messung desselben Moduls unter besseren Voraussetzungen vor, so führt das
+Ergebnisdokument je Prüffall **das Ergebnis des Laufs, der ihn tatsächlich unter
+diesen Voraussetzungen gemessen hat**, und nennt in jedem Falldatensatz im Feld
+`measuredIn` das Verzeichnis dieses Laufs. Die Gesamtzahlen werden danach **neu
+gezählt** und sind nie eine Summe über zwei Messungen desselben Falls; die Liste
+`measurements[]` bleibt dagegen ungemischt und führt jede Messung einzeln. Der
+zusammengeführte Datensatz weist dies in seiner eigenen Umfangsangabe aus, im Falle
+des Moduls `Connect` als `complete+connect-superseded`.
+
+**Die Ablösung ändert das eingereichte Archiv nicht.** `stufe5/official/test-report.zip`
+bleibt byte-identisch das Archiv des vollständigen Laufs, und das ist genau das
+Archiv, in dem die 32 Prüffälle des Moduls `Connect` **ohne** Zugriffstoken gemessen
+wurden. Die Ablösung ist eine Aussage des abgeleiteten Ergebnisdokuments darüber,
+welcher Lauf welchen Fall gemessen hat — keine Bearbeitung eines Archivs und keine
+zweite Einreichung. Sie ist an vier Stellen des Datensatzes nachzulesen:
+
+| Stelle | Aussage |
+|---|---|
+| die zusammengeführte Stufe in `results.json` | `scopePartition: complete+connect-superseded`, mit aus der wirksamen Fallmenge neu gezählten Gesamtzahlen |
+| `measurements[]` derselben Stufe | die Zahlen jedes Archivs einzeln und ungemischt, so dass beide Messungen weiterhin getrennt lesbar sind |
+| jeder Falldatensatz | `measuredIn`, das Archiv, das diesen Fall gemessen hat |
+| `CASE-EVIDENCE.md` | liest den Austausch jedes Falls aus dem Archiv, das sein `measuredIn` benennt — weshalb eine Klausel des Moduls `Connect` eine Anfrage mit Bearer Token wiedergibt, eine Klausel des Moduls `Basis` dagegen eine mit dem Basic-Zugangsdatum der Route |
 
 ## Wie ein Ergebnis zu lesen ist
 
@@ -193,10 +233,10 @@ offiziellen Bericht, aus der sie stammt.**
 
 Je Testfall werden zwei Zitatziele geführt, sofern beide existieren:
 
-* `<stufe>/official/extracted/test-report/unresolvedReports/<name>.json` — **im
+* `<variant>/official/extracted/test-report/unresolvedReports/<name>.json` — **im
   eingereichten Archiv**, so dass eine prüfende Stelle, die nur die Einreichung
   besitzt, dem Zitat dennoch folgen kann;
-* `<stufe>/official/extracted/debug-report/serenity/<name>.html` — derselbe
+* `<variant>/official/extracted/debug-report/serenity/<name>.html` — derselbe
   Ergebnisdatensatz als lesbare Seite mit Anfrage- und Antwortinhalten.
 
 Serenity vergibt weder lesbare Dateinamen noch verzeichnet es die Zeile eines
@@ -265,7 +305,7 @@ eine neu aufgebaute Umgebung wiederholt werden kann.
 
 Abschnitt 1 des Ergebnisdokuments enthält dazu die Tabelle *Access credentials*.
 Sie führt, je gelaufener Stufe, folgende Werte auf und nennt als Quelle
-`<stufe>/run.json`, Schlüssel `credentials`:
+`<variant>/run.json`, Schlüssel `credentials`:
 
 | Zeile im Bericht | Inhalt |
 |---|---|
@@ -300,13 +340,66 @@ gewährt Zugang zu einer anderen Instanz — auch nicht zu einer neu aufgebauten
 | Ort | Inhalt |
 |---|---|
 | `analysis/results.md` Abschnitt 1 | die Tabelle *Access credentials*, in jedem archivierten Bericht |
-| `<stufe>/run.json`, Schlüssel `credentials` | die Quelle, aus der diese Tabelle gebildet wird, mit einem Kommentarfeld zur Begründung |
+| `<variant>/run.json`, Schlüssel `credentials` | die Quelle, aus der diese Tabelle gebildet wird, mit einem Kommentarfeld zur Begründung |
 | `GAP-ANALYSIS.md` | wörtliche `Authorization: Basic`-Kopfzeilen in den zitierten HTTP-Protokollen |
 | `provenance/CREDENTIALS.md` | die Zugangsdatenübersicht der Instanz, wie bei der Bereitstellung erzeugt |
 | `provenance/env.resolved.txt` | die vollständige aufgelöste Konfiguration des Durchgangs, unverändert kopiert |
 | `provenance/tiger-RENDERED.txt` | jeder eingesetzte Wert, zur Nachvollziehbarkeit der Erzeugung |
 | `debug-report.zip`, `config/tiger.yaml` | die Konfiguration, so wie die Suite sie erhalten hat |
 | `make credentials`, `make status` | die Werte der laufenden Instanz |
+
+Bei einem Durchgang mit dem Modul `Connect` treten zwei Einträge hinzu:
+
+| Ort | Inhalt |
+|---|---|
+| `run/CREDENTIALS.md`, `make credentials` | Verwaltungskonto und Clientgeheimnis des Autorisierungsservers, für die bedienende Person — **im Betriebsverzeichnis, nicht im Nachweisdatensatz** |
+| `provenance/tiger-TOKENS.txt` | je Zugriffstoken Schlüssel, Scope, Issuer, Zielgruppe, Lebensdauer und **SHA-256** — **nicht das Token** |
+
+### Die beiden Arten von Zugangsdatum, die ein Durchgang zurückhält
+
+Die obige Regel hat genau zwei Ausnahmen, und beide treten ausschließlich bei einem
+Durchgang mit dem Modul `Connect` auf:
+
+| Art | Behandlung |
+|---|---|
+| die sechs Zugriffstoken | werden in den abgeleiteten Dokumenten und Protokollen des Datensatzes **durch eine Marke ersetzt**, die den Testdatenschlüssel und die ersten 16 Zeichen des SHA-256 nennt. Damit ist belegbar, *welches* Token ein Prüfschritt vorgelegt hat, ohne es vorlegbar zu machen |
+| Clientgeheimnis und Verwaltungskennwort des Autorisierungsservers | werden **aus dem Datensatz zurückgehalten** und verbleiben ausschließlich in den Dateien des Betriebsverzeichnisses (Modus 0600), mit denen die bedienende Person arbeitet. Anders als ein Token laufen sie nicht mit dem Durchgang ab, und keines von beiden ist erforderlich, um ein Ergebnis nachzuvollziehen: eine lesende Stelle erzeugt mit `make tokens` neue Token |
+
+Der Grund für die erste Zeile ist eine Eigenschaft des Gegenstands und nicht eine
+Richtlinie: **was ein Token zu einem Token macht, ist die Zeichenkette selbst.** Ein
+Basic-Zugangsdatum verweist auf ein Konto, dessen Kennwort eine prüfende Person
+ändern kann; ein Bearer Token *ist* der Nachweis und ist bis zu seinem Ablauf von
+jedem einsetzbar, der die Zeichenkette hat. Ein Kennwort zu dokumentieren macht eine
+Messung nachvollziehbar; ein Token zu dokumentieren macht sie nicht
+nachvollziehbarer — es ist bei der Lektüre längst abgelaufen — sondern verteilt
+lediglich einen Inhabernachweis.
+
+**Erkannt wird am Gegenstand, nicht an einer Liste.** Ersetzt wird jede Zeichenkette,
+die die Form eines Zugriffstokens hat und die Angaben `iss` und `exp` führt, und nicht
+nur die sechs Werte, die der Durchgang gerade hält. Andernfalls käme ein erneut
+eingesammelter Datensatz durch, dessen Protokolle noch Token eines früheren
+Bezugs enthalten.
+
+**Die Ersetzung findet vor der Prüfsummenbildung statt**, so dass
+`analysis/MANIFEST.txt` die veröffentlichten Bytes ausweist und nicht Bytes, die
+nachträglich geändert wurden. Das Schlüsselwort des Schemas bleibt erhalten — in einem
+wiedergegebenen Austausch steht `Authorization: Bearer <redacted: … sha256:…>` und
+nicht nur die Marke — damit erkennbar bleibt, *welche* Art von Nachweis vorgelegt
+wurde.
+
+**Die unveränderten Archive unter `<variant>/official/` werden ausdrücklich nicht
+bearbeitet**, auch ihr wörtlicher Auszug nicht. Sie sind das Artefakt, auf dem das
+*Bestätigungsverfahren* beruht, ihre Prüfsummen sind die der Suite, und das
+Diagnosearchiv enthält die aufgezeichneten `Authorization`-Kopfzeilen wie gesendet.
+Sie umzuschreiben würde die zentrale Aussage des Datensatzes — dass das offizielle
+Archiv byte-identisch so vorliegt, wie die Suite es geschrieben hat — unwahr machen.
+Der Einstiegspunkt des Datensatzes hält fest, dass dieser Teilbaum die Kopfzeilen
+enthält; die Token darin sind zum Zeitpunkt der Lektüre abgelaufen.
+
+**Es wird geprüft, nicht behauptet.** Nach der Ersetzung wird der Datensatz erneut
+auf jeden zurückzuhaltenden Wert durchsucht; ein Treffer ist ein Fehlschlag der
+Erzeugung und kein Hinweis. Ausgenommen ist allein der Platzhalter der Suitevorlage
+(`SET-YOUR-TOKEN-HERE`), der kein Zugangsdatum ist.
 
 Zwei Dateien des Datensatzes enthalten bewusst **kein** Kennwort:
 
@@ -360,7 +453,7 @@ Server nicht umkonfigurieren können.
 
 Die vollständige und begründete Aufstellung dieser Festlegung als Abweichung findet
 sich unter
-[../en/08-known-limitations.md](../en/08-known-limitations.md#credential-documentation).
+[../en/09-known-limitations.md](../en/09-known-limitations.md#credential-documentation).
 
 ## Die Lückenanalyse
 
@@ -455,4 +548,4 @@ entstehenden Nachweis in
 [02-bestaetigungsverfahren.md](02-bestaetigungsverfahren.md). Die vollständige
 Aufstellung aller Abweichungen und Grenzen dieser Umgebung — auch derjenigen, die
 hier nicht wiederholt sind — findet sich in
-[../en/08-known-limitations.md](../en/08-known-limitations.md).
+[../en/09-known-limitations.md](../en/09-known-limitations.md).

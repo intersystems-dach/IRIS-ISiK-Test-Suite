@@ -27,7 +27,7 @@ nicht darauf, ein bestandenes Ergebnis zu erzeugen.
 | Speicherstrategie | `HS.FHIRServer.Storage.JsonAdvSQL.InteractionsStrategy` (Resource Repository) |
 | Endpunkt ISiK Stufe 3 | `/isik3/fhir/r4`, Namespace `ISIK3` |
 | Endpunkt ISiK Stufe 5 | `/isik5/fhir/r4`, Namespace `ISIK5` |
-| Authentifizierung | HTTP Basic |
+| Authentifizierung | HTTP Basic; für das Modul `Connect` der Stufe 5 zusätzlich OAuth 2.0 Bearer Token über TLS, siehe unten |
 
 **Beide Images werden unverändert verwendet.** Es existiert kein `Dockerfile`, kein
 abgeleitetes Image und keine gepatchte Klasse. Die FHIR-Installation erfolgt beim
@@ -77,6 +77,80 @@ die jeweils nur der eigene Paketsatz geladen wird.
 Dies ist eine technisch erzwungene Konsequenz der Spezifikation, keine
 Gestaltungsentscheidung dieses Projekts.
 
+### Modul `Connect`: Bearer Token, TLS und Autorisierungsserver
+
+Neun der zehn Module der Stufe 5 senden keine eigenen Zugangsdaten; die
+Authentifizierung gegenüber dem Prüfgegenstand erfolgt für sie durch das
+Prüfwerkzeug mittels HTTP Basic. Das zehnte Modul, `Connect`, authentifiziert
+**je Anfrage aus der Testfalldatei selbst**, mit einem OAuth-2.0-Zugriffstoken, und
+prüft, was der FHIR-Server mit dem vorgelegten Token tut. Dafür sind zwei Dinge
+erforderlich, die kein anderes Modul benötigt.
+
+**Erstens ein Autorisierungsserver — und dieser ist nicht Bestandteil des
+Prüfgegenstands.** Die Testsuite stellt diese Voraussetzung selbst fest und zieht
+die Grenze in einem Satz:
+
+> the tests make the assumption that the System-Under-Test is up and running and
+> that an Authorization Server is available. The tests do not evaluate the
+> SMART-on-FHIR Authorization Flow, instead they require the Bearer Token used
+> for sending authenticated requests to the System-Under-Test
+
+— gematik/isik-testsuite, `README`, Abschnitt *Running Tests*.
+
+Die ISiK-Spezifikation verlangt vom FHIR-Server, Token **zu konsumieren**, die an
+anderer Stelle ausgegeben wurden; die Konformitätsaussage betrifft genau dieses
+Konsumieren. Der Autorisierungsserver der Prüfumgebung ist daher Prüfmittel, so
+wie der Container des Prüfwerkzeugs selbst: Keycloak 26.4.7, ein unabhängiges,
+weit verbreitetes Open-Source-Produkt. Bewusst **kein** Produkt von InterSystems:
+IRIS for Health kann selbst als Autorisierungsserver betrieben werden, doch ein
+Prüfgegenstand, der die Token ausgibt, die er anschließend selbst validiert, würde
+die Prüfung zirkulär machen. Ein Kundensystem bringt seinen eigenen
+Identitätsanbieter mit.
+
+**Zweitens TLS.** Der FHIR-Server weigert sich produktseitig, ein Bearer Token auf
+einer Verbindung auszuwerten, die er nicht als gesichert ansieht
+(`HS.FHIRServer.RestHandler`, `PrelimTokenCheck` über `%request.Secure`). Dieses
+Verhalten ist korrekt — ein Bearer Token ist ein Inhabernachweis — und nicht
+abschaltbar. Die Prüfumgebung stellt daher echtes TLS bereit und behauptet kein
+Schema, das die Verbindung nicht hat: **in dieser Umgebung wird an keiner Stelle
+ein `X-Forwarded-Proto` gesetzt.** Die Zertifikate werden von einer rundeneigenen
+lokalen CA ausgegeben, da das isolierte Prüfnetz bewusst keinen öffentlich
+auflösbaren Namen besitzt; Fingerabdrücke, Inhaber und Gültigkeit sämtlicher
+Zertifikate werden in `provenance/tiger-TLS.txt` aufgezeichnet, private Schlüssel
+nicht.
+
+**Konfiguration des Prüfgegenstands.** Vier Schritte, sämtlich an Objekten, die
+das Produkt für genau diesen Zweck bereitstellt, und sämtlich solche, die ein
+Kunde bei der Anbindung seines FHIR-Servers an einen Identitätsanbieter ebenfalls
+ausführt: eine ausgehende TLS-Konfiguration, eine durch Discovery ermittelte
+Serverdefinition, eine Clientdefinition des Typs *Resource Server* und die
+erwartete Token-Zielgruppe nebst den ausgewiesenen SMART-Fähigkeiten des
+Endpunkts. **Es wird kein Code in den Prüfgegenstand geschrieben, kein
+Erweiterungspunkt überschrieben und kein Verhalten des FHIR-Servers verändert.**
+Tokenvalidierung, Scope-Auswertung und Filterung auf das Patientenkompartiment
+leistet ausschließlich das Produkt, im Anfragepfad, im Lieferzustand — und genau
+diese Eigenschaft macht die Messung zu einer Aussage über InterSystems IRIS for
+Health und nicht über die Prüfumgebung.
+
+**Authentifizierungsmodus des Endpunkts.** Eine Runde mit Autorisierungsserver
+belässt den Endpunkt der Stufe 5 in dem Zustand, den das Installationsprogramm des
+FHIR-Servers selbst herstellt (`AutheEnabled` 8288, keine Ressource an der
+Webanwendung), statt ihn auf Passwortauthentifizierung einzuschränken. Dies ist
+**keine Lockerung zugunsten eines Prüfergebnisses**, sondern der Zustand, den ein
+Bearer Token voraussetzt: eine Anfrage, die ausschließlich ein Token trägt, legt
+keine IRIS-Zugangsdaten vor und kann eine passwortgeschützte Anwendung nicht
+passieren. Dass 8288 und eine leere Ressource die Wahl des Installationsprogramms
+und nicht dieser Umgebung sind, wurde durch Messung festgestellt; unauthentifizierte
+Zugriffe werden gleichwohl abgewiesen, bei zugeordnetem OAuth-Client durch den
+FHIR-Server selbst mit 401. Die technische Darstellung einschließlich der Messung
+steht in [../en/08-connect.md](../en/08-connect.md).
+
+**Diese Konfiguration ist nicht voreingestellt.** `CONNECT_ENABLE=false` ist der
+Vorgabewert; eine Runde ohne diesen Schalter stellt nichts davon bereit, und das
+Modul `Connect` wird dann als wegen einer fehlenden Umgebungsvoraussetzung nicht
+durchgeführt berichtet. Welche der beiden Konfigurationen eine Runde verwendet hat,
+steht in deren eigenem Nachweisdatensatz.
+
 ### Nachweis der Identität des Prüfgegenstands
 
 Drei voneinander unabhängige Angaben werden aufgezeichnet und in jeden
@@ -84,7 +158,7 @@ Nachweisdatensatz kopiert:
 
 | Angabe | Ort im Nachweisdatensatz |
 |---|---|
-| Image-Tag | `provenance/env.resolved.txt`, `<stufe>/run.json` |
+| Image-Tag | `provenance/env.resolved.txt`, `<variant>/run.json` |
 | Registry-Digest (`sha256:…`) | ebenda — maßgeblich, denn ein Tag kann verschoben werden, ein Digest nicht |
 | Registry-Digest des Web Gateway | ebenda, als `WEBGATEWAY_IMAGE_DIGEST` — mit demselben Gewicht aufgezeichnet, da das Gateway Bestandteil des Prüfgegenstands ist |
 | Build-Kennung der Instanz (`$ZV`) | `provenance/iris-provenance.json`, von der Instanz selbst geschrieben |
@@ -154,6 +228,16 @@ Die ersten beiden Container bilden gemeinsam den Prüfgegenstand; der Grund ist 
 Abschnitt [Der Prüfgegenstand besteht aus zwei
 Containern](#der-prüfgegenstand-besteht-aus-zwei-containern) dargelegt.
 
+Bei `CONNECT_ENABLE=true` tritt ein vierter Container hinzu:
+
+| Komponente | Adresse | Rolle |
+|---|---|---|
+| `isik-authserver` | 172.31.0.40, Name `isik-as` | Autorisierungsserver (Keycloak) — **Prüfmittel, nicht Prüfgegenstand** |
+
+Hinzu tritt außerdem eine zweite, TLS-tragende Zugangsadresse desselben
+Web-Gateway-Containers. Es entsteht **keine zweite Instanz des Prüfgegenstands**:
+dieselbe Webanwendung, dieselben Daten, ein zweiter Zugangsweg.
+
 Die Adressen sind statisch vergeben. Das ist kein Selbstzweck: dieselbe
 Zeichenkette erscheint in der Tiger-Konfiguration, im Protokoll der Testdatenladung,
 in den im Fehlerbericht zitierten HTTP-Anfragen und in einer etwaigen Firewall-Regel
@@ -181,6 +265,14 @@ Firewall-Regeln ist eine Entscheidung auf Host-Ebene.
 Diese Ausdrücke sind die Voreinstellungen der Maven-Profile der Testsuite selbst
 und **entsprechen dem offiziellen Zertifizierungsumfang**: alle verpflichtenden
 Testfälle, keine optionalen.
+
+Der zusätzliche Lauf eines Durchgangs mit `CONNECT_ENABLE=true` verwendet
+`@Stufe5 and @Connect and (not @Optional)`. Das ist **eine Teilmenge** des
+offiziellen Umfangs der Stufe 5 und kein anderer Umfang: der Ausdruck wählt das
+Modul mit dem Tag der Suite selbst aus und behält deren `(not @Optional)` bei, so
+dass kein Fall läuft, der im vollständigen Lauf nicht ebenfalls gelaufen wäre. Der
+vollständige Lauf findet unverändert statt; `scopePartition` in `run.json`
+unterscheidet die beiden (siehe [03-ergebnisse.md](03-ergebnisse.md)).
 
 Jeder andere Ausdruck kennzeichnet den Lauf automatisch als Diagnoselauf
 (`conformanceScope: false` in `run.json`), und das erzeugte Ergebnisdokument stellt
@@ -231,6 +323,15 @@ unabhängige Zählungen abgeglichen.
 | Shared | 3 / 2 | — |
 
 Alle fünf ISiK-Module werden in beiden Stufen vollständig geprüft.
+
+Die Generation 3.x der Testsuite gliedert die Stufe 5 feiner und führt neben den
+oben genannten weitere Module, darunter `Connect` mit **32 Prüffällen**. Diese 32
+Fälle sind Teil des offiziellen Umfangs der Stufe 5 und werden in jedem Durchgang
+ausgeführt — `@Connect` trägt kein `@Optional`. Ohne Autorisierungsserver legen sie
+dabei kein Zugriffstoken vor; welche Folge das hat und wie ein Durchgang sie
+zusätzlich mit Token messen kann, steht in
+[02-bestaetigungsverfahren.md](02-bestaetigungsverfahren.md) und
+[03-ergebnisse.md](03-ergebnisse.md).
 
 ## Geladene FHIR-Pakete
 
@@ -307,7 +408,7 @@ referenzieren, ihre eigenen Vertragsdateien aber nicht definieren
 
 | Dokument | Adressat | Status |
 |---|---|---|
-| `<stufe>/official/test-report.zip` | Gematik / TITUS | **maßgeblich** — Artefakt des Bestätigungsverfahrens |
+| `<variant>/official/test-report.zip` | Gematik / TITUS | **maßgeblich** — Artefakt des Bestätigungsverfahrens |
 | `analysis/results.md` | prüfende Stelle | abgeleitet; jede Aussage zitiert die belegende Datei im offiziellen Bericht |
 | `GAP-ANALYSIS.md` | Produktentwicklung InterSystems | abgeleitet und auslegend, englischsprachig; **keine regulatorische Dokumentation** |
 | `CASE-EVIDENCE.md` | Produktentwicklung InterSystems | abgeleitet, englischsprachig; Anhang der Lückenanalyse mit einer Klausel je fehlgeschlagenem Fall; **keine regulatorische Dokumentation** |

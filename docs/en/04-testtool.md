@@ -136,15 +136,35 @@ value containing spaces or parentheses keeps its quotes.
 ## Configuration
 
 The suite is configured entirely through its Tiger YAML. This project renders it
-from two annotated templates:
+from annotated templates, one set per suite generation, selected by
+`suite_tiger_dir()` in [scripts/lib.sh](../../scripts/lib.sh) from the pinned
+`TESTSUITE_VERSION`:
 
-* [tiger/tiger-isik-stufe3.yaml.tmpl](../../tiger/tiger-isik-stufe3.yaml.tmpl)
-* [tiger/tiger-isik-stufe5.yaml.tmpl](../../tiger/tiger-isik-stufe5.yaml.tmpl)
+| Generation | Templates | Levels |
+|---|---|---|
+| 2.x | [tiger/tiger-isik-stufe3.yaml.tmpl](../../tiger/tiger-isik-stufe3.yaml.tmpl), [tiger/tiger-isik-stufe5.yaml.tmpl](../../tiger/tiger-isik-stufe5.yaml.tmpl) | Stufe 3 and Stufe 5 |
+| 3.x | [tiger/v3/tiger-isik-stufe5.yaml.tmpl](../../tiger/v3/tiger-isik-stufe5.yaml.tmpl), [tiger/v3/tiger-isik-stufe5-connect.yaml.tmpl](../../tiger/v3/tiger-isik-stufe5-connect.yaml.tmpl) | Stufe 5 only — release 3.0.0 removed ISiK Level 3 |
 
-Each is derived from the official `tiger-isik-stufeN.yaml` shipped in 2.7.0 —
-which `make packages` extracts to `vendor/upstream/` — and **every change from
+Each is derived from the official `tiger-isik-stufeN.yaml` shipped in that release
+— which `make packages` extracts to `vendor/upstream/` — and **every change from
 upstream is annotated `[DEVIATION]`**, so an inspector can diff the two files and
-see exactly what was changed and why.
+see exactly what was changed and why. The Connect template is derived in turn from
+the Stufe 5 one beside it, and its own additional changes are annotated
+`[DEVIATION-CONNECT]` so the two layers stay distinguishable. It is rendered only
+when `CONNECT_ENABLE=true`; see [08-connect.md](08-connect.md).
+
+The table of deviations below enumerates the 2.x set, and the rationale for each
+is not restated in the 3.x templates. Two of the eight rows are **not** deviations
+under 3.x, because upstream changed: 3.0.9 ships `servers.fhirserver.source` as a
+placeholder to be filled in rather than a literal, and it ships `proxyRoutes`
+*active*, with the same instruction, pointing at `http://localhost:8080/fhir`. The
+3.x templates carry six annotated deviations each; the Connect one adds its own,
+described in [08-connect.md](08-connect.md#why-connect-is-a-separate-invocation).
+
+Two further differences under 3.x are shape changes forced by upstream and not
+deviations at all: nine test-data files rather than five, and per-module
+`baseKey`s (`${basis.patient-read-id}`) rather than one shared `data`
+([05-testdata.md](05-testdata.md)).
 
 `30-render-config.sh` substitutes the `@@PLACEHOLDER@@` tokens in Python rather
 than with `sed`: the password is generated and could contain a character `sed`
@@ -162,7 +182,7 @@ configuration with a Spring stack trace that never names the offending line.
 | `servers.fhirserver.source` | placeholder | `http://172.31.0.30:80/isik<N>/fhir/r4` | The SUT, by its static subnet address. `.30` is the **Web Gateway**, not IRIS at `.10`: the IRIS images serve no HTTP at all, so the gateway is the SUT's HTTP surface ([01-architecture.md](01-architecture.md#the-sut-is-two-containers)). A literal IP rather than a container name, so the same string appears here, in the seed log, in the gap report's quoted requests and in any host firewall rule |
 | `healthcheckUrl` + `startupTimeoutSec: 60` | absent | present | For `type: externalUrl` Tiger starts nothing; with no healthcheck it simply waits out the startup timeout and proceeds. That would turn "IRIS is unreachable" into 506 (Stufe 3) or 895 (Stufe 5) failing test cases indistinguishable from a total conformance collapse. Any HTTP answer counts as healthy, and Tiger probes without the route's credential, so what it sees is the endpoint's unauthenticated answer — **404, not 401** ([03-sut-iris.md](03-sut-iris.md#security)). Still sufficient, and cheap: only something answering HTTP at that address can produce it |
 | `tigerProxy.proxyRoutes` | shipped commented out | active | Upstream's own instruction is to activate it "if the SUT endpoint contains a URL path". Ours does (`/isik3/fhir/r4`). The feature files address `http://fhirserver/<Resource>/<id>`; without the route the path prefix is lost and every request 404s |
-| `proxyRoutes[].authentication` | absent | Basic, the API user | The IRIS endpoint requires authentication ([03-sut-iris.md](03-sut-iris.md#security)). Attached on the *route* rather than in each step, so **the official feature files stay byte-identical** — a modified feature file would invalidate the run |
+| `proxyRoutes[].authentication` | absent | Basic, the API user | The IRIS endpoint requires authentication ([03-sut-iris.md](03-sut-iris.md#security)). Attached on the *route* rather than in each step, so **the official feature files stay byte-identical** — a modified feature file would invalidate the run. The block **replaces** any `Authorization` header a feature file sets for itself, which is a property of Tiger and not a configuration choice: see [08-connect.md](08-connect.md#why-connect-is-a-separate-invocation) for the measurement and for the one module that therefore cannot use this file |
 | `lib.workflowUiPort` | `9012` | `9010` | Upstream sets 9012 here while its own README and `dc-testsuite.yml` publish 9010. Pinned to the published port so the bound port and the forwarded port cannot disagree |
 | `lib.runTestsOnStart` | `true` | `true`, or `false` for `MODE=manual` | The manual variants are rendered into `run/tiger/manual/` as *separate files*, mounted only by the `manual` compose profile, so an unattended run cannot pick up a non-auto-running configuration by accident — and `90-manual.sh` greps the file it is about to mount to confirm it really is the non-auto-running one |
 | `lib.activateWorkflowUi` | `true` | **`false`** for an unattended run, `true` for `MODE=manual` | Not a preference — a run-breaker. With the UI active, `TigerDirector` logs `Waiting 120 seconds for workflow Ui to fetch status...` and, when no browser attaches inside that window, aborts the entire run with `[ERROR] No feedback from workflow Ui, aborting!` **before executing a single scenario**. A detached container on a remote host has no browser, so the level ends after ~2 minutes with `Tests run: 0`. Upstream's own README prescribes the same remedy for CI. Nothing is lost: the request and response bodies the gap analysis quotes come from the Serenity report inside `debug-report.zip`, which Maven assembles either way. Rendered as the negation of `runTestsOnStart`, and `make check` asserts both the derivation and the rendered boolean |
@@ -201,7 +221,7 @@ gitignored, `make check` verifies that mechanically, and the credential it
 carries is published in the reports on purpose — including in the debug archive's
 own `config/tiger.yaml`, which *is* this rendered file as the suite received it.
 See
-[08-known-limitations.md](08-known-limitations.md#credential-documentation).
+[09-known-limitations.md](09-known-limitations.md#credential-documentation).
 
 ## How the suite reaches the SUT
 
@@ -223,6 +243,25 @@ request in the round crosses the Web Gateway — which is why the gateway's imag
 digest is recorded with the SUT's and why an unhealthy gateway presents as an
 unhealthy SUT. See
 [01-architecture.md](01-architecture.md#the-sut-is-two-containers).
+
+The `Connect` module takes a different path through the same SUT, because it
+carries its own credential and the product will not evaluate a bearer token on a
+connection it does not consider secure:
+
+```
+feature file        http://fhirserver/Patient/Patient-Read-Example
+      │             + Authorization: Bearer <token of one scope>
+      ▼
+Tiger proxy         proxyRoutes: http://fhirserver → https://isik-webgateway:443/isik5/fhir/r4
+      │             NO authentication block — the feature file's header is forwarded untouched
+      ▼
+Web Gateway         :443, TLS under the round's own CA, then as above
+   isik-webgateway
+      ▼
+IRIS endpoint       same instance, same namespace, same web application
+```
+
+Full statement in [08-connect.md](08-connect.md).
 
 Two things follow. First, the feature files are unmodified — the rewrite and the
 credential both live in configuration. Second, the Tiger proxy is what records
@@ -252,8 +291,10 @@ failures in one feature file needs to know that the wall may have one cause.
 
 ## Running it
 
-Normal path — `make test` (both levels, serialised) or `make test-stufe3` /
-`make test-stufe5`. Before a single container starts,
+Normal path — `make test` (every level the pinned suite carries, serialised, plus
+the Connect invocation if the round is configured for it) or `make test-stufe3` /
+`make test-stufe5` / `make test-connect` individually. Before a single container
+starts,
 [60-run-tests.sh](../../scripts/60-run-tests.sh) checks:
 
 * both rendered configuration files and `run/testdata` exist;
@@ -267,7 +308,7 @@ Normal path — `make test` (both levels, serialised) or `make test-stufe3` /
   endpoint until removed, and all three services share one static address.
 
 During the run the container's whole output is streamed to
-`reports/<run-id>/<stufe>/run.log` (not to the terminal: this runs for up to three
+`reports/<run-id>/<variant>/run.log` (not to the terminal: this runs for up to three
 hours, usually detached, and the file is what gets archived), with a progress line
 every two minutes carrying the log's line count and its last non-empty line — the
 only version-independent way to tell a progressing run from a hung one on a remote

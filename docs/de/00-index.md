@@ -10,6 +10,12 @@ Sprache der ISiK-Spezifikation und des *Bestätigungsverfahrens*.
 | [02-bestaetigungsverfahren.md](02-bestaetigungsverfahren.md) | Die durchgeführten Schritte, in der Reihenfolge ihrer Ausführung, mit Nachweis je Schritt |
 | [03-ergebnisse.md](03-ergebnisse.md) | Wie ein Ergebnis dieser Umgebung zu lesen ist, welche Nachweise es belegen, und die Zugangsdaten zur Umgebung |
 
+Das Modul `Connect` der Stufe 5 weist sich mit OAuth-2.0-Zugriffstoken selbst aus
+und setzt deshalb einen Autorisierungsserver und eine TLS-Verbindung voraus, die
+kein anderes Modul benötigt. Verfahren und Bewertung dazu stehen in den drei
+Dokumenten oben; die technische Darstellung in
+[../en/08-connect.md](../en/08-connect.md).
+
 **Kein Übersetzungsdokument.** Die technische Spezifikation und Beschreibung der
 Testumgebung ist englischsprachig und liegt in [`../en/`](../en/). Diese Dokumente
 sind keine Übersetzung davon, sondern behandeln das Verfahren und die Bewertung von

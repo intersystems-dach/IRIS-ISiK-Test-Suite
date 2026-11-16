@@ -307,6 +307,19 @@ if [[ -f "${RUN_DIR}/tiger/TOKENS.txt" ]]; then
     "the Connect access tokens by SHA-256, with the scope, issuer, audience and lifetime of each" \
     "scripts/lib/connect_tokens.py"
 fi
+# The certificate inventory of a Connect round. A round in this configuration
+# addresses the SUT over TLS under a certificate issued by its own local CA, and
+# "which certificates did this round use" is then a question about the round that
+# only this file answers - run/tls/ holds the keys and is deleted by `make
+# clean`, so a bundle that did not carry the inventory could not answer it later.
+# Fingerprints and subjects only; no private key is copied, here or anywhere.
+# Guarded for the same reason as TOKENS.txt above: absent in a round without the
+# authorization server, where the absence is the normal state.
+if [[ -f "${RUN_DIR}/tls/TLS.txt" ]]; then
+  copy_prov "${RUN_DIR}/tls/TLS.txt" "tiger-TLS.txt" \
+    "the CA and server certificates this round issued, with the fingerprint and subject of each" \
+    "scripts/22-make-tls.sh"
+fi
 
 copy_prov "${PACKAGES_DIR}/MANIFEST.txt" "packages/MANIFEST.txt" \
   "every FHIR package loaded into the SUT, with its tarball sha256" \
@@ -694,6 +707,7 @@ official report is correct.
 | \`<variant>/run.log\` | the test suite container's complete output, with a Connect round's bearer tokens replaced by their SHA-256 |
 | \`provenance/CREDENTIALS.md\` | the credentials this round used, as generated at deployment |
 | \`provenance/tiger-TOKENS.txt\` | a Connect round's access tokens by SHA-256, with each one's scope, issuer, audience and lifetime |
+| \`provenance/tiger-TLS.txt\` | a Connect round's CA and server certificates, with the fingerprint, subject and validity of each; no private key |
 | \`provenance/rig-version.txt\` | the version and revision of the test rig that produced this bundle |
 | \`provenance/\` | seed records, the SUT's own install record, package manifest, resolved versions |
 

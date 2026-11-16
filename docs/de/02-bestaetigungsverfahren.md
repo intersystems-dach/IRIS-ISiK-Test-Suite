@@ -17,6 +17,9 @@ make preflight  →  resolve  →  packages  →  up  →  seed  →  test  → 
                                                             │
                                                  test-stufe3, danach
                                                  test-stufe5 — nacheinander
+                                                            │
+                                                 nur bei CONNECT_ENABLE=true:
+                                                 danach tokens, dann test-connect
 ```
 
 `make all` führt die Kette vollständig aus. Den größten Anteil der Laufzeit haben
@@ -31,6 +34,16 @@ ist I/O-gebunden, weshalb das Zeitlimit der Inbetriebnahme bewusst großzügig a
 Containerstart genau ein Maven-Profil aus und leert zu Beginn jedes Laufs sein
 Berichtsverzeichnis. Die Berichte einer Stufe werden daher aus dem Container
 herausgeholt, bevor die nächste Stufe starten darf.
+
+Ist `CONNECT_ENABLE=true` gesetzt, tritt **ein weiterer Containerstart hinzu** —
+hinzugefügt, nicht ersetzend: der offizielle Lauf der Stufe 5 findet unverändert und
+in vollem Umfang statt, und erst danach läuft das Modul `Connect` ein zweites Mal,
+mit echten Zugriffstoken und über die TLS-Adresse. Begründung dafür, warum dies
+nicht in einem Lauf möglich ist, in
+[../en/08-connect.md](../en/08-connect.md#why-connect-is-a-separate-invocation);
+die Voraussetzungen des Moduls in [01-uebersicht.md](01-uebersicht.md). Die
+Voreinstellung ist `false`; eine Runde ohne diesen Schalter führt diesen Schritt
+nicht aus und erzeugt kein zusätzliches Archiv.
 
 ## Kennung des Durchgangs
 
@@ -196,7 +209,7 @@ abbrechend, weil ihr Fehlschlag sonst nicht als Fehler, sondern als *plausibel
 aussehender falscher Bericht* auftritt.
 
 Während des Laufs wird die vollständige Ausgabe des Containers nach
-`reports/<run-id>/<stufe>/run.log` geschrieben. `TESTSUITE_TIMEOUT` (Voreinstellung
+`reports/<run-id>/<variant>/run.log` geschrieben. `TESTSUITE_TIMEOUT` (Voreinstellung
 10800 s = 3 h) ist die Obergrenze je Stufe.
 
 Auf dem Labor-Host gemessen (8 vCPU, 31 GiB): Stufe 3 **1250 s** (20 min 50 s, 506
@@ -223,15 +236,58 @@ die Anfrage- und Antwortinhalte.
 
 | Datei | Inhalt |
 |---|---|
-| `<stufe>/official/test-report.zip` | das offizielle Berichtsarchiv, unverändert — **maßgeblich** |
-| `<stufe>/official/debug-report.zip` | das Diagnosearchiv der Suite, unverändert |
-| `<stufe>/official/SHA256SUMS` | SHA-256 über die Archive, wie empfangen |
-| `<stufe>/run.log` | die vollständige Ausgabe des Containers |
-| `<stufe>/run.json` | was gelaufen ist: Kennung, Profil, Tag-Ausdruck, ob offizieller Umfang, Zeiten, Prüfgegenstand mit Digest und `$ZV`, Prüfwerkzeug mit Digest, Bereitstellungsentscheidungen, **Zugangsdaten**, Zusammenfassung des Ladenachweises, Archive mit SHA-256 |
+| `<variant>/official/test-report.zip` | das offizielle Berichtsarchiv, unverändert — **maßgeblich** |
+| `<variant>/official/debug-report.zip` | das Diagnosearchiv der Suite, unverändert |
+| `<variant>/official/SHA256SUMS` | SHA-256 über die Archive, wie empfangen |
+| `<variant>/run.log` | die vollständige Ausgabe des Containers |
+| `<variant>/run.json` | was gelaufen ist: Kennung, Profil, Tag-Ausdruck, ob offizieller Umfang, Zeiten, Prüfgegenstand mit Digest und `$ZV`, Prüfwerkzeug mit Digest, Bereitstellungsentscheidungen, **Zugangsdaten**, Zusammenfassung des Ladenachweises, Archive mit SHA-256 |
 
 `run.json` wird auch dann geschrieben, wenn der Lauf kein Archiv erzeugt hat: ein
 Lauf ohne Ergebnis ist selbst eine Tatsache, über die der Durchgang Rechenschaft
 ablegen muss.
+
+### Schritt 6b — das Modul `Connect` (`make test-connect`, nur bei `CONNECT_ENABLE=true`)
+
+Dieser Schritt ist **zusätzlich** und findet nach dem vollständigen Lauf der Stufe 5
+statt. Er führt denselben Tag-Ausdruck wie die Stufe 5 aus, auf das Modul `Connect`
+eingeschränkt, gegen dieselbe Instanz desselben Prüfgegenstands, mit demselben
+`RUN_ID` und mit demselben Testdatenbestand — der einzige Unterschied liegt darin,
+wie sich die Anfragen ausweisen und über welche Adresse sie den Prüfgegenstand
+erreichen.
+
+Das Modul `Connect` existiert **nur in der Generation 3.x der Testsuite**. Ist
+`CONNECT_ENABLE=true` gesetzt, während die festgelegte Version keine Stufe 5 trägt,
+bricht die Konfigurationserzeugung mit einer Begründung ab, anstatt eine Runde ohne
+diesen Lauf zu erzeugen.
+
+`make test-connect` ruft zuvor `make tokens` auf. Die Token werden damit **so spät
+wie möglich** bezogen: ihre Lebensdauer beträgt eine Stunde, das Laden der Testdaten
+dauert Minuten. **Unmittelbar vor dem Lauf** wird geprüft: die TLS-Adresse des
+Prüfgegenstands antwortet und ihr Zertifikat ist der Runde zuordenbar, der Issuer des
+Autorisierungsservers stimmt mit dem überein, den der Prüfgegenstand ermittelt hat,
+und jedes hinterlegte Token ist noch mindestens 600 Sekunden gültig
+(`CONNECT_TOKEN_MIN_REMAINING`). Jede dieser Bedingungen ist abbrechend: ein
+abgelaufenes oder nicht hinterlegtes Token erzeugte andernfalls eine Reihe von
+Abweisungen, die wie eine Autorisierungslücke des Prüfgegenstands aussähe.
+
+**Nachweis, zusätzlich zu den oben aufgeführten Dateien je Lauf:**
+
+| Datei | Inhalt |
+|---|---|
+| `connect/official/test-report.zip` | das Berichtsarchiv dieses Laufs, unverändert — Nachweis für das Modul `Connect`, **nicht** das Einreichungsartefakt |
+| `connect/run.json` | zusätzlich zu den Feldern eines jeden Laufs: `scopePartition: connect-only` und ein Abschnitt `authorizationServer` mit Image, Image-Digest, Issuer, Zielgruppe, Verfahren (`client_credentials`) und dem Verweis auf den Tokennachweis |
+| `provenance/tiger-TOKENS.txt` | je Token Schlüssel, Scope und **SHA-256** nebst Ausgabeparametern. Die Token selbst werden nicht aufgezeichnet |
+| `provenance/tiger-TLS.txt` | Inhaber, Issuer, Seriennummer, Gültigkeit, Fingerabdruck und SAN jedes von der Runde ausgegebenen Zertifikats. Private Schlüssel werden nicht aufgezeichnet |
+
+**Eingereicht wird weiterhin ausschließlich `stufe5/official/test-report.zip`.** Die
+Testsuite benennt in ihrer eigenen README genau ein Artefakt
+(`target/test-report.zip`) als das Ergebnis eines Laufs; ein Lauf, der nur ein Modul
+ausführt, ist dieses Artefakt nicht, und zwei Archive sind keine Einreichung. Das
+Archiv `connect/` ist **Nachweis für eine lesende Stelle**: es belegt, was derselbe
+Prüfgegenstand tut, wenn dem Modul `Connect` die von ihm vorausgesetzte
+Umgebungsvoraussetzung tatsächlich zur Verfügung steht. Wie der Nachweisdatensatz
+beide Läufe zueinander in Beziehung setzt, steht in
+[03-ergebnisse.md](03-ergebnisse.md).
 
 ## Schritt 7 — Nachweisdatensatz und Bewertung (`make report`)
 
@@ -355,7 +411,7 @@ Zeile macht ihren Beleg falsch.
 ## Abweichungen von einer Produktivumgebung
 
 Vollständig aufgeführt und begründet in
-[../en/08-known-limitations.md](../en/08-known-limitations.md). Für die Bewertung
+[../en/09-known-limitations.md](../en/09-known-limitations.md). Für die Bewertung
 eines Ergebnisses sind die folgenden maßgeblich.
 
 ### Am Prüfwerkzeug
@@ -368,7 +424,7 @@ Tiger-Konfiguration und sind dort einzeln als `[DEVIATION]` gekennzeichnet:
 | Adresse des Prüfgegenstands eingesetzt | die Vorlage der Suite enthält an dieser Stelle einen Platzhalter |
 | `healthcheckUrl` mit Startzeitüberschreitung ergänzt | ohne Erreichbarkeitsprüfung wartet Tiger die Startzeit ab und beginnt dennoch; "IRIS nicht erreichbar" erschiene damit als 1401 fehlgeschlagene Prüfschritte |
 | `tigerProxy.proxyRoutes` aktiviert | von der Suite selbst so vorgesehen, wenn die Adresse des Prüfgegenstands einen Pfadanteil enthält — hier `/isik3/fhir/r4` |
-| Basic-Authentifizierung an der Route | der IRIS-Endpunkt verlangt Authentifizierung. An der *Route* und nicht in den Schritten, damit **die Feature-Dateien byte-identisch bleiben** |
+| Basic-Authentifizierung an der Route | der IRIS-Endpunkt verlangt Authentifizierung. An der *Route* und nicht in den Schritten, damit **die Feature-Dateien byte-identisch bleiben**. Der Block **ersetzt** jeden `Authorization`-Kopf, den eine Feature-Datei selbst setzt — gemessen am 13. November 2026 — weshalb das eine Modul, das sich selbst ausweist, über eine zweite Konfiguration ohne diesen Block läuft |
 | `workflowUiPort` auf den veröffentlichten Port festgelegt | die Suite setzt hier einen anderen Wert als ihre eigene Compose-Datei veröffentlicht |
 | eine zusätzliche, zuletzt geladene Testdatendatei | die oben unter Mangel 3 beschriebenen Aliase |
 
@@ -413,6 +469,34 @@ Begründung in `provenance/package-plan.json` unter `dependencyRewrites` bzw.
 `snapshotDependenciesPromoted` festgehalten und wird in Abschnitt 6 des
 Ergebnisdokuments wiedergegeben.
 
+### Zusätzliche Abweichungen eines Durchgangs mit dem Modul `Connect`
+
+Diese treten **ausschließlich** bei `CONNECT_ENABLE=true` auf und betreffen
+ausschließlich den zusätzlichen Lauf; das offizielle Archiv der Stufe 5 entsteht
+unverändert unter den oben beschriebenen Bedingungen.
+
+| Abweichung | Grund |
+|---|---|
+| ein zusätzlicher Container (Keycloak) im Prüfnetz | das Modul setzt einen Autorisierungsserver voraus und die Testsuite stellt selbst fest, dass sie keinen mitbringt. Er ist Prüfmittel und **nicht Teil des Prüfgegenstands** |
+| eine rundeneigene lokale Zertifizierungsstelle | der FHIR-Server wertet ein Bearer Token nur auf einer gesicherten Verbindung aus. Das isolierte Prüfnetz besitzt bewusst keinen öffentlich auflösbaren Namen, für den ein öffentliches Zertifikat erhältlich wäre |
+| eine zweite, TLS-tragende Adresse des Prüfgegenstands | derselbe Prüfgegenstand, dieselbe Webanwendung, dieselben Daten — eine zweite Zugangsadresse, keine zweite Instanz. **Es wird an keiner Stelle `X-Forwarded-Proto` gesetzt**, die Verbindung ist tatsächlich TLS-gesichert |
+| Authentifizierungsmodus des Endpunkts auf der Installationsvoreinstellung | eine Anfrage, die ausschließlich ein Token trägt, legt keine IRIS-Zugangsdaten vor. Die oben beschriebene Einschränkung auf Kennwortauthentifizierung ist für dieses Modul daher keine Verschärfung, sondern eine Blockade vor der Prüfung. Unauthentifizierte Zugriffe werden weiterhin abgewiesen, bei zugeordnetem OAuth-Client vom FHIR-Server selbst mit 401 |
+| eine zweite Tiger-Konfiguration ohne `authentication:`-Block | siehe die Zeile oben: ein Block an der Route ersetzte den Kopf, den die Feature-Datei setzt, und der Lauf prüfte dann nicht, was er prüfen soll |
+| Zugriffstoken in der Testdatendatei des Moduls | die Feature-Dateien lesen den Token aus dem Testdatenschlüssel, den die Suite dafür vorsieht. Die Vorlage der Suite enthält dort einen Platzhalter; eingesetzt wird je Schlüssel ein echtes, kurzlebiges Token |
+| Konfiguration des Prüfgegenstands für OAuth 2.0 | vier Schritte an Produktobjekten, die ein Kunde bei der Anbindung an einen Identitätsanbieter ebenfalls ausführt. **Kein Code im Prüfgegenstand, kein überschriebener Erweiterungspunkt, kein verändertes Verhalten des FHIR-Servers** |
+
+**Nicht konfiguriert wird `SearchFiltering`.** Die Einstellung bleibt bewusst auf der
+Installationsvoreinstellung, damit die Messung aussagt, was das Produkt im
+Lieferzustand tut. Die beiden verbleibenden Fehlschläge des Moduls werden deshalb als
+Mangel geführt und nicht durch eine Einstellung beseitigt; Einordnung in
+[03-ergebnisse.md](03-ergebnisse.md).
+
+**Große Speicherseiten (HugePages) richtet dieser Prüfstand nicht ein**, obwohl
+InterSystems sie für Produktivbetrieb empfiehlt. Das gilt für jeden Durchgang, fällt
+aber bei einem Durchgang mit dem Modul `Connect` stärker ins Gewicht, weil dieser
+zusätzlichen Arbeitsspeicher belegt (etwa 1,1 GiB, siehe
+[../en/08-connect.md](../en/08-connect.md#additional-hardware)).
+
 ### An der Dokumentation der Zugangsdaten
 
 Die Zugangsdaten dieser Umgebung werden **absichtlich** in den Berichten
@@ -433,3 +517,20 @@ dokumentiert. Begründung, Umfang und die weiterhin geltenden Regeln in
   anderes.
 * Es wird ausschließlich geprüft, was die Testsuite prüft. Konformität in Bereichen,
   die sie nicht abdeckt, ist damit weder festgestellt noch widerlegt.
+
+Für einen Durchgang mit dem Modul `Connect` treten drei weitere Einschränkungen
+hinzu:
+
+* **Der SMART-App-Launch-Ablauf wird nicht geprüft.** Die Testsuite stellt selbst
+  fest, dass sie ihn nicht bewertet, sondern ein Token voraussetzt. Es findet kein
+  Autorisierungscode-Austausch, kein App-Start und kein Einwilligungsschritt statt.
+* **Über den Identitätsanbieter eines Kunden ist nichts festgestellt.** Das Ergebnis
+  gilt für Token dieser Gestalt von diesem Server; das Token eines anderen Anbieters
+  unterscheidet sich in Angaben, Signaturverfahren und Metadaten.
+* **Das eingereichte Archiv enthält diesen Nachweis nicht.** In
+  `stufe5/official/test-report.zip` wurden die 32 Prüffälle des Moduls `Connect`
+  **ohne** Zugriffstoken gemessen. Das Archiv `connect/` ist dasjenige, das sie mit
+  Token gemessen hat, und es ist Nachweis für eine lesende Stelle und keine zweite
+  Einreichung. Dies ist die am leichtesten zu verwechselnde Aussage des Datensatzes
+  und der Grund, weshalb die Ablösungsregel maschinell festgehalten und nicht der
+  Prosa überlassen wird — siehe [03-ergebnisse.md](03-ergebnisse.md).

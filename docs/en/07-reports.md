@@ -4,7 +4,7 @@
 
 | Document | Audience | Status |
 |---|---|---|
-| `<stufe>/official/test-report.zip` | Gematik / TITUS | **Authoritative.** The *Bestätigungsverfahren* artefact. Nothing in this repository modifies it |
+| `<variant>/official/test-report.zip` | Gematik / TITUS | **Authoritative.** The *Bestätigungsverfahren* artefact. Nothing in this repository modifies it |
 | `analysis/results.md` | German regulatory inspector | Derived. A cited index into the official report; states *what* happened, never *why* |
 | `GAP-ANALYSIS.md` | IRIS for Health developer | Derived and interpretive. States *why*, in FHIR terms. Explicitly **not** regulatory documentation |
 | `CASE-EVIDENCE.md` | the same developer, at the keyboard | Derived. The annex of the document above: one clause per failing case rather than per defect, quoting the exchange verbatim |
@@ -49,6 +49,7 @@ reports/<run-id>/
   stufe3/official/extracted/debug-report/ verbatim extraction
   stufe3/run.json, run.log
   stufe5/…
+  connect/…                              a Connect round only; same shape
   provenance/                            everything needed to explain the result
 ```
 
@@ -56,6 +57,30 @@ reports/<run-id>/
 and `vendor/` is copied in, because `make clean` deletes `run/` and the next round
 regenerates `vendor/` — after which an archived report would cite files that no
 longer exist. `reports/` is never deleted by any target.
+
+### One directory per invocation, not per level
+
+`<variant>` — not `<stufe>` — is the placeholder throughout, because a round with
+`CONNECT_ENABLE=true` holds **two** Stufe 5 archives: `stufe5/`, the complete
+official scope and the submission artefact, and `connect/`, the same level's
+`Connect` module run a second time against real bearer tokens. Each `run.json`
+states which it is in `scopePartition`
+([06-execution.md](06-execution.md#the-four-scope-partitions)).
+
+For the 32 `Connect` cases the `connect/` verdicts **supersede** the complete
+run's; they are never summed, because the complete run measured those cases
+without the credential they are about. The derived documents are explicit about
+which archive each figure came from:
+
+| Where | What it says |
+|---|---|
+| the merged level in `results.json` | `scopePartition: complete+connect-superseded`, with totals recounted from the effective case set |
+| `measurements[]` on that level | each archive's own figures, unmerged, so the two can still be read separately |
+| every case record | `measuredIn`, naming the archive that measured it |
+| `CASE-EVIDENCE.md` | reads each case's exchange from the archive its `measuredIn` names — which is why a `Connect` clause quotes a request carrying a bearer token while a `Basis` clause quotes one carrying the route's Basic credential |
+
+The full statement, including why the official run is not narrowed to avoid the
+duplication, is in [08-connect.md](08-connect.md#it-does-not-narrow-the-official-run).
 
 ### Extraction
 
@@ -81,7 +106,7 @@ behind from a previous suite version would be cited as evidence.
 | | `logs/` — Maven and server logs |
 
 `config/tiger.yaml` inside the debug archive is exactly
-`run/tiger/tiger-isik-<stufe>.yaml`, credential included. That is what
+`run/tiger/tiger-isik-<variant>.yaml`, credential included. That is what
 `provenance/tiger-RENDERED.txt` lets an inspector confirm: it lists each rendered
 file with its sha256, so the config in the official archive can be matched against
 the one this project generated. The configuration is deliberately not copied into
@@ -105,6 +130,8 @@ the one this project generated. The configuration is deliberately not copied int
 | `requirements.json` | Every scenario, precondition block and assertion extracted from the suite's own feature files — what makes the scope figures checkable without the suite image |
 | `rig-version.txt` | The measuring instrument: this rig's `VERSION`, the commit that ran, and whether its tracked files were modified. `unrecorded` where the deployment is not a git checkout |
 | `CREDENTIALS.md` | The credential sheet as generated at deployment |
+| `tiger-TOKENS.txt` | A `Connect` round only: each access token by SHA-256, with its scope, issuer, audience and lifetime. **No token value** — this is what the bundle carries instead, and the hash is what the redaction markers name ([08-connect.md](08-connect.md#tokens-are-credentials)) |
+| `tiger-TLS.txt` | A `Connect` round only: the CA and the two server certificates, with the fingerprint, subject, SANs and validity of each. No private key, here or anywhere in the bundle |
 
 `env.resolved.txt` is copied byte-for-byte, not filtered, and named `.txt` rather
 than `.env` so an inspector's tooling reads it instead of sourcing it. An absent
@@ -130,10 +157,10 @@ point an inspector at the requirement that was tested. Three joins bridge that:
 
 Two citation targets are recorded per case whenever both exist:
 
-* `<stufe>/official/extracted/test-report/unresolvedReports/<name>.json` — inside
+* `<variant>/official/extracted/test-report/unresolvedReports/<name>.json` — inside
   the **submitted** archive, so an inspector holding only the submission can still
   follow the citation;
-* `<stufe>/official/extracted/debug-report/serenity/<name>.html` — the same
+* `<variant>/official/extracted/debug-report/serenity/<name>.html` — the same
   outcome as a browsable page with request and response bodies.
 
 They share a base name because Serenity derives both from one `ReportNamer`. The
@@ -344,7 +371,7 @@ German specification prose.
 The HTTP exchange is quoted **verbatim, including the `Authorization: Basic …`
 header Tiger sent.** A developer has to be able to replay the exact request that
 failed without reconstructing it. See
-[08-known-limitations.md](08-known-limitations.md#credential-documentation).
+[09-known-limitations.md](09-known-limitations.md#credential-documentation).
 
 ### Attribution: how a package becomes an answer
 
@@ -680,14 +707,28 @@ Headers are reproduced as they arrived, original casing included.
 
 ### What is withheld, and what is not
 
-The `Authorization: Basic` value, and only that. This laboratory's credentials are
-generated per deployment and documented on purpose in `provenance/CREDENTIALS.md`
-and in §1 of `results.md`, so withholding them protects nothing — but this is the
-document that gets forwarded to a product organisation, and a document that travels
-should not carry a credential in copy-pasteable form. The replay commands name
-`$SUT_USER` / `$SUT_PASSWORD` instead. The suite's own unresolved placeholder token
-is **exempt** from the withholding, because for the SMART-on-FHIR cases that
-placeholder reaching the endpoint is the evidence the finding rests on.
+`Authorization` values, and only those. Two kinds appear, and they are withheld
+for different reasons:
+
+| Withheld | Reason |
+|---|---|
+| `Authorization: Basic …` | This laboratory's credentials are generated per deployment and documented on purpose in `provenance/CREDENTIALS.md` and §1 of `results.md`, so withholding them protects nothing — but this is the document that gets **forwarded to a product organisation**, and a document that travels should not carry a credential in copy-pasteable form. The replay commands name `$SUT_USER` / `$SUT_PASSWORD` instead |
+| `Authorization: Bearer …` | A `Connect` round's access tokens are a credential this rig does not publish at all ([09-known-limitations.md](09-known-limitations.md#the-two-credentials-a-round-withholds)). The marker names the test-data key the token was staged for and its SHA-256, which is the question a 401 or a 403 raises; the replay command names `$TOKEN` and says which scope to mint |
+
+**The scheme word is kept** in both cases — `Basic <withheld>`, not `<withheld>` —
+because whether a request presented a password or a token is itself part of the
+finding, and a marker that hid it would make a scope verdict unreadable.
+
+The masking happens where an entry is built, not where it is rendered, and
+`redact()` is idempotent, so the JSON and the Markdown carry the same withheld
+bytes. Both are then re-scanned by `assert_no_published_credentials()` before the
+bundle manifest is computed, so the manifest hashes the redacted bytes and the
+bundle's claim about itself is proved rather than asserted.
+
+The suite's own **unresolved placeholder** token is **exempt** from the
+withholding, because for the SMART-on-FHIR cases that placeholder reaching the
+endpoint is the evidence the finding rests on. `SET-YOUR-TOKEN-HERE` is not a
+credential; it is the absence of one, and hiding it would hide the finding.
 
 Request bodies are verbatim. Response bodies are capped (default 20 000
 characters), and a capped body records the sha256 of the *complete* body, its
