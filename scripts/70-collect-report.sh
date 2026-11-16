@@ -46,10 +46,11 @@
 # CREDENTIAL HANDLING: the credentials this round used are documented on purpose,
 # in three places at once - the "Access credentials" table in analysis/results.md,
 # provenance/CREDENTIALS.md as generated at deployment, and verbatim wherever they
-# already occur (provenance/env.resolved.txt, the Authorization headers in the gap
-# analysis, and debug-report.zip's own config/tiger.yaml, which is this project's
-# rendered run/tiger/tiger-isik-<stufe>.yaml). Nothing is filtered or re-permissioned
-# on the way in.
+# already occur (provenance/env.resolved.txt, <stufe>/run.json, and
+# debug-report.zip's own config/tiger.yaml, which is this project's rendered
+# run/tiger/tiger-isik-<stufe>.yaml). Nothing is filtered or re-permissioned on
+# the way in. CASE-EVIDENCE.md is the one derived document that withholds them,
+# for the reason its own preamble gives: it is the document that travels.
 #
 # The reason is that this is a lab environment: one round, physically protected,
 # destroyed once the results are confirmed, with credentials that are a formal
@@ -59,6 +60,26 @@
 # production-like file modes (secrets/*.password, .env.resolved and
 # run/CREDENTIALS.md are 0600) so the environment under test is not itself
 # weakened; this bundle is documentation, and is readable.
+#
+# TWO CREDENTIALS ARE WITHHELD, and they are the exception to all of the above:
+# the `Connect` module's six bearer tokens, and the authorization server's client
+# secret and admin password. The reasoning is in scripts/lib/redact_credentials.py;
+# in short, the argument that justifies publishing the rest does not reach them.
+# A token is valid for one hour, so a reader of the bundle can do nothing with it
+# but could still be handed a credential; the realm secret and the admin password
+# do not expire with the round at all, and a reader who wants to re-issue a
+# request mints a fresh token with `make tokens` instead. Both remain in the live
+# 0600 files the operator works from. What is published in their place is the
+# SHA-256 of each, in provenance/tiger-TOKENS.txt and in the redaction markers
+# themselves, which is enough to prove that a given archive and a given run used
+# the same token.
+#
+# <variant>/official/ is exempt from that withholding and stays byte-for-byte as
+# the suite wrote it, including the Authorization headers in the traffic recorded
+# in debug-report.zip. Rewriting it would make this bundle's central claim false,
+# and gematik's own instruction for the module is to put real tokens into the
+# test data - a Connect submission carries them by construction. Section 4c
+# scans the finished bundle to prove the withholding held everywhere else.
 #
 # run/tiger/*.yaml is the one exception, and not by choice: it is bind-mounted into
 # the test suite container, which runs as its own uid 100, and a bind mount carries
@@ -258,6 +279,17 @@ copy_prov "${RUN_DIR}/CREDENTIALS.md" "CREDENTIALS.md" \
 copy_prov "${RUN_DIR}/tiger/TESTDATA-PARITY.txt" "tiger-TESTDATA-PARITY.txt" \
   "line-by-line parity of the rendered test-data contract against the suite's own" \
   "scripts/30-render-config.sh"
+# The Connect round's access tokens, by SHA-256. This is what the bundle carries
+# INSTEAD of the token values - see the CREDENTIAL HANDLING note above - and it
+# is what ties a redacted exchange back to a scope: each hash here appears in
+# the redaction marker that replaced that token in <variant>/run.log. Absent in
+# a round that ran no Connect module, where its absence is the normal state and
+# not something to report, hence the guard rather than copy_prov's own warning.
+if [[ -f "${RUN_DIR}/tiger/TOKENS.txt" ]]; then
+  copy_prov "${RUN_DIR}/tiger/TOKENS.txt" "tiger-TOKENS.txt" \
+    "the Connect access tokens by SHA-256, with the scope, issuer, audience and lifetime of each" \
+    "scripts/lib/connect_tokens.py"
+fi
 
 copy_prov "${PACKAGES_DIR}/MANIFEST.txt" "packages/MANIFEST.txt" \
   "every FHIR package loaded into the SUT, with its tarball sha256" \
@@ -527,6 +559,51 @@ if (( cite_rc )); then
 fi
 
 # -----------------------------------------------------------------------------
+# 4c. The two credentials this bundle withholds
+# -----------------------------------------------------------------------------
+# Last, after everything this script writes and before the manifest: the
+# manifest must hash the bytes that are published, so a bundle redacted after it
+# was hashed would fail its own `sha256sum -c`.
+#
+# The rig publishes a round's credentials on purpose - see the CREDENTIAL
+# HANDLING note at the top of this file - and these two are the exception, for
+# reasons scripts/lib/redact_credentials.py sets out: the access tokens expire
+# an hour after the round and so are of no use to a reader, while the realm's
+# client secret and the admin password do not expire with the round at all.
+# Both remain in the live 0600 files the operator works from.
+#
+# <variant>/official/ is exempt and stays byte-for-byte as the suite wrote it.
+# The recorded traffic in debug-report.zip does contain the Authorization
+# headers; rewriting it would falsify this bundle's central claim, and the README
+# states the fact instead.
+step "Withholding the round's short-lived credentials"
+
+REDACT_EXEMPT=()
+for v in stufe3 stufe5 connect; do
+  REDACT_EXEMPT+=( --exempt "${v}/official/" )
+done
+
+# The values reach the helper through the environment, never through a command
+# line other users of the host can read.
+AS_CLIENT_SECRET="${AS_CLIENT_SECRET:-}" AS_ADMIN_PASSWORD="${AS_ADMIN_PASSWORD:-}" \
+python3 "${SCRIPTS_DIR}/lib/redact_credentials.py" rewrite "$RUN_REPORT_DIR" \
+  --connect-yaml "${RUN_DIR}/testdata/Stufe5/connect.yaml" \
+  --env-secret AS_CLIENT_SECRET --env-secret AS_ADMIN_PASSWORD \
+  "${REDACT_EXEMPT[@]}" \
+  || die "the bundle could not be redacted, and it holds credentials that must not
+  be published as they stand. Nothing has been deleted: the bundle is at
+  ${RUN_REPORT_DIR#$REPO_ROOT/} and can be re-collected once this is resolved."
+
+# Proved rather than asserted. The claim the documentation makes is that no value
+# this round generated is readable in the bundle outside the official archives;
+# this is the check that substantiates it, and it reads every file, including the
+# ones written by the analysis generator above.
+assert_no_published_credentials "$RUN_REPORT_DIR" "${REDACT_EXEMPT[@]}" \
+  || die "a credential this round generated is still readable in the bundle at
+  ${RUN_REPORT_DIR#$REPO_ROOT/}. It has not been published anywhere yet; the
+  paths are listed above."
+
+# -----------------------------------------------------------------------------
 # 5. Bundle manifest and README
 # -----------------------------------------------------------------------------
 step "5/5 Writing the bundle README and manifest"
@@ -586,8 +663,9 @@ official report is correct.
 | \`<stufe>/official/extracted/test-report/\` | verbatim extraction: \`unresolvedReports/*.json\`, \`serenity-summary.html\`, \`pom.xml\` |
 | \`<stufe>/official/extracted/debug-report/\` | verbatim extraction: the browsable Serenity report under \`serenity/\`, the Tiger config under \`config/\`, Maven and server logs under \`logs/\` |
 | \`<stufe>/run.json\` | what was run: images, digests, tag expression, timings, credentials |
-| \`<stufe>/run.log\` | the test suite container's complete output |
+| \`<stufe>/run.log\` | the test suite container's complete output, with a Connect round's bearer tokens replaced by their SHA-256 |
 | \`provenance/CREDENTIALS.md\` | the credentials this round used, as generated at deployment |
+| \`provenance/tiger-TOKENS.txt\` | a Connect round's access tokens by SHA-256, with each one's scope, issuer, audience and lifetime |
 | \`provenance/rig-version.txt\` | the version and revision of the test rig that produced this bundle |
 | \`provenance/\` | seed records, the SUT's own install record, package manifest, resolved versions |
 
@@ -607,8 +685,7 @@ archive.
 **This bundle documents the credentials the round used, deliberately.** They are
 in \`analysis/results.md\` section 1 as a table, in \`provenance/CREDENTIALS.md\`
 as generated at deployment, in \`<stufe>/run.json\` under \`credentials\`, in
-\`provenance/env.resolved.txt\`, and verbatim in the \`Authorization\` headers the
-gap analysis quotes and in the official debug archive's own
+\`provenance/env.resolved.txt\`, and verbatim in the official debug archive's own
 \`config/tiger.yaml\` (which is this project's rendered
 \`run/tiger/tiger-isik-<stufe>.yaml\`).
 
@@ -617,6 +694,22 @@ and confirm a verdict by hand. The environment was a single-round lab instance,
 physically protected, with credentials that were a formal technicality rather than
 an authentication mechanism, and it is destroyed once the results are confirmed.
 Each round generates new ones.
+
+**Two credentials are withheld**, because the argument above does not reach them.
+A \`Connect\` round's six bearer tokens are valid for one hour, so a reader of
+this bundle can do nothing with them; \`provenance/tiger-TOKENS.txt\` records
+each by SHA-256, with its scope, issuer, audience and lifetime, and that hash is
+what the redaction markers in \`<stufe>/run.log\` and \`CASE-EVIDENCE.md\` name.
+The authorization server's client secret and admin password do not expire with
+the round at all — a reader who wants a token mints a fresh one with
+\`make tokens\` — and are withheld for that reason.
+
+\`<stufe>/official/\` is exempt from that withholding and is byte-for-byte as the
+suite wrote it. The traffic recorded in \`debug-report.zip\` therefore contains
+the \`Authorization\` headers as sent, bearer tokens included: it is the artefact
+the *Bestätigungsverfahren* is based on, its checksums are the suite's own, and
+the module's documented procedure is to put real tokens into the test data. Those
+tokens were already expired when this bundle was written.
 
 ## Reproducing
 

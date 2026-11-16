@@ -84,7 +84,10 @@
 # Outputs, under reports/<run-id>/<variant>/:
 #   official/*.zip      the report archives, byte-for-byte as the suite wrote them
 #   official/SHA256SUMS the checksums an inspector re-computes
-#   run.log             the container's complete stdout/stderr, verbatim
+#   run.log             the container's complete stdout/stderr, verbatim except
+#                       for the bearer tokens of a Connect round, which are
+#                       replaced by their test-data key and SHA-256 once the run
+#                       is over (scripts/lib/redact_credentials.py says why)
 #   run.json            what was run: images + digests, tag expression, timings,
 #                       the seed record's summary, and whether the tag expression
 #                       was the official certification scope
@@ -607,6 +610,28 @@ FINISHED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 DURATION=$(( $(date +%s) - started_epoch ))
 
 # -----------------------------------------------------------------------------
+# 3c. The bearer tokens out of the container log
+# -----------------------------------------------------------------------------
+# A Connect run presents a token on every request, and Serenity logs each
+# request as a reproducible `cURL:` line - 18 of them in the first measured
+# round, each carrying a live token. Done here, as soon as the container has
+# exited and before the log is read by anything else: the run is over, so no
+# step after this one needs the value, and every later copy of the file is
+# therefore already redacted.
+#
+# The log stays the container's output otherwise. What replaces a token is the
+# test-data key it was staged for plus its SHA-256, which tells the reader of a
+# failing exchange which scope was presented - the question the exchange raises.
+if [[ "$VARIANT" == connect ]] && [[ -f "$RUN_LOG" ]]; then
+  step "Redacting the access tokens from the container log"
+  python3 "${SCRIPTS_DIR}/lib/redact_credentials.py" rewrite "$RUN_LOG" \
+    --connect-yaml "${RUN_DIR}/testdata/Stufe5/connect.yaml" \
+    || die "could not redact ${RUN_LOG#$REPO_ROOT/}, which holds this round's
+  access tokens verbatim. The run itself completed and its archives are in
+  ${OFFICIAL_DIR#$REPO_ROOT/}; the log must not be published as it stands."
+fi
+
+# -----------------------------------------------------------------------------
 # 4. Archive the report, verbatim
 # -----------------------------------------------------------------------------
 # Immediately, and before anything else runs: the next container start wipes
@@ -935,15 +960,21 @@ rec = {
     # NO CREDENTIAL APPEARS HERE, deliberately, and unlike the lab credentials
     # below: a bearer token carries the full authority of its scope until it
     # expires, and the client secret mints more of them. What identifies the
-    # tokens of this run is the SHA-256 of each one, in run/tiger/TOKENS.txt,
-    # together with the issuer, audience and grant recorded here.
+    # tokens of this run is the SHA-256 of each one, in the token record named
+    # below, together with the issuer, audience and grant recorded here.
     "authorizationServer": {
         "image": env["M_AS_IMAGE"] or None,
         "imageDigest": env["M_AS_DIGEST"] or None,
         "issuer": env["M_AS_ISSUER"] or None,
         "audience": env["M_AS_AUDIENCE"] or None,
         "grant": "client_credentials",
-        "tokenRecord": "run/tiger/TOKENS.txt",
+        # Cited at its place in the evidence bundle, not at the place it was
+        # written: run/ is deleted by `make clean`, so a record that pointed
+        # only there would decay into a dangling citation. 70-collect-report.sh
+        # copies the file to this path, and the hashes in it are what the
+        # redaction markers in run.log name.
+        "tokenRecord": "provenance/tiger-TOKENS.txt",
+        "tokenRecordWrittenTo": "run/tiger/TOKENS.txt",
     } if env["M_CONNECT"] == "true" else None,
     "packageSource": env["M_PACKAGE_SOURCE"],
     "mode": env["M_MODE"],

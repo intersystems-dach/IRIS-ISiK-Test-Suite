@@ -62,15 +62,24 @@ to every gzip-encoded response. Such a block is unhexed, split at the header
 boundary and the body inflated, so what the entry shows is what the SUT sent. The
 headers are left exactly as they arrived, including their original casing.
 
-The one thing that is withheld
-------------------------------
+What is withheld
+----------------
+Two `Authorization` values, and nothing else.
+
 The `Authorization: Basic ...` header. This laboratory's credentials are generated
 per deployment and are documented on purpose in `provenance/CREDENTIALS.md` and in
 section 1 of `analysis/results.md`, so withholding them protects nothing - but this
 document is the one that gets forwarded to a product organisation, and a document
 that travels should not carry a credential in a copy-pasteable form. The
-reproduction commands name the two environment variables instead. Nothing else is
-filtered: the request line, every other header and both bodies are verbatim.
+reproduction commands name the two environment variables instead.
+
+A `Connect` round's bearer token, wherever it occurs - including in a step
+description, which the test suite logs with the test-data value substituted, so
+even a passing step carries one. A token lives one hour; the round records each by
+SHA-256 in `provenance/tiger-TOKENS.txt`, which is what the marker points at.
+
+Nothing else is filtered: the request line, every other header and both bodies are
+verbatim.
 
 Diffing two rounds
 ------------------
@@ -120,6 +129,14 @@ GENERATOR = "gap-analysis/case_evidence.py"
 # What the entries say instead of the credential. Not a placeholder the reader has
 # to decode: the two names are the variables the reproduction commands use.
 REDACTED = "<redacted: see provenance/CREDENTIALS.md>"
+
+# A `Connect` round's bearer token is withheld differently, because it is a
+# different kind of credential and because CREDENTIALS.md does not contain it:
+# the tokens live for an hour and the round records them by SHA-256 only. The
+# reader who needs to know which token an exchange carried gets the hash from
+# the record this marker names.
+REDACTED_TOKEN = ("<redacted: a Connect access token - "
+                  "provenance/tiger-TOKENS.txt identifies it by SHA-256>")
 
 # The three reasons an entry can carry no exchange. They are constants rather than
 # literals at the point of use because section 5 counts them: two of the three are
@@ -399,11 +416,20 @@ def read_steps(subtree: list[dict]) -> dict:
     rbel: str | None = None
     failing: dict | None = None
 
+    # Every step text this document carries passes through resolved(), so the
+    # withholding happens here rather than at each of the places that render one.
+    # It matters for a `Connect` round: the step that sets the Authorization
+    # header is logged with the test-data value SUBSTITUTED, so the resolved
+    # description of a passing step carries a live bearer token - which would
+    # otherwise reach both the Markdown and the JSON form, the latter not
+    # covered by the redaction at the render sites. Masking at the source also
+    # keeps the two forms identical, which is what makes a diff of two rounds
+    # meaningful.
     def resolved(step: dict) -> str:
         rows = _report_data(step, "Tiger Resolved Step Description")
         if rows and rows[0].get("contents"):
-            return _unescape(str(rows[0]["contents"]))
-        return str(step.get("description") or "")
+            return redact(_unescape(str(rows[0]["contents"])))
+        return redact(str(step.get("description") or ""))
 
     def walk(steps) -> None:
         nonlocal request, rbel, failing
@@ -411,7 +437,8 @@ def read_steps(subtree: list[dict]) -> dict:
             if not isinstance(st, dict):
                 continue
             children = st.get("children") or []
-            curls = [str(rd.get("contents") or "") for rd in _report_data(st, "cURL")]
+            curls = [redact(str(rd.get("contents") or ""))
+                     for rd in _report_data(st, "cURL")]
             if curls:
                 # A request step, not an assertion step: only those carry a cURL.
                 request = {"resolved": resolved(st), "curl": curls[-1]}
@@ -422,7 +449,9 @@ def read_steps(subtree: list[dict]) -> dict:
                 for rd in _report_data(st, "ERROR"):
                     evaluations.append({
                         "title": str(rd.get("title") or ""),
-                        "values": str(rd.get("contents") or ""),
+                        # Masked for the same reason: a failing assertion over a
+                        # request header reports the value it saw.
+                        "values": redact(str(rd.get("contents") or "")),
                     })
                 if not children and failing is None:
                     failing = {"resolved": resolved(st),
@@ -955,14 +984,21 @@ def derivation_clause() -> list[str]:
              "much was cut and names the command that reads the rest out of the "
              "archive.")
     w.append("")
-    w.append("**One thing is withheld.** The `Authorization: Basic …` header is "
-             f"replaced by `{REDACTED}`. This laboratory's credentials are "
-             "generated per deployment and are recorded on purpose in "
-             "`provenance/CREDENTIALS.md` and in section 1 of "
-             "`analysis/results.md`, so withholding them protects nothing — but a "
-             "document that is forwarded outside the laboratory should not carry a "
-             "credential in a form that can be pasted into a shell. Nothing else "
-             "is filtered.")
+    w.append("**Two things are withheld, both of them `Authorization` values.** "
+             f"The `Authorization: Basic …` header is replaced by `{REDACTED}`. "
+             "This laboratory's credentials are generated per deployment and are "
+             "recorded on purpose in `provenance/CREDENTIALS.md` and in section 1 "
+             "of `analysis/results.md`, so withholding them protects nothing — but "
+             "a document that is forwarded outside the laboratory should not carry "
+             "a credential in a form that can be pasted into a shell.")
+    w.append("")
+    w.append("A bearer token of the `Connect` module is replaced by "
+             f"`{REDACTED_TOKEN}`, wherever it occurs: in a request header, in a "
+             "step description the test suite logged with the test-data value "
+             "substituted, and in an assertion that reported the value it saw. "
+             "Such a token is valid for one hour and is therefore of no use to a "
+             "reader of this document; which token an exchange carried is "
+             "established from the hash instead. Nothing else is filtered.")
     w.append("")
     w.append(f"One `Authorization` value is **not** withheld: the literal "
              f"`{UNRESOLVED_TOKEN}`, which is the test suite's own placeholder "
@@ -1139,8 +1175,8 @@ def token_note(e: dict, req: dict | None) -> list[str]:
     m = _SCHEME.search((req or {}).get("head") or "")
     scheme = m.group(1) if m else ""
     w = [f"The step named `Bearer {UNRESOLVED_TOKEN}`: the test suite's own "
-         "placeholder for a token, which this laboratory has no authorisation "
-         "server to issue."]
+         "placeholder for a token, which this round was not configured to issue "
+         "- it ran without an authorisation server."]
     if scheme and scheme.lower() != "bearer":
         w[0] += (f" The request the system under test received carries "
                  f"`Authorization: {scheme} …` instead — this laboratory's own "
@@ -1328,14 +1364,25 @@ def _hide(value: str) -> str:
     return UNRESOLVED_TOKEN not in (value or "")
 
 
+def _marker(value: str) -> str:
+    """Which withholding note belongs to this value.
+
+    The two credentials are not interchangeable and the reader is told where to
+    look for each: the endpoint's Basic credential is published in the bundle,
+    an access token is published only as a hash.
+    """
+    return REDACTED_TOKEN if (value or "").lstrip().lower().startswith("bearer") \
+        else REDACTED
+
+
 def redact(text: str) -> str:
     """The credential out, and nothing else - see clause 3 of the document."""
-    out = _AUTH.sub(lambda m: m.group(1) + (REDACTED if _hide(m.group(2))
+    out = _AUTH.sub(lambda m: m.group(1) + (_marker(m.group(2)) if _hide(m.group(2))
                                             else m.group(2)), text or "")
-    out = _AUTH_INLINE.sub(lambda m: m.group(1) + (REDACTED if _hide(m.group(2))
+    out = _AUTH_INLINE.sub(lambda m: m.group(1) + (_marker(m.group(2)) if _hide(m.group(2))
                                                    else m.group(2)), out)
     return _BASIC.sub(lambda m: m.group(0) if not _hide(m.group(0))
-                      else f"{m.group(1)} {REDACTED}", out)
+                      else f"{m.group(1)} {_marker(m.group(0))}", out)
 
 
 # =============================================================================

@@ -152,6 +152,17 @@ fi
   ${CE_RUN_DIR#$REPO_ROOT/}/<stufe>/official/ is unaffected and remains the
   authoritative artefact."
 
+# Checked before the manifest records it, as in 80-gap-report.sh. This document
+# matters most of the three: it quotes the exchange, it is the one that gets
+# forwarded to a product organisation, and in a Connect round the test suite
+# resolves the bearer token into the step description of even a passing step.
+# case_evidence.py withholds both credentials where it reads a step; this is the
+# check that the document it produced actually carries none.
+assert_no_published_credentials "$CE_MD" "$CE_JSON" \
+  || die "CASE-EVIDENCE.md or case-evidence.json carries a credential this round
+  generated. Both are still on disk and neither is recorded in the bundle
+  manifest; see the paths above and redact() in gap-analysis/case_evidence.py."
+
 # -----------------------------------------------------------------------------
 # 5. Keep the bundle manifest honest
 # -----------------------------------------------------------------------------

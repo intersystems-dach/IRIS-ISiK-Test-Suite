@@ -134,6 +134,16 @@ fi
   ${GAP_RUN_DIR#$REPO_ROOT/}/<stufe>/official/ is unaffected and remains the
   authoritative artefact."
 
+# This document is appended to a bundle 70-collect-report.sh has already checked
+# and hashed, so it carries that check itself - and before the manifest below
+# records it, so a document that failed is not certified by the bundle's own
+# integrity check. The generator quotes a resolved request step only to read it,
+# never to print it, so this is expected to pass and is here to keep it true.
+assert_no_published_credentials "$GAP_MD" "$GAP_JSON" \
+  || die "GAP-ANALYSIS.md or gap-analysis.json carries a credential this round
+  generated. Both are still on disk and neither is recorded in the bundle
+  manifest; see the paths above and gap_report.py's handling of resolved steps."
+
 # -----------------------------------------------------------------------------
 # 4. Keep the bundle manifest honest
 # -----------------------------------------------------------------------------

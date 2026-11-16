@@ -419,6 +419,29 @@ read-wildcard-scope-in-system-context-allowed|isik-connect-system-wildcard-rs|sy
 EOF
 }
 
+# The two credentials a round withholds from everything it publishes, asserted
+# over paths that are about to be published or have just been written.
+#
+# A proof rather than a claim: the bundle states that no access token and no
+# realm secret of this round is readable in it, and three scripts write into a
+# bundle - 70-collect-report.sh, then 80-gap-report.sh and 81-case-evidence.sh,
+# which append to it afterwards. Each gates its own output through this, so the
+# statement holds for the finished bundle and not only for the part one stage
+# produced. scripts/lib/redact_credentials.py sets out which two credentials
+# these are and why they are the exception to the rig's policy of publishing a
+# round's credentials on purpose.
+#
+# Arguments are the paths to check, optionally followed by --exempt <substring>
+# for a subtree that is deliberately verbatim (the official archives).
+#
+# The values are passed through the environment, never on a command line.
+assert_no_published_credentials() {
+  AS_CLIENT_SECRET="${AS_CLIENT_SECRET:-}" AS_ADMIN_PASSWORD="${AS_ADMIN_PASSWORD:-}" \
+  python3 "${SCRIPTS_DIR}/lib/redact_credentials.py" scan "$@" \
+    --connect-yaml "${RUN_DIR}/testdata/Stufe5/connect.yaml" \
+    --env-secret AS_CLIENT_SECRET --env-secret AS_ADMIN_PASSWORD
+}
+
 # --- Compose ----------------------------------------------------------------
 # Always both files, always from the repository root: compose/testsuite.yml uses
 # project-root-relative bind mounts, and compose resolves those against the
