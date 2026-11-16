@@ -138,6 +138,14 @@ report is byte-for-byte as the suite wrote it — false. The subtree is passed a
 explicit exemption, the bundle README states that it holds the headers, and the
 tokens in it are expired by the time the bundle is read.
 
+**Both archives of the exempt subtree carry the token, not only the diagnostic
+one.** Serenity records the step's own request in its per-scenario report, so the
+value appears in `test-report.zip` as well as in the traffic log. Measured on the
+`Connect` round of 2026-11-16: 18 of the 34 files in
+`connect/official/test-report.zip` and 54 of the 671 in its `debug-report.zip`
+carry a JWS. This is a property of the suite's reports and not of this rig, and it
+is the reason the exemption is stated as a subtree rather than as a single file.
+
 **It is proved, not claimed.** Three scripts write into a bundle —
 `70-collect-report.sh`, then `80-gap-report.sh` and `81-case-evidence.sh`, which
 append to it afterwards. Each gates its own output through

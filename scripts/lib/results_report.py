@@ -83,12 +83,13 @@ Two measurements of one level, and which one counts
 ---------------------------------------------------
 A round may hold a second archive for the same specification level, taken under
 a different configuration and restricted to one module. Stufe 5's ``Connect``
-module is the case that exists: its scenarios present a bearer token, which
-needs a Tiger route carrying an ``authentication:`` block, and such a route
-REPLACES the Authorization header every other module relies on - so the module
-cannot share a configuration with the other nine and is run a second time on its
-own. ``scripts/60-run-tests.sh`` ("THE THIRD VARIANT") carries the measurement
-behind that.
+module is the case that exists: its scenarios set their own Authorization header
+from a bearer token in the suite's test data, and a Tiger route carrying an
+``authentication:`` block REPLACES that header. The other nine modules set no
+header of their own and depend on the block to supply one. The module therefore
+needs a route WITHOUT the block, cannot share a configuration with the other
+nine, and is run a second time on its own. ``scripts/60-run-tests.sh``
+("THE THIRD VARIANT") carries the measurement behind that.
 
 The complete-scope run is NOT narrowed to compensate. It keeps selecting all 32
 Connect cases, because ``target/test-report.zip`` in the singular is what the
@@ -1729,9 +1730,12 @@ def render(doc: dict, run_root: Path) -> str:
             w(f"including the {sup['module']} module's cases, as every round of this")
             w(f"project has. The {sup['module']} module was then run a second time")
             w(f"(`{sup['by']}/official/`, `{sup['tagExpression']}`) under the Tiger")
-            w("configuration that module requires - one carrying an `authentication:`")
-            w("block, which replaces the `Authorization` header the other modules")
-            w("depend on and therefore cannot be used for them.")
+            w("configuration that module requires - one carrying **no**")
+            w("`authentication:` block. A route that carries one replaces the")
+            w("`Authorization` header the request already has, and this module's")
+            w("feature files set that header themselves, from a bearer token in the")
+            w("suite's own test data. The other nine modules set no header and depend")
+            w("on the block to supply one, so no single configuration serves both.")
             w("")
             w(f"**The two are superseded, never added.** For the {sup['cases']} case(s)")
             w(f"the {sup['module']} run measured, the verdict reported in this document")

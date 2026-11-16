@@ -396,6 +396,15 @@ Archiv byte-identisch so vorliegt, wie die Suite es geschrieben hat — unwahr m
 Der Einstiegspunkt des Datensatzes hält fest, dass dieser Teilbaum die Kopfzeilen
 enthält; die Token darin sind zum Zeitpunkt der Lektüre abgelaufen.
 
+**Beide Archive dieses Teilbaums führen das Token, nicht nur das Diagnosearchiv.**
+Serenity zeichnet die Anfrage eines Prüfschritts auch in seinem Bericht je Szenario
+auf, so dass der Wert ebenso im Berichtsarchiv erscheint wie im Verkehrsprotokoll.
+Gemessen am Durchgang mit dem Modul `Connect` vom 16. November 2026: 18 der 34
+Dateien in `connect/official/test-report.zip` und 54 der 671 Dateien in dessen
+`debug-report.zip` führen eine Zeichenkette in Tokenform. Dies ist eine Eigenschaft
+der Berichte der Suite und nicht dieses Prüfwerkzeugs, und es ist der Grund, weshalb
+die Ausnahme als Teilbaum und nicht als einzelne Datei festgelegt ist.
+
 **Es wird geprüft, nicht behauptet.** Nach der Ersetzung wird der Datensatz erneut
 auf jeden zurückzuhaltenden Wert durchsucht; ein Treffer ist ein Fehlschlag der
 Erzeugung und kein Hinweis. Ausgenommen ist allein der Platzhalter der Suitevorlage

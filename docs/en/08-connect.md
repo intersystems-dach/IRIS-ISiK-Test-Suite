@@ -285,7 +285,9 @@ Accordingly:
   that no access token and no realm secret of this round is readable in it, and
   `assert_no_published_credentials()` in [scripts/lib.sh](../../scripts/lib.sh)
   proves it over every path three scripts write, rather than claiming it. The
-  official archives are the one exempt subtree, and they stay byte-for-byte.
+  official archives are the one exempt subtree, and they stay byte-for-byte —
+  both of them: Serenity's per-scenario report carries the request it made, so
+  `test-report.zip` holds the token as well as `debug-report.zip` does.
   See [07-reports.md](07-reports.md#what-is-withheld-and-what-is-not).
 
 This is the exception to the rig's otherwise deliberate policy of publishing a

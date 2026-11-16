@@ -83,7 +83,8 @@
 #
 # <variant>/official/ is exempt from that withholding and stays byte-for-byte as
 # the suite wrote it, including the Authorization headers in the traffic recorded
-# in debug-report.zip. Rewriting it would make this bundle's central claim false,
+# in debug-report.zip and in Serenity's per-scenario records inside
+# test-report.zip. Rewriting it would make this bundle's central claim false,
 # and gematik's own instruction for the module is to put real tokens into the
 # test data - a Connect submission carries them by construction. Section 4c
 # scans the finished bundle to prove the withholding held everywhere else.
@@ -239,6 +240,20 @@ copy_prov() {
     return 0
   fi
   mkdir -p "$(dirname "$dest")"
+  # The destination is removed first so that a second collection of the same
+  # bundle reproduces it rather than nesting inside it. `cp -a dir dest` copies
+  # INTO dest when dest is an existing directory: measured on 2026-11-16, a
+  # re-run of `make report` on a collected bundle produced
+  # provenance/corpus/Stufe5/Stufe5/ with 129 duplicate files and a manifest
+  # 129 entries longer. $dest is always under $PROV_DIR, which this script owns;
+  # the guard states that rather than assuming it, because the argument is a
+  # caller-supplied relative path and this is a recursive delete.
+  [[ "$rel" =~ ^[A-Za-z0-9_][A-Za-z0-9._-]*(/[A-Za-z0-9_][A-Za-z0-9._-]*)*$ \
+     && "$rel" != *..* ]] \
+    || die "copy_prov: refusing to replace '${dest}'. A destination is a plain
+  relative path of one or more named components under
+  ${PROV_DIR#$REPO_ROOT/}, because replacing it is a recursive delete."
+  rm -rf "$dest"
   cp -a "$src" "$dest"
   printf '%s\t%s\t%s\n' "provenance/${rel}" "$what" "$by" >>"${PROV_DIR}/.index.tmp"
 }
@@ -647,14 +662,26 @@ step "5/5 Writing the bundle README and manifest"
 # tampering to the reader most likely to check.
 #
 # The README states the file count, so it needs a number the manifest has not
-# produced yet: it is counted here from the same file set, excluding README.md
-# itself and adding one for it. The two therefore agree by construction.
+# produced yet: it is counted here from the same file set that the manifest will
+# cover. Five files are excluded from the count and added back as a constant,
+# because they do not exist yet - or, on a re-run, exist from the previous
+# generation and would otherwise make the figure depend on whether the bundle is
+# new: README.md itself, and the four documents `make report` writes after this
+# script through its chained `gap-report` and `case-evidence` targets. The figure
+# is therefore the finished bundle's, and agrees with analysis/MANIFEST.txt once
+# those targets have appended their four entries to it. Running this script by
+# itself, outside `make report`, leaves the four unwritten and the figure four
+# too high.
 bundle_files="$(( $( cd "$RUN_REPORT_DIR" \
   && find . -type f \
        ! -path './README.md' \
+       ! -path './GAP-ANALYSIS.md' \
+       ! -path './gap-analysis.json' \
+       ! -path './CASE-EVIDENCE.md' \
+       ! -path './case-evidence.json' \
        ! -path './analysis/MANIFEST.txt' \
        ! -path './provenance/.index.json' \
-       -print | wc -l ) + 1 ))"
+       -print | wc -l ) + 5 ))"
 bundle_size="$(du -sh "$RUN_REPORT_DIR" 2>/dev/null | cut -f1 || printf '?')"
 
 # The bundle's own entry point. Written here rather than by the Python generator
@@ -675,10 +702,12 @@ this repository modifies it; \`official/SHA256SUMS\` lets you confirm that.
 
 \`<variant>\` is one directory per test run: \`stufe3\` and \`stufe5\` for the
 specification levels, and \`connect\` where the round also ran ISiK Stufe 5's
-\`Connect\` module on its own. That module's scenarios present a bearer token,
-which needs a Tiger route whose \`authentication:\` block replaces the
-\`Authorization\` header every other module depends on — so it cannot share a
-configuration with them and is run a second time by itself. The complete-scope
+\`Connect\` module on its own. That module's scenarios set their own
+\`Authorization\` header, from a bearer token in the suite's test data, and a
+Tiger route whose \`authentication:\` block supplies a credential **replaces**
+that header. The other nine modules set no header and depend on the block — so
+the module cannot share a configuration with them and is run a second time by
+itself, through a route that carries no such block. The complete-scope
 run is not narrowed and still contains the same cases; \`analysis/results.md\`
 reports the module's own measurement for them and the complete run's figures
 alongside, under "the \`Connect\` module was measured twice". **The two are never
@@ -747,11 +776,13 @@ the round at all — a reader who wants a token mints a fresh one with
 \`make tokens\` — and are withheld for that reason.
 
 \`<variant>/official/\` is exempt from that withholding and is byte-for-byte as the
-suite wrote it. The traffic recorded in \`debug-report.zip\` therefore contains
-the \`Authorization\` headers as sent, bearer tokens included: it is the artefact
-the *Bestätigungsverfahren* is based on, its checksums are the suite's own, and
-the module's documented procedure is to put real tokens into the test data. Those
-tokens were already expired when this bundle was written.
+suite wrote it. Both archives therefore contain the \`Authorization\` headers as
+sent, bearer tokens included — the traffic recorded in \`debug-report.zip\`, and
+Serenity's per-scenario records in \`test-report.zip\`, which carry the request the
+step made. It is the artefact the *Bestätigungsverfahren* is based on, its
+checksums are the suite's own, and the module's documented procedure is to put
+real tokens into the test data. Those tokens were already expired when this
+bundle was written.
 
 ## Reproducing
 
@@ -759,14 +790,17 @@ tokens were already expired when this bundle was written.
 the archives in this directory. It does not re-run the tests and does not touch
 the archives, so the derived documents can be regenerated and diffed at any time.
 
-Bundle: ${bundle_files} file(s), ${bundle_size}.
+Bundle: ${bundle_files} file(s), ${bundle_size}. The count is the finished
+bundle's, including the four documents named below; the size was measured before
+they were written and is rounded, so it is indicative only.
 
 Verify the bundle with \`sha256sum -c analysis/MANIFEST.txt\` from this
 directory. It covers every file here including this one, except the manifest
 itself (which cannot contain its own hash) and \`provenance/.index.json\`
 (scaffolding, reproduced as a table in \`analysis/results.md\`).
 \`GAP-ANALYSIS.md\` and \`gap-analysis.json\` are written after this by
-\`make gap-report\`, which appends their hashes to the manifest.
+\`make gap-report\`, and \`CASE-EVIDENCE.md\` and \`case-evidence.json\` by
+\`make case-evidence\`; each appends its two hashes to the manifest.
 EOF
 
 log "wrote README.md (${bundle_files} files, ${bundle_size})"
