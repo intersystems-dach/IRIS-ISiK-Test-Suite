@@ -428,12 +428,20 @@ cannot be mistaken for a measurement.
 ### Additional hardware
 
 A round with `CONNECT_ENABLE=true` needs about **1.1 GiB of host memory more**
-than one without — the authorization server's limit plus the Web Gateway's TLS
-listener. IRIS's own default of 25 % of host memory is unchanged by it, so the
-extra memory has to be real and not borrowed from what IRIS already claims. **A
-host sized for a round without this overlay is not automatically large enough for
-one with it.** The sizing table is in
-[../../INSTALL.md](../../INSTALL.md#hardware).
+than one without — the authorization server's limit (measured at 601 MiB resident
+of the 1 GiB it is given) plus the Web Gateway's TLS listener. IRIS's own default
+of 25 % of host memory is unchanged by it, so the extra memory has to be real and
+not borrowed from what IRIS already claims. **A host sized for a round without
+this overlay is not automatically large enough for one with it:** the measured
+floor without it is 31 GiB, so the 32 GiB minimum no longer clears the floor, and
+the minimum for a `Connect` round is stated as **36 GiB**. `make preflight` warns
+below 26 GiB instead of 24 GiB when the switch is on.
+
+The other two costs are smaller and also measured: **718 MB** of disk for the
+authorization-server image, about **60 MB** for the second archive, and **107
+seconds** of wall-clock time for the second invocation, which runs 32 cases rather
+than a whole level. The sizing table, and the arithmetic behind the 36 GiB, are in
+[../../INSTALL.md](../../INSTALL.md#2-hardware).
 
 Note also that this rig does not configure HugePages, which InterSystems
 recommends for every host running IRIS. Without them IRIS's real memory

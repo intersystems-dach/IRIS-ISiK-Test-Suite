@@ -46,9 +46,10 @@ repository's tracked files, and `make check` verifies that mechanically.
 
 |  | vCPU | RAM | Disk | Verdict |
 |---|---|---|---|---|
-| **Recommended** | **16** | **64 GiB** | **256 GB** | Validated end to end: full round in **54 minutes**, 26 GB of disk used |
-| Minimum | 8 | 32 GiB | 128 GB | Completes both levels, roughly an hour and five minutes, no headroom |
-| Measured floor | 8 | 31 GiB | 128 GB | Completed both levels *only* at `TESTSUITE_HEAP_MAX=16g` |
+| **Recommended** | **16** | **64 GiB** | **256 GB** | Validated end to end, with and without the `Connect` overlay: full round in **54 minutes**, 26 GB of disk used |
+| Minimum, without `Connect` | 8 | 32 GiB | 128 GB | Completes both levels, roughly an hour and five minutes, no headroom |
+| Minimum, with `CONNECT_ENABLE=true` | 8 | **36 GiB** | 128 GB | Derived, not measured: the floor below plus the overlay's ~1.1 GiB plus margin |
+| Measured floor, without `Connect` | 8 | 31 GiB | 128 GB | Completed both levels *only* at `TESTSUITE_HEAP_MAX=16g` |
 
 **Bias upward deliberately.** A Stufe 5 run that is short of scenario heap does not
 slow down and does not fail — it silently loses the level. Tiger's `RbelLogger`
@@ -69,8 +70,10 @@ A larger VM for a few hours is cheaper than discovering that after four of them.
 
 * **RAM.** The scenario JVM wants 16 GiB of heap for Stufe 5, IRIS holds about
   2.2 GiB resident, and the Web Gateway and the host itself want the rest.
-  `make preflight` warns below 24 GiB for exactly this reason
-  ([`scripts/00-preflight.sh`](scripts/00-preflight.sh)). 32 GiB is enough; 64 GiB
+  `make preflight` warns below 24 GiB for exactly this reason — below **26 GiB**
+  when `CONNECT_ENABLE=true`, which is the same arithmetic with the overlay added
+  ([`scripts/00-preflight.sh`](scripts/00-preflight.sh)). 32 GiB is enough for a
+  round without the overlay and 36 GiB for one with it; 64 GiB
   is what lets you raise the heap to 32g without arithmetic, and removes the one
   failure mode that costs a whole level.
 * **vCPU.** Both sizes completed both levels, and doubling the host took the two
@@ -82,23 +85,33 @@ A larger VM for a few hours is cheaper than discovering that after four of them.
   total** on the 16 vCPU host — 8.5 GB of images, 9.4 GB of containers, 146 MB of
   volumes, the unpacked FHIR packages (~1.5 GB) and a **2.8 GB** evidence bundle
   (most of it `debug-report.zip`, which is not submitted but is what the gap
-  analysis reads). About 25 GB is the real floor, which is what `make preflight`
-  checks. 128 GB is comfortable; 256 GB is
+  analysis reads). About 25 GB is the real floor — 26 GB with
+  `CONNECT_ENABLE=true` — which is what `make preflight` checks. 128 GB is
+  comfortable; 256 GB is
   usually the same price bracket and leaves room to keep several rounds' bundles on
   the host.
 * **No swap needed.** Both measured hosts ran with swap disabled. Swap does not
   help the failure mode above: a JVM that has hit `-Xmx` does not want more pages,
   it wants a bigger heap.
 
-**Add ~1.1 GiB for a `Connect` round.** With `CONNECT_ENABLE=true` the rig also
-runs an authorization server — a JVM, limited to 1 GiB — and a TLS listener on the
-Web Gateway. IRIS's own default of 25 % of host memory is unchanged by it, so the
-extra memory has to be real and not borrowed from what IRIS already claims: **a
-host sized from the table above is not automatically large enough for a round with
-this overlay.** The 16 vCPU / 64 GiB row absorbs it without arithmetic; on the
-minimum host, budget it against the heap rather than against the margin. The
-module, what it needs and why is in
-[docs/en/08-connect.md](docs/en/08-connect.md).
+**Where the `Connect` minimum comes from.** With `CONNECT_ENABLE=true` the rig
+also runs an authorization server — a JVM, limited to 1 GiB, measured at 601 MiB
+resident during the second invocation — and a TLS listener on the Web Gateway,
+together about **1.1 GiB**. IRIS's own default of 25 % of host memory is unchanged
+by it, so that memory has to be real and not borrowed from what IRIS already
+claims. The measured floor above is 31 GiB, so **32 GiB no longer clears it once
+the overlay is added**: 31 + 1.1 is 32.1 GiB before any margin at all. 36 GiB is
+that arithmetic plus the margin the 32 GiB row never had, and it is arithmetic —
+every `Connect` round taken so far ran on the 16 vCPU / 64 GiB host, which absorbs
+the overlay without any of this reasoning. On the minimum host, budget the overlay
+against the heap rather than against the margin. The module, what it needs and why
+is in [docs/en/08-connect.md](docs/en/08-connect.md).
+
+The overlay's other two costs are small and measured: **718 MB** for the
+authorization-server image, counted in `docker system df` images alongside the
+8.5 GB above, and about **60 MB** of additional evidence (`connect/`, a second
+archive of 32 cases rather than of a whole level). It adds **107 seconds** of
+wall-clock time to a round.
 
 **HugePages are not configured by this rig, and InterSystems recommends them.**
 Without them IRIS's real memory consumption is materially higher than its

@@ -107,6 +107,28 @@ shipped.
 - [README.md](README.md) and [INSTALL.md](INSTALL.md) state the additional ~1.1 GiB
   a `Connect` round needs, and that **HugePages are not configured by this rig**
   although InterSystems recommends them.
+- **The stated minimum host for a round with `CONNECT_ENABLE=true` is 36 GiB of
+  RAM**, not 32 GiB. The measured floor for a round without the overlay is 31 GiB,
+  so 32 GiB does not clear it once the overlay's ~1.1 GiB is added. The row is
+  derived arithmetic and says so: every `Connect` round so far has run on the
+  16 vCPU / 64 GiB host. The overlay's other measured costs — 718 MB for the
+  authorization-server image, ~60 MB for the second archive, 107 s of wall-clock
+  time — are stated with it, in [README.md](README.md#hardware),
+  [INSTALL.md](INSTALL.md#2-hardware), [docs/en/08-connect.md](docs/en/08-connect.md#additional-hardware),
+  [docs/de/02-bestaetigungsverfahren.md](docs/de/02-bestaetigungsverfahren.md) and
+  [.env.example](.env.example).
+- [`scripts/00-preflight.sh`](scripts/00-preflight.sh) now follows
+  `CONNECT_ENABLE`: it warns below 26 GiB of RAM instead of 24 GiB, and below
+  26 GiB of free disk instead of 25 GiB, when the overlay is on. Previously the
+  check was overlay-blind, so a host that was sized for the smaller round passed
+  silently.
+- [README.md](README.md) no longer claims a round covers "Stufe 3 and Stufe 5".
+  Which levels a round covers follows the pinned suite version — a 2.x suite
+  carries both, a 3.x suite carries Stufe 5 only — which is what
+  `suite_levels()` has implemented since 3.x support landed. The `Connect`
+  paragraph now states the mechanism (a second invocation through a route with no
+  `authentication:` block), the supersede rule, and that the switch is read from
+  `.env` only.
 - The German documents cover the additional procedure step, the fourth container,
   the subset tag expression, the supersede rule and the withheld credentials.
 

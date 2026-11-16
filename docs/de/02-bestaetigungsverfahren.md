@@ -497,6 +497,14 @@ aber bei einem Durchgang mit dem Modul `Connect` stärker ins Gewicht, weil dies
 zusätzlichen Arbeitsspeicher belegt (etwa 1,1 GiB, siehe
 [../en/08-connect.md](../en/08-connect.md#additional-hardware)).
 
+**Der Mindestbedarf eines Durchgangs mit dem Modul `Connect` ist deshalb höher.**
+Die gemessene Untergrenze eines Durchgangs ohne das Modul beträgt 31 GiB
+Arbeitsspeicher; mit den zusätzlichen 1,1 GiB unterschreitet ein Host mit 32 GiB
+diese Grenze. Als Mindestausstattung eines Durchgangs mit dem Modul sind daher
+36 GiB angegeben — ein rechnerischer Wert, keine Messung: alle bisherigen
+Durchgänge mit dem Modul wurden auf dem Host mit 16 vCPU und 64 GiB ausgeführt.
+Herleitung und Tabelle in [../../INSTALL.md](../../INSTALL.md#2-hardware).
+
 ### An der Dokumentation der Zugangsdaten
 
 Die Zugangsdaten dieser Umgebung werden **absichtlich** in den Berichten

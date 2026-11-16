@@ -1,8 +1,8 @@
 # ISiK conformance test environment for InterSystems IRIS for Health
 
 A docker-compose lab rig that runs the **official Gematik ISiK test suite** against
-an **InterSystems IRIS for Health** FHIR repository, for **ISiK Stufe 3** and
-**ISiK Stufe 5**, and turns the result into an evidence bundle.
+an **InterSystems IRIS for Health** FHIR repository and turns the result into an
+evidence bundle.
 
 One command brings up the unit under test, installs the endpoints and the FHIR
 packages the Gematik reference validator validates against, seeds a fabricated test
@@ -13,6 +13,12 @@ pinned suite carries, and writes the reports:
 make all
 ```
 
+**Which conformance levels a round covers follows the pinned suite version**, not
+this rig: a **2.x** suite carries **ISiK Stufe 3** and **ISiK Stufe 5**, a **3.x**
+suite carries **Stufe 5** only. The rig runs the levels the pinned image carries
+and names them in the bundle; which version is pinned is yours to choose
+([INSTALL.md section 6](INSTALL.md#6-the-two-version-choices-both-yours)).
+
 **Everything is on an isolated Docker subnet with fixed addresses**, NAT'd to the
 internet through the host. Nothing needs to reach in.
 
@@ -22,7 +28,7 @@ Per round, in `reports/<run-id>/`:
 
 | | |
 |---|---|
-| `stufe3/official/test-report.zip`, `stufe5/official/…` | The **authoritative** Gematik archives, byte-for-byte — what the *Bestätigungsverfahren* is based on and what is uploaded to TITUS |
+| `<variant>/official/test-report.zip` | The **authoritative** Gematik archives, byte-for-byte, one per invocation of the suite — `stufe3/`, `stufe5/` and, when it is enabled, `connect/`. This is what the *Bestätigungsverfahren* is based on and what is uploaded to TITUS |
 | `analysis/results.md` | The cited results document: every claim traced to a path inside those archives |
 | `GAP-ANALYSIS.md` | Per distinct defect: the test step, the FHIR feature and the package that supplies it, expected vs. actual. For product developers, in English |
 | `CASE-EVIDENCE.md` | Its annex, per failing case: the input data used, the output expected and received with both bodies verbatim, and a command that replays the request |
@@ -31,12 +37,30 @@ Per round, in `reports/<run-id>/`:
 | `provenance/` | Resolved versions and image digests, the seed record, the SUT's own install record, the package manifest, the credentials used, and the version of this rig that produced the round |
 
 The derived documents are pure functions of the archives and can be regenerated on
-any machine from an archived bundle. 
+any machine from an archived bundle: `make report` extracts the archives, writes
+`analysis/`, and then chains `gap-report` and `case-evidence`, which derive the
+two developer documents from what it extracted.
+
+### The `Connect` module needs a second invocation
 
 One ISiK Stufe 5 module, `Connect`, authenticates with OAuth 2.0 bearer tokens
-from the feature file itself and so needs an authorization server and a TLS
-listener that no other module needs. It is **off by default**; turning it on adds
-a `connect/` archive beside `stufe5/` without narrowing the official run. See
+that its feature files set themselves, from the suite's own test data. A Tiger
+route that carries an `authentication:` block **replaces** that header, and the
+complete run needs such a route for everything else — so the module cannot be
+measured inside it. The rig therefore **appends a second invocation** of the same
+suite version, scoped `@Stufe5 and @Connect and (not @Optional)`, through a route
+that carries no `authentication:` block and over the HTTPS listener the endpoint
+requires before it will read a bearer token at all.
+
+It is **off by default** (`CONNECT_ENABLE=false`, set in `.env`). Turning it on
+**narrows nothing**: the complete run is still executed and published unchanged,
+and a `connect/` archive is added beside `stufe5/`. For the module's 32 cases the
+`connect/` verdicts then *supersede* the complete run's — never summed, never
+averaged — and every case in the derived documents names the archive that
+measured it. It also adds an authorization server (Keycloak, deliberately not an
+InterSystems product), a TLS listener on the Web Gateway, and the round's own
+one-hour bearer tokens — which, with that server's realm secrets, are the only
+credentials this rig withholds from a bundle instead of documenting in it. See
 [docs/en/08-connect.md](docs/en/08-connect.md).
 
 ISiK is designed to be a constantly evolving, moving target, rather than a static set of one-time rules. IRIS for Health is therefore *expected* to fail parts of
@@ -71,18 +95,33 @@ as a statement about any build you are about to test.
 
 | | vCPU | RAM | Disk |
 |---|---|---|---|
-| **Recommended** | **16** | **64 GiB** | **256 GB** |
-| Minimum | 8 | 32 GiB | 128 GB |
+| **Recommended**, with or without `Connect` | **16** | **64 GiB** | **256 GB** |
+| Minimum, round without `Connect` | 8 | 32 GiB | 128 GB |
+| Minimum, round with `CONNECT_ENABLE=true` | 8 | **36 GiB** | 128 GB |
 
-A full round from a cold start takes **54 minutes** on the recommended host and
-roughly an hour and five on the minimum one, and leaves 26 GB of disk in use. Size
+A full round without the `Connect` overlay, from a cold start, takes **54 minutes**
+on the recommended host and roughly an hour and five on the minimum one, and
+leaves 26 GB of disk in use. Size
 upward rather than downward: a Stufe 5 run short of scenario heap does not slow
 down, it silently loses the level after hours. [INSTALL.md](INSTALL.md#2-hardware)
 traces every figure to a measurement.
 
-A round with `CONNECT_ENABLE=true` needs about **1.1 GiB more** than the figures
-above, for the authorization server and the TLS listener
-([docs/en/08-connect.md](docs/en/08-connect.md#additional-hardware)).
+**The `Connect` overlay raises the memory minimum, and only the memory minimum.**
+It adds an authorization server — a JVM, limited to 1 GiB, measured at 601 MiB
+resident — and a TLS listener on the Web Gateway, together about **1.1 GiB** that
+has to be real memory: IRIS's own default claim of 25 % of host memory is
+unchanged by the overlay. The measured floor for a round *without* it is 31 GiB,
+and only at `TESTSUITE_HEAP_MAX=16g`, so a 32 GiB host no longer clears the floor
+once the overlay is added; **36 GiB** is that floor plus the overlay plus the
+margin the 32 GiB row never had. On disk the overlay costs the 718 MB
+authorization-server image and about 60 MB of additional archive, which 128 GB
+absorbs. In wall-clock time the second invocation measured **107 seconds** — it
+runs 32 cases, not the whole level.
+
+That 36 GiB row is **derived arithmetic, not a measurement**: every `Connect`
+round so far has been taken on the 16 vCPU / 64 GiB host, which absorbs the
+overlay without any of this reasoning. Details:
+[docs/en/08-connect.md](docs/en/08-connect.md#additional-hardware).
 
 This tooling was developed using an Azure VM and its Ubuntu 24.04 LTS x86_64 image as the lab rig, starting from its mid-2026 stock configuration. There is nothing particular about Azure that is required, but it is what supplied our installation baseline. If your baseline differs, you might need to adapt the installation procedure accordingly.
 
@@ -108,10 +147,18 @@ release's feature files, and floating it can misattribute our own data defect to
 product. [INSTALL.md section 6](INSTALL.md#6-the-two-version-choices-both-yours) has
 both, and how to disagree with either.
 
+The `Connect` module is a third choice, and it is off. Set `CONNECT_ENABLE=true`
+in `.env` before `make all` and the round appends the second invocation by itself,
+authorization server and tokens included. It is deliberately **not** settable from
+the command line: the rig reads it from the file only, so that a round cannot test
+one thing and record another.
+
 ```sh
 make help            # every target
 make status          # containers, network, endpoints
 make credentials     # this instance's credentials, with ready-to-paste curl lines
+make tokens          # re-mint this round's bearer tokens (Connect rounds only)
+make test-connect    # re-run only the Connect module, against fresh tokens
 make clean           # teardown; never touches reports/ or secrets/
 ```
 
@@ -141,7 +188,17 @@ round and destroyed once the results are verified; access is controlled physical
 and at the network perimeter, not by these values, which exist — never empty, never
 absent — only so the SUT stays a faithful stand-in for a production deployment. The
 one rule that does apply: **none of it reaches source control**, and `make check`
-verifies that mechanically. Stated as a deliberate deviation in
+verifies that mechanically.
+
+The two credentials the `Connect` module introduces are the exception, and they
+are **withheld** from a bundle rather than documented in it: the round's bearer
+tokens, which last an hour and would be expired before any reader opened the
+bundle, and the authorization server's realm secrets, which do not expire with the
+round and are not needed to verify a verdict — a reader re-mints with
+`make tokens`. In place of each token the bundle states the test-data key it was
+staged for and its SHA-256, which answers the question a `401` actually raises:
+*which* scope's token was presented. Inside `<variant>/official/`, which has to
+stay byte-for-byte, nothing is rewritten. Stated as a deliberate deviation in
 [docs/en/09-known-limitations.md](docs/en/09-known-limitations.md#credential-documentation).
 
 ## Licence

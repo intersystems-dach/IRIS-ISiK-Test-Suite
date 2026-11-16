@@ -1119,9 +1119,15 @@ internal = {
     "UI_PORT", "PROXY_PORT", "UI_TIMEOUT", "WANT_TAG", "PW_FILE", "TMP",
     "IRIS_REF", "WEBGATEWAY_REF",
     "IRIS_REGISTRY", "DOCKER_CFG", "COMPOSE_V", "AVAIL_KB", "NEED_KB",
-    # Locals of the preflight memory check. TESTSUITE_HEAP_MAX, which that check
-    # reads, IS operator-facing and is documented in .env.example.
-    "MEM_KB", "MEM_GIB",
+    # Locals of the preflight disk check. The floor and the reason it names both
+    # follow CONNECT_ENABLE, which IS documented, and are derived from the
+    # measurements in INSTALL.md section 2 - a host requirement is measured, not
+    # configured, so neither is an operator setting.
+    "NEED_GIB", "NEED_WHY",
+    # Locals of the preflight memory check, MEM_NEED_GIB for the same reason as
+    # NEED_GIB above. TESTSUITE_HEAP_MAX, which that check reads, IS
+    # operator-facing and is documented in .env.example.
+    "MEM_KB", "MEM_GIB", "MEM_NEED_GIB",
     "PORT_CLASH", "EXISTING_NET", "KEY", "C_RESET", "C_BOLD", "C_RED", "C_GRN",
     # 00-preflight.sh's licence-key locals. IRIS_KEY_PATH is exported for the compose
     # mount rather than authored: preflight resolves the operator's file
