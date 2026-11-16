@@ -78,6 +78,18 @@ the client and trust configuration a customer performs anyway.
 | Address | `172.31.0.40`, name `isik-as` | The name is in the certificate **and in the `iss` claim of every token**, so it is not cosmetic: IRIS discovers the server under this name, and a token whose `iss` does not match what IRIS discovered is rejected |
 | Memory | `AS_MEM_LIMIT=1g`, `AS_HEAP_MAX=512m` | Measured resident set under the token load of a full Connect run: ~600 MiB. The limit is set so this container cannot compete with IRIS for host memory |
 
+**Pinned and pulled, never vendored.** The image is Keycloak's, under Keycloak's
+licence, and this repository is not a distribution channel for it: it carries the
+reference (`AS_IMAGE` / `AS_VERSION` in [../../.env.example](../../.env.example))
+and the realm definition the server imports
+([../../keycloak/realm-isik.json.tmpl](../../keycloak/realm-isik.json.tmpl),
+which is ours), and nothing else. `make resolve` pulls the pinned tag and records
+the digest it received, so a token's issuer and lifetime are traceable to the
+build that issued them. `make check` enforces both halves — that `AS_VERSION` is
+a concrete version rather than a floating tag, and that `keycloak/` holds no file
+that is not a template of ours — because a rule that is only remembered is a rule
+that decays.
+
 The overlay is **not** profile-gated. The presence of the file is the switch, and
 the `iris` service declares a dependency on the authorization server so that
 `compose up iris webgateway` starts it without any caller having to know it

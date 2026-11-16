@@ -41,6 +41,9 @@ any machine from an archived bundle: `make report` extracts the archives, writes
 `analysis/`, and then chains `gap-report` and `case-evidence`, which derive the
 two developer documents from what it extracted.
 
+ISiK is designed to be a constantly evolving, moving target, rather than a static set of one-time rules. IRIS for Health is therefore *expected* to fail parts of
+this at times, which is why the gap analysis is a first-class deliverable rather than an appendix.
+
 ### The `Connect` module needs a second invocation
 
 One ISiK Stufe 5 module, `Connect`, authenticates with OAuth 2.0 bearer tokens
@@ -57,24 +60,32 @@ It is **off by default** (`CONNECT_ENABLE=false`, set in `.env`). Turning it on
 and a `connect/` archive is added beside `stufe5/`. For the module's 32 cases the
 `connect/` verdicts then *supersede* the complete run's — never summed, never
 averaged — and every case in the derived documents names the archive that
-measured it. It also adds an authorization server (Keycloak, deliberately not an
-InterSystems product), a TLS listener on the Web Gateway, and the round's own
-one-hour bearer tokens — which, with that server's realm secrets, are the only
-credentials this rig withholds from a bundle instead of documenting in it. See
-[docs/en/08-connect.md](docs/en/08-connect.md).
+measured it. It also adds a TLS listener on the Web Gateway and the round's own
+one-hour bearer tokens — which, with the authorization server's realm secrets,
+are the only credentials this rig withholds from a bundle instead of documenting
+in it.
 
-ISiK is designed to be a constantly evolving, moving target, rather than a static set of one-time rules. IRIS for Health is therefore *expected* to fail parts of
-this at times, which is why the gap analysis is a first-class deliverable rather than an appendix.
+The authorization server is **Keycloak**, deliberately not an InterSystems
+product: a system under test that issued the tokens it then validates would make
+the measurement circular. It is **test scaffolding, not part of the system under
+test**, and it is **pinned and pulled, never vendored here** —
+`quay.io/keycloak/keycloak:26.4.7` by default, pulled by `make resolve`, which
+records the digest it received in the round's provenance so that a token's issuer
+and lifetime can be traced to the build that issued them. What this repository
+carries is the realm definition that server imports, as a template, because the
+client secret and the audience are deploy-time facts. See
+[docs/en/08-connect.md](docs/en/08-connect.md).
 
 ## What this repository does not contain
 
-Four categories of thing are absent **by rule**. Each has
+Five categories of thing are absent **by rule**. Each has
 machinery here to obtain or produce it, and a document saying how.
 
 | Absent | Why | Where to get it |
 |---|---|---|
 | **IRIS / IRIS for Health images and installation kits** | they are licensed product, and this repository is not a distribution channel for them | `containers.intersystems.com` for images, `downloads.intersystems.com` for kits, both with your own credentials. An image you already hold as a local file is supported too — [kit/README.md](kit/README.md) |
 | **The gematik ISiK test suite** | it is gematik's, pinned and pulled, never vendored | `make resolve` pulls `gematik1/isik-testsuite:<version>` from Docker Hub; no credential needed. [docs/en/04-testtool.md](docs/en/04-testtool.md) |
+| **The authorization server a `Connect` round needs** | same rule, same reason: it is Keycloak's software under Keycloak's licence. This repository carries the reference to it and the realm definition it imports, never the payload | with `CONNECT_ENABLE=true`, `make resolve` pulls `quay.io/keycloak/keycloak:<version>` from Quay and records the digest it received; no credential needed. Pinned in [.env.example](.env.example), explained in [docs/en/08-connect.md](docs/en/08-connect.md) |
 | **Licence keys, registry tokens and passwords** | a credential in git history cannot be withdrawn | described, never shipped: [secrets/README.md](secrets/README.md) states the format, the validity and the source of each. `make check` fails if one is ever tracked |
 | **Round bundles, reports and verdicts** | out of scope: this repository is the instrument, not the measurement. The measuring is yours to do, and a result shipped here would be a result about somebody else's system | `make all` produces them, into `reports/`, which is `.gitignore`d |
 

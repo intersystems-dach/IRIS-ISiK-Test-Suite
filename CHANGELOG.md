@@ -122,6 +122,17 @@ shipped.
   26 GiB of free disk instead of 25 GiB, when the overlay is on. Previously the
   check was overlay-blind, so a host that was sized for the smaller round passed
   silently.
+- **The authorization server is now stated, and enforced, as pinned and pulled
+  rather than redistributed.** The property always held — `AS_IMAGE` /
+  `AS_VERSION` pin `quay.io/keycloak/keycloak:26.4.7`, `make resolve` pulls it
+  and records the digest it received, and the only tracked file under
+  `keycloak/` is our own `realm-isik.json.tmpl` — but nothing said so in
+  [README.md](README.md) and nothing checked it. `make check` now fails if
+  `AS_VERSION` is a floating tag rather than a concrete version, or if
+  `keycloak/` carries a file that is not a template of ours; the rule is stated
+  in README.md's "What this repository does not contain", which gains a fifth
+  row, in [docs/en/08-connect.md](docs/en/08-connect.md) and in the German
+  deviation table. `AS_IP` joined the addresses that check asserts are private.
 - [README.md](README.md) no longer claims a round covers "Stufe 3 and Stufe 5".
   Which levels a round covers follows the pinned suite version — a 2.x suite
   carries both, a 3.x suite carries Stufe 5 only — which is what

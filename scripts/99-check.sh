@@ -1451,7 +1451,10 @@ section "8. Release hygiene"
 #
 #   * a product image or installation kit is licensed material and this is not a
 #     distribution channel for it;
-#   * the gematik test suite is gematik's, pinned and pulled, never vendored;
+#   * the gematik test suite is gematik's, pinned and pulled, never vendored, and
+#     so is the authorization server the `Connect` overlay adds: both are
+#     somebody else's software under somebody else's licence, and this repository
+#     carries the reference and the configuration, never the payload;
 #   * a credential in git history cannot be withdrawn;
 #   * a round bundle belongs to whoever took it. Ours are not secret - they are
 #     simply not what this repository is for, which is the instrument.
@@ -1474,6 +1477,43 @@ else
   else
     pass "no image, kit or archive file is tracked"
   fi
+
+  # --- The authorization server is referenced, not redistributed -----------
+  # The rule the gematik test suite has always been subject to applies equally to
+  # the authorization server the `Connect` overlay adds: it is Keycloak's, pulled
+  # from its own registry by `make resolve`, and what this repository carries is
+  # the realm definition it imports - which is ours, written here, and a template
+  # because the client secret and the audience are deploy-time facts.
+  #
+  # Two properties make that true and either can be lost quietly, so both are
+  # checked:
+  #
+  #   1. the reference is a concrete version. A floating tag would mean a round
+  #      could not state which build issued its tokens, and a token's issuer,
+  #      audience, scope and lifetime are properties of that build - which is
+  #      why the resolver records the digest it pulled.
+  #   2. keycloak/ holds nothing but templates of ours. A theme, a provider jar
+  #      or an unpacked distribution dropped in there would turn this repository
+  #      into a redistribution channel for software it does not own. The archive
+  #      rule above catches the packed forms; this catches the unpacked one.
+  as_fails=0
+  as_image="$(sed -n 's/^AS_IMAGE=//p' .env.example | head -n1)"
+  as_version="$(sed -n 's/^AS_VERSION=//p' .env.example | head -n1)"
+  if [[ -z "$as_image" || -z "$as_version" ]]; then
+    fail "AS_IMAGE / AS_VERSION are not both set in .env.example - the authorization server must be pinned, not floating"
+    as_fails=$((as_fails+1))
+  elif [[ ! "$as_version" =~ ^[0-9]+(\.[0-9]+)*(-[A-Za-z0-9.]+)?$ ]]; then
+    fail "AS_VERSION=${as_version} in .env.example is not a concrete version - a round could not state which build issued its tokens"
+    as_fails=$((as_fails+1))
+  fi
+  as_vendored="$(git ls-files -- keycloak/ 2>/dev/null | grep -vE '\.(tmpl|md)$' || true)"
+  if [[ -n "$as_vendored" ]]; then
+    fail "keycloak/ carries files that are not templates of ours - the authorization server is pulled, never vendored:"
+    printf '%s\n' "$as_vendored" | sed 's/^/        /'
+    as_fails=$((as_fails+1))
+  fi
+  (( as_fails > 0 )) \
+    || pass "the authorization server is pinned (${as_image}:${as_version}) and only its realm template is tracked"
 
   # --- No licence keys, and no private keys at all ------------------------
   # Section 6 already covers secrets/iris.key by name. This covers the forms a
@@ -1584,7 +1624,7 @@ else
   # records the absolute paths of the host it was generated on, verbatim and on
   # purpose, and generated/testsuite-3.0.9/README.md says so.
   host_fails=0
-  for var in IRIS_IP TESTSUITE_IP; do
+  for var in IRIS_IP TESTSUITE_IP AS_IP; do
     val="$(sed -n "s/^${var}=//p" .env.example | head -n1)"
     if [[ -z "$val" ]]; then
       fail "${var} is not set in .env.example"; host_fails=$((host_fails+1))
