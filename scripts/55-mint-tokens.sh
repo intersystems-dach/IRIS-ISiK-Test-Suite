@@ -247,10 +247,19 @@ ok "obtained ${minted} access token(s)"
 # -----------------------------------------------------------------------------
 step "Staging the Connect access tokens"
 
+# --parity and --upstream: staging the tokens makes the contract file differ from
+# the released one, and the parity record written while rendering says IDENTICAL
+# because at that point it was. The row is re-stated as PARAMETERISED and the
+# difference is proved to be confined to the six token keys - see update_parity()
+# in the helper. The upstream copy is the one 20-fetch-packages.sh fetched from
+# the release tag; when it is absent the row is still corrected, with the record
+# saying that the key-by-key comparison could not be made.
 connect_token_clients | python3 "$HELPER" install \
   --token-dir "${WORK}/tokens" \
   --yaml "$CONNECT_YAML" \
   --record "$TOKENS_RECORD" \
+  --parity "${RUN_DIR}/tiger/TESTDATA-PARITY.txt" \
+  --upstream "${VENDOR_DIR}/upstream/testdata/Stufe5/connect.yaml" \
   --audience "$SUT_AUDIENCE" \
   --issuer "$EXPECTED_ISSUER" \
   --min-remaining "$MIN_REMAINING"

@@ -265,12 +265,124 @@ def cmd_install(args, entries, now):
 
     write_record(pathlib.Path(args.record), records, args, now)
 
+    if args.parity:
+        update_parity(
+            pathlib.Path(args.parity),
+            yaml_path,
+            pathlib.Path(args.upstream) if args.upstream else None,
+            sorted(tokens),
+        )
+
     print(f"  {len(records)} token(s) installed into {yaml_path}")
     for rec in records:
         print(
             "    %-56s %-22s %4dm left  sha256:%s"
             % (rec["key"], rec["scope"], (rec["remaining"] or 0) // 60, rec["sha256"][:16])
         )
+
+
+# The marker that delimits this script's addition to the parity record. Written
+# so the block can be replaced rather than appended to: `make tokens` runs again
+# whenever an hour has passed, and a record that grew a section per minting would
+# stop being a statement about the current file.
+PARITY_MARKER = "# --- Parameterised keys (written by scripts/55-mint-tokens.sh) ---"
+
+
+def update_parity(parity_path, staged, upstream, keys):
+    """Re-state the staged contract file's row in TESTDATA-PARITY.txt.
+
+    30-render-config.sh writes that record before any token exists, so it
+    reports this file as IDENTICAL - which stops being true the moment the
+    tokens are staged into it. Left alone, the round's own evidence would claim
+    byte-identity for a file that differs from the release in six places.
+
+    PARAMETERISED is that third state, and it is a CHECKED claim, not a label:
+    every key of the released file must still be present with the released
+    value, except exactly the keys named here, whose released value must have
+    been the empty placeholder. Anything else is a modification of the official
+    contract and stops the round - the same consequence MODIFIED has in
+    scripts/30-render-config.sh, for the same reason.
+    """
+    rel = f"{staged.parent.name}/{staged.name}"
+    digest = hashlib.sha256(staged.read_bytes()).hexdigest()
+    allow = set(keys)
+
+    verified = False
+    detail = []
+    if upstream is not None and upstream.is_file():
+        staged_data = load_yaml(staged)
+        up_data = load_yaml(upstream)
+        problems = []
+        for key in sorted(set(up_data) | set(staged_data)):
+            if key not in up_data:
+                problems.append(f"{key}: staged but absent from the released file")
+            elif key not in staged_data:
+                problems.append(f"{key}: in the released file but not staged")
+            elif staged_data[key] != up_data[key] and key not in allow:
+                problems.append(
+                    f"{key}: the staged value differs from the released one and it is "
+                    "not one of the token keys"
+                )
+        for key in sorted(allow):
+            released = up_data.get(key)
+            if released not in (None, "", PLACEHOLDER):
+                problems.append(
+                    f"{key}: the released file defines the value {released!r}; "
+                    "parameterising it would replace official content"
+                )
+        if problems:
+            fail(
+                "the staged test-data contract no longer matches the official release "
+                "except in the token keys:\n  " + "\n  ".join(problems)
+            )
+        verified = True
+        detail = [
+            "# Every other key of the released file is present with the released value;",
+            "# each key below was empty or %r upstream." % PLACEHOLDER,
+        ]
+    else:
+        detail = [
+            "# NOT COMPARED key by key: the released copy of this file was not available",
+            "# (vendor/upstream/testdata is written by scripts/20-fetch-packages.sh).",
+            "# The status is still PARAMETERISED rather than IDENTICAL, because the file",
+            "# on disk demonstrably differs from the release - this script wrote to it.",
+        ]
+
+    if not parity_path.is_file():
+        # Nothing to re-state. Not fatal: the tokens are staged and usable, and the
+        # absence of the record is itself reported by 30-render-config.sh.
+        print(f"  no parity record at {parity_path} - the row was not re-stated")
+        return
+
+    text = parity_path.read_text(encoding="utf-8")
+    text = text.split(PARITY_MARKER)[0].rstrip("\n") + "\n"
+
+    row = re.compile(r"^  \S+(\s+)%s(\s+)\S+$" % re.escape(rel), re.MULTILINE)
+    if row.search(text):
+        text = row.sub("  %-13s %-46s %s" % ("PARAMETERISED", rel, digest), text, count=1)
+    else:
+        print(f"  {rel} has no row in {parity_path.name} - one was appended")
+        text += "  %-13s %-46s %s\n" % ("PARAMETERISED", rel, digest)
+
+    lines = [
+        "",
+        PARITY_MARKER,
+        f"# {rel} carries this round's bearer tokens, staged at "
+        + datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        + ".",
+    ] + detail + [
+        "#",
+        "# The values are credentials and are not reproduced here; run/tiger/TOKENS.txt",
+        "# carries the SHA-256 of each one.",
+        "#",
+    ]
+    for key in sorted(allow):
+        lines.append(f"  {key}")
+    lines.append("")
+
+    parity_path.write_text(text + "\n".join(lines), encoding="utf-8")
+    how = "verified key by key" if verified else "NOT compared key by key"
+    print(f"  {rel} re-stated as PARAMETERISED in {parity_path.name} ({how})")
 
 
 def write_record(path, records, args, now):
@@ -359,9 +471,9 @@ def cmd_verify(args, entries, now):
             "the staged Connect test data is not usable for a run:\n  "
             + "\n  ".join(problems)
             + "\n\n  Re-mint with 'make tokens' and start the run straight after."
-            "\n  Note that 'make render' re-stages this file from the official "
-            "contract and\n  therefore restores the placeholders, so the order is "
-            "always render, then tokens."
+            "\n  Note that 'make up' re-renders the configuration and thereby "
+            "re-stages this\n  file from the official contract, restoring the "
+            "placeholders, so the order is\n  always 'make up', then 'make tokens'."
         )
 
     for rec in records:
@@ -387,6 +499,10 @@ def main():
     common(p_install)
     p_install.add_argument("--token-dir", required=True, help="one file per key, named by key")
     p_install.add_argument("--record", required=True, help="where to write TOKENS.txt")
+    p_install.add_argument("--parity", help="run/tiger/TESTDATA-PARITY.txt, to re-state this "
+                                            "file's row as PARAMETERISED")
+    p_install.add_argument("--upstream", help="the released copy of the same contract file, "
+                                             "for the key-by-key comparison")
 
     p_verify = sub.add_parser("verify", help="re-validate the staged tokens")
     common(p_verify)

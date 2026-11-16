@@ -712,7 +712,8 @@ fi
 # Bestaetigungsverfahren submission, so it is checked mechanically against the
 # copy 20-fetch-packages.sh fetched from the pinned release tag - not against a
 # comment. (Not from the image: the image carries no /app/testdata at all. See
-# fetch_upstream_sources() in 20-fetch-packages.sh.) Three outcomes:
+# fetch_upstream_sources() in 20-fetch-packages.sh.) Three outcomes here, and a
+# fourth that a later step can substitute for the first:
 #
 #   IDENTICAL  same bytes as the released file. Expected for every file
 #              suite_contract_files() lists - 11 in 2.7.0, 9 in 3.0.9.
@@ -721,6 +722,14 @@ fi
 #   ADDED      no counterpart upstream. Expected only for the
 #              zz-upstream-key-defects*.yaml overlays, which are ours by design;
 #              anything else is fatal.
+#
+#   PARAMETERISED  written over an IDENTICAL row by `make tokens`, for the one
+#              file whose token keys the official release ships empty. It is a
+#              checked claim - update_parity() in scripts/lib/connect_tokens.py
+#              requires every other key to still hold the released value - and it
+#              exists because this step necessarily runs BEFORE the tokens are
+#              minted, so leaving the row at IDENTICAL would make the round's own
+#              evidence claim byte-identity for a file that no longer has it.
 #
 # When vendor/upstream/testdata is absent (someone ran this before `make packages`)
 # the check is skipped with a warning rather than failing: the staged files are
@@ -746,22 +755,30 @@ if [[ -d "$UPSTREAM_TESTDATA" ]]; then
     printf '#\n'
     printf '# IDENTICAL  byte-identical to the released file\n'
     printf '# ADDED      no counterpart upstream (expected: the two overlay files)\n'
+    # Written by a later step, not by this one, but documented here because this
+    # is the file a reader has in front of them. See update_parity() in
+    # scripts/lib/connect_tokens.py.
+    printf '# PARAMETERISED  identical to the released file except in named keys whose\n'
+    printf '#            released value was the empty token placeholder - written by\n'
+    printf '#            `make tokens` for a round with CONNECT_ENABLE=true, with the\n'
+    printf '#            keys listed at the end of this file. Any OTHER difference in\n'
+    printf '#            such a file is a MODIFIED and stops the round.\n'
     printf '#\n'
-    printf '# %-10s %-46s %s\n' 'STATUS' 'FILE' 'SHA256'
+    printf '# %-13s %-46s %s\n' 'STATUS' 'FILE' 'SHA256'
     while IFS= read -r f; do
       rel="${f#$OUT_TESTDATA/}"
       up="${UPSTREAM_TESTDATA}/${rel}"
       if [[ ! -f "$up" ]]; then
-        printf '  %-10s %-46s %s\n' 'ADDED' "$rel" "$(sha256_of "$f")"
+        printf '  %-13s %-46s %s\n' 'ADDED' "$rel" "$(sha256_of "$f")"
         case " $ALLOWED_ADDED " in
           *" $rel "*) ;;
           *) added="${added}${added:+, }${rel}" ;;
         esac
       elif cmp -s "$f" "$up"; then
-        printf '  %-10s %-46s %s\n' 'IDENTICAL' "$rel" "$(sha256_of "$f")"
+        printf '  %-13s %-46s %s\n' 'IDENTICAL' "$rel" "$(sha256_of "$f")"
         identical=$((identical+1))
       else
-        printf '  %-10s %-46s %s\n' 'MODIFIED' "$rel" "$(sha256_of "$f")"
+        printf '  %-13s %-46s %s\n' 'MODIFIED' "$rel" "$(sha256_of "$f")"
         modified="${modified}${modified:+, }${rel}"
       fi
     done < <(find "$OUT_TESTDATA" -name '*.yaml' | sort)
@@ -1112,9 +1129,9 @@ make test-connect                      # run the module straight afterwards
 A token lives ${AS_TOKEN_LIFESPAN:-3600} seconds. \`make test-connect\` refuses to
 start with less than ten minutes left on any of them, because an expired token
 presents as a total authorization failure in the system under test rather than
-as a stale credential. Note the order: \`make render\` re-stages the test data
-from the official contract and therefore restores the placeholders, so it is
-always render first, then tokens.
+as a stale credential. Note the order: \`make up\` re-renders the configuration
+and therefore re-stages the test data from the official contract, restoring the
+placeholders, so it is always \`make up\` first, then \`make tokens\`.
 
 | Where the tokens are | What it holds |
 |---|---|

@@ -167,7 +167,7 @@ services:
         condition: service_started
 
     volumes:
-      # Both rendered by `make render` from webgateway/*.tmpl. CSP.ini carries the
+      # Both rendered by `make up` from webgateway/*.tmpl. CSP.ini carries the
       # gateway's IRIS credential, hence 0600 on the host side.
       - ./run/webgateway/CSP.ini:/opt/webgateway/bin/CSP.ini
       - ./run/webgateway/isik-vhost.conf:/etc/apache2/sites-enabled/000-default.conf:ro

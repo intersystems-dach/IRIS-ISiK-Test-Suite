@@ -295,7 +295,8 @@ if [[ "$VARIANT" == connect ]]; then
   # re-imported with a different hostname is caught here too.
   #
   # Checked immediately before the run and not at mint time only, because
-  # 'make render' re-stages run/testdata/ from the official contract and thereby
+  # 'make up' re-renders and thereby re-stages run/testdata/ from the official
+  # contract (scripts/30-render-config.sh, which that target runs), which
   # restores the placeholder values - a round that rendered after minting would
   # otherwise send the literal string SET-YOUR-TOKEN-HERE as a bearer token.
   step "Checking the staged Connect access tokens"

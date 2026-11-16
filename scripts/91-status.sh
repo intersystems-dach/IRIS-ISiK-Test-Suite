@@ -298,7 +298,17 @@ if [[ -f "${RUN_DIR}/tiger/TESTDATA-PARITY.txt" ]]; then
   if grep -q 'NOT VERIFIED' "${RUN_DIR}/tiger/TESTDATA-PARITY.txt"; then
     kv "test-data parity" "NOT VERIFIED - see run/tiger/TESTDATA-PARITY.txt"
   else
-    kv "test-data parity" "$(grep -c 'IDENTICAL' "${RUN_DIR}/tiger/TESTDATA-PARITY.txt") files identical to the official release"
+    # Counted on the rows, which are the indented lines, and not on the file: the
+    # legend at the top of that record names every status it explains, so a
+    # grep over the whole file counts the explanation as a file.
+    parity_n() { grep -cE "^  ${1} " "${RUN_DIR}/tiger/TESTDATA-PARITY.txt" || true; }
+    parity_line="$(parity_n IDENTICAL) files identical to the official release"
+    # Only for a Connect round, and worth a word rather than a number: this is
+    # the one file the round writes this round's bearer tokens into.
+    if [[ "$(parity_n PARAMETERISED)" != "0" ]]; then
+      parity_line="${parity_line}, $(parity_n PARAMETERISED) carrying this round's access tokens"
+    fi
+    kv "test-data parity" "$parity_line"
   fi
 fi
 

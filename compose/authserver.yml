@@ -76,7 +76,7 @@ services:
     restart: "no"
 
     # --import-realm reads /opt/keycloak/data/import at startup. The realm is
-    # rendered by `make render` from keycloak/realm-isik.json.tmpl, so the client
+    # rendered by `make up` from keycloak/realm-isik.json.tmpl, so the client
     # secret and the audience are deploy-time facts and not committed values.
     command: ["start", "--import-realm", "--db=dev-file"]
 
