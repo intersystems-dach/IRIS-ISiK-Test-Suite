@@ -177,6 +177,37 @@ CATEGORIES: dict[str, dict[str, str]] = {
                      "configured on it, so scope enforcement is a deployment "
                      "property of the endpoint and not of the FHIR layer alone.",
     },
+    "AUTHORIZATION_REFUSAL_FORM": {
+        "signal": "a search carrying a SMART-on-FHIR access token whose scope does "
+                  "not cover the requested resource type was answered `2xx` where "
+                  "the scenario requires a `4xx` status. The scope was evaluated - "
+                  "this category is about the HTTP form the refusal takes, not "
+                  "about whether it took place, and it is kept apart from "
+                  "AUTHORIZATION_SCOPE for exactly that reason: filing it there "
+                  "would read as a disclosure, which this category does not "
+                  "claim - what the response carried is stated per case, from "
+                  "the traffic log, in CASE-EVIDENCE.md",
+        "irisLocus": "the search path, not the token handler. The token was "
+                     "accepted and its scope applied - patient-compartment "
+                     "filtering is governed by HS.FHIRServer.API.ConfigData's "
+                     "SearchFiltering, which iris/src/ISiK/OAuth.cls deliberately "
+                     "leaves at the value the product's own installer sets. What "
+                     "this category is about is whether a search that the scope "
+                     "admits no result for is answered as an empty result set or "
+                     "refused with a status, which the interactions strategy's "
+                     "search path decides. Both forms are offered by the suite "
+                     "itself: the same scenario name under a third scope asserts "
+                     "`FHIR search response is forbidden or contains no resources` "
+                     "and passes. Whether the SUT returned an empty result set or "
+                     "disclosed resources is not in the submitted report - a TGR "
+                     "step records no response body - but it is not lost either: "
+                     "the traffic log each case cites in the round's debug archive "
+                     "carries the whole response, and CASE-EVIDENCE.md quotes it "
+                     "per case, status, headers and body with the body's sha256. "
+                     "Over a bundle that carries test-report.zip alone there is no "
+                     "such log, and the scope probe in docs/en/07-reports.md "
+                     "settles it on the running endpoint instead.",
+    },
     "ENVIRONMENT_PREREQUISITE": {
         "signal": "the scenario's own precondition was not met by this test "
                   "environment, so the case states nothing about the SUT. "
@@ -500,7 +531,24 @@ STATUS_RULES = [
 # is exact for all 17: 400-vs-20\d 6x, 400-vs-422 5x, 201-vs-422 4x, 201-vs-4\d\d
 # and 500-vs-4\d\d once each. `expected` is a regex, not a literal, so a rule
 # matches on the class of status the suite demanded rather than on one code.
+#
+# The first rule below is narrower than the second and has to be tried first. Both
+# describe "the suite wanted 4xx, the SUT answered 2xx", and the second one names
+# a write - "the SUT accepted a body the profile forbids". On a GET that sentence
+# is simply false: nothing was written, so no write path validated anything. The
+# distinguishing evidence is the request the assertion was made about, which is
+# why response_code_verdict takes the resolved request: `-X GET` plus a resolved
+# `Authorization: Bearer` header is a scope-enforcement case and not a write one.
 RESPONSE_CODE_RULES = [
+    {"when": "the suite demanded 4xx, the SUT answered 2xx, and the request was "
+             "a GET carrying a resolved Bearer token",
+     "category": "AUTHORIZATION_REFUSAL_FORM",
+     "why": "no write took place, so this cannot be a write-validation verdict. "
+            "The case states that the refusal of an out-of-scope read was not "
+            "signalled as a status; what was returned instead is not in the "
+            "submitted report, because a TGR step records no response body, and "
+            "is read out of the round's own traffic log - see the category's "
+            "irisLocus"},
     {"when": "the suite demanded 4xx or 422 and the SUT answered 2xx",
      "category": "WRITE_VALIDATION_GAP",
      "why": "the write was accepted although the profile the suite validated "

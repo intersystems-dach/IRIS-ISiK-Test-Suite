@@ -375,12 +375,19 @@ failure cannot be attributed to an HL7 example resource.
 
 ### Categories
 
-Ten, a closed set. A category exists to answer one question: **which part of IRIS
-would a developer open.** Nothing is added without that answer and nothing is
+Fourteen, a closed set. A category exists to answer one question: **which part of
+IRIS would a developer open.** Nothing is added without that answer and nothing is
 force-fitted — a step shape the classifier cannot place is recorded as
 `UNCLASSIFIED` rather than filed under the nearest-looking heading, because a wrong
 category sends a developer to the wrong source file, which is worse than sending
 them nowhere.
+
+Three of them name no locus in IRIS on purpose — `TEST_DATA_DEFECT`,
+`ENVIRONMENT_PREREQUISITE` and `UPSTREAM_SUITE_CONFLICT`. Each states, on positive
+evidence, that the failure is not the product's, and the gap count reports them
+separately so that it absorbs neither a precondition that was never met nor a
+suite that contradicts itself. `UNCLASSIFIED` is the opposite case: no locus
+because none is established yet.
 
 | Category | Signal | IRIS locus (summary) |
 |---|---|---|
@@ -392,6 +399,10 @@ them nowhere.
 | `SEARCH_SEMANTICS` | The search executes but returns the wrong set — a modifier, prefix, chain, `_include` or paging behaviour | The search layer and `SearchQueryProcessor` |
 | `RESPONSE_FORMAT` | The REST envelope is wrong rather than the resource: content type, charset, `_format`, status, or the identity of what a read returned | The REST layer / read path. Deliberately also covers `resource has ID` assertions — same code path |
 | `REFERENCE_INTEGRITY` | A `Reference.reference` does not resolve, or a referenced resource is missing from a bundle the SUT assembled | Reference storage and rewriting; `_include` / `_revinclude` assembly |
+| `AUTHORIZATION_SCOPE` | A request carrying a SMART-on-FHIR access token was answered with resources outside that token's scope, or the SMART discovery document is absent or incomplete | The endpoint's OAuth 2.0 configuration and the authorization it delegates to; scope enforcement is a deployment property of the endpoint, not of the FHIR layer alone |
+| `AUTHORIZATION_REFUSAL_FORM` | The scope *was* enforced, but the refusal of an out-of-scope read was signalled as `2xx` where the scenario requires a `4xx` status | The search path, not the token handler: whether a search the scope admits no result for is answered as an empty result set or refused with a status. What came back is in the traffic log, quoted in `CASE-EVIDENCE.md`; [the probe](#probing-how-an-out-of-scope-search-is-refused) re-measures it live |
+| `ENVIRONMENT_PREREQUISITE` | The scenario's own precondition was not met by this deployment, so the case states nothing about the SUT | **None.** A property of the round, not of the product |
+| `UPSTREAM_SUITE_CONFLICT` | The case failed on the suite rather than on the response — two steps of the suite require incompatible things of one body | **None.** Neither the product's nor ours |
 | `TEST_DATA_DEFECT` | The seeded resource was absent, unreadable or already flagged by `$validate` before the run | **None.** Ours, not the product's |
 | `UNCLASSIFIED` | The step shape is not in the classification table — almost always a suite version that grew a new shape | Unknown; the step and response are quoted verbatim so the entry is still actionable |
 
@@ -420,6 +431,59 @@ and not the endpoint's profiles. Record the two status codes, the endpoint's
 `ResourceValidation` setting and the build string beside the round, delete the
 resources the probe created, and say which build was measured. A measurement from
 an earlier build must not be reported as a property of a later one.
+
+#### Probing how an out-of-scope search is refused
+
+`AUTHORIZATION_REFUSAL_FORM` rests on a question the submitted report cannot
+answer. A `Connect` scenario asserts the status code of a search it expects to be
+refused, and the step that issues that search is a Tiger step — Tiger proxies the
+request itself, so Serenity records no `restQuery` and no response body for it.
+`test-report.zip` therefore states that the SUT answered `2xx` and does **not**
+state whether any resource came back with it, and those are two very different
+findings: a scope that was enforced and signalled in an unexpected way, or a scope
+that was not enforced at all.
+
+The round's *debug* archive does record it. `debug-report.zip` carries the traffic
+log the case cites, with the whole exchange in it, and `CASE-EVIDENCE.md` quotes
+that exchange per case — status line, headers, and the body with its sha256. On
+the 2026-11-16 round both occurrences were answered `200` with a `searchset`
+Bundle of `total: 0` and no `entry`, so the scope was enforced and only the HTTP
+form of the refusal differs from what the scenario demanded. Read that first; it
+is evidence inside the bundle and needs no live system.
+
+The probe below is for the two cases where it is not available: a slim bundle,
+which carries `test-report.zip` alone, and a re-measurement against a build the
+archived round did not cover. Run it against the round's own endpoint, while the
+stack is up and the tokens are still inside their hour:
+
+```sh
+B=https://127.0.0.1:52443/isik5/fhir/r4           # the round's TLS endpoint
+T=<one token from run/testdata/Stufe5/connect.yaml>
+# the search the scenario expects to be refused: a resource type the scope omits
+curl -sk -H "Authorization: Bearer $T" -H 'Accept: application/fhir+json' \
+  "$B/Encounter?_count=10" | head -c 400
+# the same token on the type its scope does name, as the control
+curl -sk -H "Authorization: Bearer $T" -H 'Accept: application/fhir+json' \
+  "$B/Patient?_count=10" | head -c 400
+```
+
+Read `Bundle.total` and `Bundle.entry` of the first response. `total: 0` with no
+`entry` is a refusal expressed as an empty result set: the scope was enforced and
+only its HTTP form differs from what the scenario demanded. Entries of the omitted
+type are a disclosure, which is `AUTHORIZATION_SCOPE` and a different finding
+altogether. The control request shows that the token was accepted at all, so that
+an empty first result is not read as a rejected token.
+
+Two things make the probe go wrong if they are not observed, both measured on
+2026-11-16 against the pinned SUT. Use the **TLS** endpoint: the identical token
+on the plain-HTTP vhost is answered `401` with an empty body, while over HTTPS it
+is answered `200`. And mint the tokens immediately before probing — they live one
+hour, and an expired one is answered by the same bare `401`, which is
+indistinguishable from the first mistake.
+
+Record the status, `Bundle.total`, the entry resource types and the token's scope
+beside the round, for each scope the module stages. A measurement taken under one
+`SearchFiltering` setting must not be reported as a property of the other.
 
 **The IRIS locus column is different in kind from everything else in the report,
 and says so.** No artefact in this repository maps a FHIR feature to an IRIS class:

@@ -1162,7 +1162,7 @@ Every one of them on purpose:
 | \`run/webgateway/CSP.ini\` | \`${IRIS_MGMT_PASSWORD}\` as the gateway's service credential |
 | \`analysis/results.md\` §1 | the *Access credentials* table, in each archived report |
 | \`GAP-ANALYSIS.md\` | verbatim \`Authorization: Basic\` headers in the quoted exchanges |
-| \`<stufe>/run.json\` | the \`credentials\` block the results analysis reads |
+| \`<variant>/run.json\` | the \`credentials\` block the results analysis reads |
 
 Only one rule applies: none of this may reach source control. \`secrets/\`,
 \`.env\`, \`.env.resolved\`, \`run/\` and \`reports/\` are all gitignored, and

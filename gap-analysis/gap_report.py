@@ -326,7 +326,35 @@ RE_EMPTY_RESULT_ASSERT = re.compile(
     r"\bcount\(\)\s*(?:>\s*0|>=\s*1)|\bentry(?:\.resource)?\.exists\(\)")
 
 
-def response_code_verdict(failure: dict, cls: dict) -> tuple[str, str] | None:
+# The method and the credential of the request the assertion was made about, read
+# out of the cURL line Tiger records beside every TGR request step. The cURL is
+# used rather than the step's own resolved description because the description
+# truncates long header values - measured on the 2026-11-16 Connect round, where
+# the `Authorization` cell ends mid-token - while the cURL carries the request in
+# full. A step that recorded no cURL yields no method, and bearer_read() is then
+# False: no evidence, not a negative finding.
+RE_CURL_METHOD = re.compile(r'curl\b[^\n]*?-X\s+([A-Z]+)')
+RE_CURL_BEARER = re.compile(r'(?i)-H\s+["\']?Authorization:\s*Bearer\s+(\S+)')
+
+
+def bearer_read(resolved: str) -> bool:
+    """Whether that request was a read presented with an access token.
+
+    Both halves have to hold. A read, because the write verdicts below say "the
+    SUT accepted a body", and on a GET no body was sent. An access token that was
+    actually issued, because the suite's own unresolved placeholder means no scope
+    was ever presented - that case belongs to prerequisite_verdict, which runs
+    later and overrides whatever is decided here.
+    """
+    method = RE_CURL_METHOD.search(resolved or "")
+    if not method or method.group(1) not in ("GET", "HEAD"):
+        return False
+    token = RE_CURL_BEARER.search(resolved or "")
+    return bool(token) and UNRESOLVED_TOKEN not in token.group(1)
+
+
+def response_code_verdict(failure: dict, cls: dict,
+                          resolved: str = "") -> tuple[str, str] | None:
     """(category, reason) for a `$.responseCode` assertion, from its own message.
 
     Implements index['responseCodeRules']. This exists because a TGR step carries
@@ -334,6 +362,13 @@ def response_code_verdict(failure: dict, cls: dict) -> tuple[str, str] | None:
     `category_from_status` cannot fire - the status the SUT actually returned is
     only ever in the assertion message. See RESPONSE_CODE_RULES for the
     measurement.
+
+    `resolved` is the request the assertion was made about, as the suite resolved
+    it (see request_as_resolved). It is what separates the two rules that both
+    read "the suite wanted 4xx and the SUT answered 2xx": on a write that is a
+    body the profile forbids, on a read with a Bearer token it is a refusal that
+    was not signalled as a status. Default "" so a caller with no request in hand
+    still gets the write verdicts it got before.
 
     Returns None unless this really is a status-code assertion whose message has
     both values, so a message form this does not recognise stays UNCLASSIFIED
@@ -363,6 +398,12 @@ def response_code_verdict(failure: dict, cls: dict) -> tuple[str, str] | None:
     accepted = 200 <= code < 300
     wanted_ok = admits(200, 201, 204)
     wanted_bad = admits(400, 404, 405, 422, 500)
+    if accepted and wanted_bad and not wanted_ok and bearer_read(resolved):
+        return "AUTHORIZATION_REFUSAL_FORM", (
+            f"{got}. The request was a read presented with an access token, so "
+            "nothing was written; the scope's refusal was not signalled as a "
+            "status. What was returned instead is in the round's traffic log, "
+            "quoted per case in CASE-EVIDENCE.md")
     if accepted and wanted_bad and not wanted_ok:
         return "WRITE_VALIDATION_GAP", (
             f"{got}. The SUT accepted a body the profile forbids")
@@ -377,7 +418,7 @@ def response_code_verdict(failure: dict, cls: dict) -> tuple[str, str] | None:
 
 
 def categorise(failure: dict, cls: dict, sub: dict | None,
-               indexed: dict | None) -> tuple[str, str]:
+               indexed: dict | None, resolved: str = "") -> tuple[str, str]:
     """(category, one-line reason for the classification)."""
     http = failure.get("http")
 
@@ -413,7 +454,7 @@ def categorise(failure: dict, cls: dict, sub: dict | None,
     # After the recorded exchange, which is stronger evidence, and before the
     # shape defaults: a status-code assertion states the SUT's actual answer in
     # its own message even when no exchange was recorded.
-    verdict = response_code_verdict(failure, cls)
+    verdict = response_code_verdict(failure, cls, resolved)
     if verdict:
         return verdict
 
@@ -802,6 +843,39 @@ def attribute(index: dict, category: str, cls: dict, sub: dict | None,
             "the status codes are read from the assertion message: Tiger issues "
             "this request through its own proxy, so the Serenity report carries "
             "no `restQuery` for the exchange")
+        return out
+
+    # --- SMART-on-FHIR authorization ----------------------------------------
+    if category == "AUTHORIZATION_REFUSAL_FORM":
+        out["mechanism"] = "SMART-on-FHIR scope enforcement - the HTTP form of a refusal"
+        # Not named after the resource type either, and for the same reason as the
+        # write group above: what the entry is about is the status an out-of-scope
+        # read is refused with, which is one behaviour whatever type it is asked
+        # for. The per-occurrence table names each scope context.
+        out["feature"] = "status code of an out-of-scope read"
+        m = RE_ASSERTJ_VALUES.match(message)
+        if m:
+            actual, expected = m.group("actual").strip(), m.group("expected").strip()
+            out["expected"] = (f"the SUT answers `{expected}` to a read the "
+                               f"token's scope does not cover; it answered "
+                               f"`{actual}`")
+        out["requirements"].append(
+            "the suite requires this of two scope contexts and not of a third: "
+            "the same scenario name under one of the module's other scopes "
+            "asserts `FHIR search response is forbidden or contains no "
+            "resources`, which an empty result set satisfies. A `4xx` satisfies "
+            "both forms, so the two are not in conflict - this is a requirement "
+            "the SUT does not meet, not a suite defect")
+        out["notes"].append(
+            "the status code is read from the assertion message: Tiger issues "
+            "this request through its own proxy, so the Serenity report carries "
+            "no `restQuery` for the exchange. What the SUT returned in place of "
+            "the refusal is not stated by this entry, and is not lost either: "
+            "each occurrence cites a traffic log in the round's debug archive, "
+            "and `CASE-EVIDENCE.md` quotes that exchange - status, headers and "
+            "body with the body's sha256 - case by case. Over a bundle that "
+            "carries no debug archive, run the scope probe in "
+            "docs/en/07-reports.md against the round's endpoint instead")
         return out
 
     # --- response format ----------------------------------------------------
@@ -1804,16 +1878,15 @@ def analyse(results: dict, index: dict, seed: dict, corpus: dict, run_dir: Path,
                 unjoined.append(f"{case.get('feature')} ({where}) "
                                 f"({case.get('scenario')})"
                                 + ("" if indexed_feature else " [feature not indexed]"))
-            category, reason = categorise(failure, cls, sub, indexed)
+            resolved = resolved_requests.get(
+                (case.get("report") or {}).get("outcomeJson") or "", "")
+            category, reason = categorise(failure, cls, sub, indexed, resolved)
 
             # Precondition override, on positive evidence only, and ahead of the
             # test-data override: a case whose own precondition was never met
             # states nothing about either the SUT or our seeded data, so neither
             # of them is the thing to look at.
-            prereq = prerequisite_verdict(
-                resolved_requests.get(
-                    (case.get("report") or {}).get("outcomeJson") or "", ""),
-                tokens_unresolved)
+            prereq = prerequisite_verdict(resolved, tokens_unresolved)
             # Initialised per case, not left to carry over: both are recorded on
             # the group below, and a prerequisite-categorised case used to be
             # given whichever evidence the previous iteration happened to hold.
@@ -1976,7 +2049,12 @@ def analyse(results: dict, index: dict, seed: dict, corpus: dict, run_dir: Path,
     order = {c: i for i, c in enumerate(
         ["UNSUPPORTED_OPERATION", "CAPABILITY_STATEMENT_GAP", "MISSING_SEARCH_PARAM",
          "PROFILE_NONCONFORMANCE", "WRITE_VALIDATION_GAP", "SEARCH_SEMANTICS",
-         "REFERENCE_INTEGRITY", "AUTHORIZATION_SCOPE", "RESPONSE_FORMAT",
+         "REFERENCE_INTEGRITY", "AUTHORIZATION_SCOPE",
+         # After AUTHORIZATION_SCOPE and before RESPONSE_FORMAT: the scope was
+         # enforced, so this is not of the same weight as a disclosure, but it is
+         # more than the REST envelope - the status is what a client distinguishes
+         # a refusal from an empty result set by.
+         "AUTHORIZATION_REFUSAL_FORM", "RESPONSE_FORMAT",
          "UNCLASSIFIED", "TEST_DATA_DEFECT", "UPSTREAM_SUITE_CONFLICT",
          "ENVIRONMENT_PREREQUISITE"])}
     entries = sorted(groups.values(),
@@ -2071,6 +2149,8 @@ CAT_TITLE = {
     "RESPONSE_FORMAT": "Response format / REST envelope",
     "REFERENCE_INTEGRITY": "Reference integrity",
     "AUTHORIZATION_SCOPE": "SMART-on-FHIR scope enforcement",
+    "AUTHORIZATION_REFUSAL_FORM": "SMART-on-FHIR refusal signalled as an empty "
+                                  "result rather than a status",
     "TEST_DATA_DEFECT": "Test data defect (ours, not IRIS)",
     "UPSTREAM_SUITE_CONFLICT": "Test suite defect (neither IRIS nor our test "
                                "data)",
@@ -2082,7 +2162,15 @@ CAT_TITLE = {
 # Categories for which no FHIR package can be named, because the behaviour they
 # describe is base FHIR REST rather than anything a package declares. Listed so
 # the entry says that instead of reporting a failed package lookup.
-NO_SUPPLYING_PACKAGE = {"WRITE_VALIDATION_GAP", "RESPONSE_FORMAT"}
+#
+# AUTHORIZATION_REFUSAL_FORM is here for the same reason and not because its
+# requirement is weak: the status an out-of-scope search is refused with is laid
+# down in SMART on FHIR and in the ISiK specification text, neither of which is a
+# StructureDefinition or a SearchParameter in the run's package set. Reporting it
+# as "not resolvable - treat the attribution as incomplete" would send a reader
+# looking for a package that was never meant to declare it.
+NO_SUPPLYING_PACKAGE = {"WRITE_VALIDATION_GAP", "RESPONSE_FORMAT",
+                        "AUTHORIZATION_REFUSAL_FORM"}
 
 # Who owns each class of package-loader finding in §8. Deliberately blunter than
 # the wording in analysis/results.md: that document has to be even-handed for an

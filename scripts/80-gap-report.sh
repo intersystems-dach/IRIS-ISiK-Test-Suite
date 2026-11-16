@@ -131,7 +131,7 @@ fi
 
 [[ -f "$GAP_MD" ]] || die "gap_report.py did not write GAP-ANALYSIS.md - see above.
   This is a harness error, not a conformance result. The official report in
-  ${GAP_RUN_DIR#$REPO_ROOT/}/<stufe>/official/ is unaffected and remains the
+  ${GAP_RUN_DIR#$REPO_ROOT/}/<variant>/official/ is unaffected and remains the
   authoritative artefact."
 
 # This document is appended to a bundle 70-collect-report.sh has already checked

@@ -102,31 +102,39 @@ fi
 # looking for one of them. What it cannot replace is the debug archive itself:
 # a slim bundle carries official/test-report.zip only, and over one of those the
 # generator documents every case and quotes no exchange at all. Hence the warning
-# below, per level, rather than a silent document.
-ce_levels=0
+# below, per archive, rather than a silent document.
+#
+# Per ARCHIVE and not per level, because a case's exchange is in the archive that
+# measured it: `connect/` is a second measurement of one Stufe 5 module and its
+# verdicts supersede the complete archive's, so the cases documented here cite
+# traffic logs under connect/ that exist in no other archive. The list is the same
+# one 70-collect-report.sh extracts (ARCHIVE_DIRS there), named rather than
+# globbed for the same reason.
+ce_archives=0
 ce_sources=0
-for ce_lvl in "$CE_RUN_DIR"/stufe*; do
-  [[ -d "$ce_lvl" ]] || continue
-  ce_levels=$((ce_levels + 1))
-  if [[ -d "${ce_lvl}/official/extracted/debug-report" ]]; then
+for ce_arch in $(suite_levels_lc) connect; do
+  ce_arch="${CE_RUN_DIR}/${ce_arch}"
+  [[ -d "$ce_arch" ]] || continue
+  ce_archives=$((ce_archives + 1))
+  if [[ -d "${ce_arch}/official/extracted/debug-report" ]]; then
     ce_sources=$((ce_sources + 1))
-    log "${ce_lvl##*/}: reading the extracted debug report"
-  elif [[ -f "${ce_lvl}/official/debug-report.zip" ]]; then
+    log "${ce_arch##*/}: reading the extracted debug report"
+  elif [[ -f "${ce_arch}/official/debug-report.zip" ]]; then
     ce_sources=$((ce_sources + 1))
-    log "${ce_lvl##*/}: reading official/debug-report.zip directly"
+    log "${ce_arch##*/}: reading official/debug-report.zip directly"
   else
-    warn "${ce_lvl##*/} carries neither official/debug-report.zip nor an
+    warn "${ce_arch##*/} carries neither official/debug-report.zip nor an
   extraction of it. Its cases will be documented from the official test report
   alone, which states the steps and the assertion but not the exchange, so they
   will appear in section 5 as having no recorded request and response."
   fi
 done
 
-(( ce_levels )) || die "no level directory (stufe3/, stufe5/) in ${CE_RUN_DIR#$REPO_ROOT/}
+(( ce_archives )) || die "no archive directory (stufe3/, stufe5/, connect/) in ${CE_RUN_DIR#$REPO_ROOT/}
   There is nothing to read the exchanges out of. The bundle is incomplete."
 
 log "run bundle:      ${CE_RUN_DIR#$REPO_ROOT/}"
-log "levels:          ${ce_levels}, of which ${ce_sources} carry a traffic source"
+log "archives:        ${ce_archives}, of which ${ce_sources} carry a traffic source"
 
 # -----------------------------------------------------------------------------
 # 4. Generate
@@ -149,7 +157,7 @@ fi
 
 [[ -f "$CE_MD" ]] || die "case_evidence.py did not write CASE-EVIDENCE.md - see above.
   This is a harness error, not a conformance result. The official report in
-  ${CE_RUN_DIR#$REPO_ROOT/}/<stufe>/official/ is unaffected and remains the
+  ${CE_RUN_DIR#$REPO_ROOT/}/<variant>/official/ is unaffected and remains the
   authoritative artefact."
 
 # Checked before the manifest records it, as in 80-gap-report.sh. This document

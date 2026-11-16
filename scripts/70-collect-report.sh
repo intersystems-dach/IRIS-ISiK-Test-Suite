@@ -33,11 +33,18 @@
 #   GAP-ANALYSIS.md, gap-analysis.json   NOT written here - 80-gap-report.sh adds
 #                                 them afterwards and appends their hashes to the
 #                                 manifest, so `sha256sum -c` passes either way
-#   <stufe>/official/*.zip        untouched, as the suite wrote them
-#   <stufe>/official/SHA256SUMS   written by 60-run-tests.sh
-#   <stufe>/official/extracted/test-report/   verbatim extraction of test-report.zip
-#   <stufe>/official/extracted/debug-report/  verbatim extraction of debug-report.zip
-#   <stufe>/run.json, run.log     written by 60-run-tests.sh
+#   <variant>/official/*.zip      untouched, as the suite wrote them
+#   <variant>/official/SHA256SUMS written by 60-run-tests.sh
+#   <variant>/official/extracted/test-report/   verbatim extraction of test-report.zip
+#   <variant>/official/extracted/debug-report/  verbatim extraction of debug-report.zip
+#   <variant>/run.json, run.log   written by 60-run-tests.sh
+#
+# <variant> is one directory per RUN, not per level: stufe3 and stufe5 for the
+# specification levels, and connect for Stufe 5's `Connect` module run on its own
+# because it needs a Tiger configuration the other modules must not have. The
+# analysis supersedes the complete archive's Connect cases with that archive's
+# and never adds the two up; ARCHIVE_DIRS below is the list, and
+# scripts/lib/results_report.py ("Two measurements of one level") carries the rule.
 #   provenance/                   seed records, IRIS's own install record, the
 #                                 rendered Tiger config's checksums, the package
 #                                 manifest and plan, the resolved versions, and
@@ -46,9 +53,9 @@
 # CREDENTIAL HANDLING: the credentials this round used are documented on purpose,
 # in three places at once - the "Access credentials" table in analysis/results.md,
 # provenance/CREDENTIALS.md as generated at deployment, and verbatim wherever they
-# already occur (provenance/env.resolved.txt, <stufe>/run.json, and
+# already occur (provenance/env.resolved.txt, <variant>/run.json, and
 # debug-report.zip's own config/tiger.yaml, which is this project's rendered
-# run/tiger/tiger-isik-<stufe>.yaml). Nothing is filtered or re-permissioned on
+# run/tiger/tiger-isik-<variant>.yaml). Nothing is filtered or re-permissioned on
 # the way in. CASE-EVIDENCE.md is the one derived document that withholds them,
 # for the reason its own preamble gives: it is the document that travels.
 #
@@ -128,8 +135,19 @@ mkdir -p "$ANALYSIS_DIR" "$PROV_DIR"
 # every citation ambiguous about which archive it came from.
 step "1/5 Extracting the official report archives"
 
+# The archive directories a round can hold: one per specification level, plus
+# `connect`, which is not a level but a second measurement of ONE module of
+# Stufe 5 under the Tiger configuration that module requires. 60-run-tests.sh's
+# header ("THE THIRD VARIANT") says why it has to be a separate invocation; the
+# analysis supersedes the complete archive's Connect cases with it rather than
+# adding the two up (see "Two measurements of one level" in
+# scripts/lib/results_report.py). Listed here, rather than globbed, so that a
+# stray directory under a round is not extracted and analysed as if it were
+# evidence.
+ARCHIVE_DIRS="$(suite_levels_lc) connect"
+
 found_any=0
-for stufe in $(suite_levels_lc); do
+for stufe in $ARCHIVE_DIRS; do
   official="${RUN_REPORT_DIR}/${stufe}/official"
   [[ -d "$official" ]] || continue
   found_any=1
@@ -181,21 +199,20 @@ for stufe in $(suite_levels_lc); do
   done
 done
 
-# A connect-only round archives into connect/, not into a level directory, and
-# this stage does not analyse it yet: the Connect module's own archive supersedes
-# the Connect cases of the complete-scope one, and an analysis that counted both
-# would report 64 Connect cases for 32 scenarios. Said plainly rather than
-# reported as a missing level, which is what the generic message below would
-# imply.
-if (( ! found_any )) && [[ -d "${RUN_REPORT_DIR}/connect/official" ]]; then
-  die "${RUN_REPORT_DIR#$REPO_ROOT/} holds only the Connect module's own archive
-  (connect/official/), which this stage does not yet analyse. The archive itself
-  is complete and verified - see connect/official/SHA256SUMS and connect/run.json.
-  A complete-scope round is what 'make report' reads: run 'make test-stufe5'
-  for the same run id, or pass RUN_ID of a round that has one."
+# A round holding ONLY connect/ is analysed, and is a measurement of the Connect
+# module rather than a verdict on Stufe 5. Said here as well as in the document,
+# because an operator who runs `make test-connect && make report` gets a complete
+# bundle and nothing in the output would otherwise distinguish it from a
+# conformance round.
+if (( found_any )) && [[ -d "${RUN_REPORT_DIR}/connect/official" ]] \
+   && ! [[ -d "${RUN_REPORT_DIR}/stufe5/official" ]]; then
+  warn "this round holds the Connect module's archive and no complete-scope one.
+  Everything collected here is a statement about that one module; the rest of
+  Stufe 5 was not run, so the bundle reports neither pass nor fail for it. The
+  archive the conformance certificate is applied for comes from 'make test-stufe5'."
 fi
 
-(( found_any )) || die "none of the level directories ($(suite_levels_lc)) exists under ${RUN_REPORT_DIR#$REPO_ROOT/}
+(( found_any )) || die "none of the archive directories ($ARCHIVE_DIRS) exists under ${RUN_REPORT_DIR#$REPO_ROOT/}
   Run 'make test' first, or 'make test-<level>' for a single one. Which levels
   the pinned suite carries is suite_levels() in scripts/lib.sh: release 3.0.0
   removed ISiK Level 3, so a 3.x round produces stufe5/ only."
@@ -638,10 +655,21 @@ Health. Generated by \`make report\` on $(date -u +%Y-%m-%dT%H:%M:%SZ).
 
 ## What is authoritative
 
-\`<stufe>/official/*.zip\` — **the official report, byte-for-byte as the Gematik
+\`<variant>/official/*.zip\` — **the official report, byte-for-byte as the Gematik
 ISiK test suite wrote it.** \`test-report.zip\` is the artefact the
 *Bestätigungsverfahren* is based on and the file uploaded to TITUS. Nothing in
 this repository modifies it; \`official/SHA256SUMS\` lets you confirm that.
+
+\`<variant>\` is one directory per test run: \`stufe3\` and \`stufe5\` for the
+specification levels, and \`connect\` where the round also ran ISiK Stufe 5's
+\`Connect\` module on its own. That module's scenarios present a bearer token,
+which needs a Tiger route whose \`authentication:\` block replaces the
+\`Authorization\` header every other module depends on — so it cannot share a
+configuration with them and is run a second time by itself. The complete-scope
+run is not narrowed and still contains the same cases; \`analysis/results.md\`
+reports the module's own measurement for them and the complete run's figures
+alongside, under "the \`Connect\` module was measured twice". **The two are never
+added together.**
 
 Everything under \`analysis/\` is **derived**. It is a machine-generated index
 into the official report, in which every verdict cites the file inside
@@ -658,12 +686,12 @@ official report is correct.
 | \`analysis/MANIFEST.txt\` | sha256 of every file in this bundle |
 | \`GAP-ANALYSIS.md\` | developer-facing gap analysis, English (written by \`make gap-report\`) — **not** regulatory documentation |
 | \`gap-analysis.json\` | the same, machine-readable, for diffing two rounds |
-| \`<stufe>/official/*.zip\` | the official report archives, unmodified |
-| \`<stufe>/official/SHA256SUMS\` | their checksums, as received |
-| \`<stufe>/official/extracted/test-report/\` | verbatim extraction: \`unresolvedReports/*.json\`, \`serenity-summary.html\`, \`pom.xml\` |
-| \`<stufe>/official/extracted/debug-report/\` | verbatim extraction: the browsable Serenity report under \`serenity/\`, the Tiger config under \`config/\`, Maven and server logs under \`logs/\` |
-| \`<stufe>/run.json\` | what was run: images, digests, tag expression, timings, credentials |
-| \`<stufe>/run.log\` | the test suite container's complete output, with a Connect round's bearer tokens replaced by their SHA-256 |
+| \`<variant>/official/*.zip\` | the official report archives, unmodified |
+| \`<variant>/official/SHA256SUMS\` | their checksums, as received |
+| \`<variant>/official/extracted/test-report/\` | verbatim extraction: \`unresolvedReports/*.json\`, \`serenity-summary.html\`, \`pom.xml\` |
+| \`<variant>/official/extracted/debug-report/\` | verbatim extraction: the browsable Serenity report under \`serenity/\`, the Tiger config under \`config/\`, Maven and server logs under \`logs/\` |
+| \`<variant>/run.json\` | what was run: which part of the level's scope this archive covers, images, digests, tag expression, timings, credentials |
+| \`<variant>/run.log\` | the test suite container's complete output, with a Connect round's bearer tokens replaced by their SHA-256 |
 | \`provenance/CREDENTIALS.md\` | the credentials this round used, as generated at deployment |
 | \`provenance/tiger-TOKENS.txt\` | a Connect round's access tokens by SHA-256, with each one's scope, issuer, audience and lifetime |
 | \`provenance/rig-version.txt\` | the version and revision of the test rig that produced this bundle |
@@ -672,7 +700,7 @@ official report is correct.
 ## Reading the official report directly
 
 \`\`\`sh
-xdg-open <stufe>/official/extracted/debug-report/serenity/index.html
+xdg-open <variant>/official/extracted/debug-report/serenity/index.html
 \`\`\`
 
 That is the Serenity report as the test suite renders it, with every scenario's
@@ -684,10 +712,10 @@ archive.
 
 **This bundle documents the credentials the round used, deliberately.** They are
 in \`analysis/results.md\` section 1 as a table, in \`provenance/CREDENTIALS.md\`
-as generated at deployment, in \`<stufe>/run.json\` under \`credentials\`, in
+as generated at deployment, in \`<variant>/run.json\` under \`credentials\`, in
 \`provenance/env.resolved.txt\`, and verbatim in the official debug archive's own
 \`config/tiger.yaml\` (which is this project's rendered
-\`run/tiger/tiger-isik-<stufe>.yaml\`).
+\`run/tiger/tiger-isik-<variant>.yaml\`).
 
 That is intentional and is what lets a reader re-issue any request cited below
 and confirm a verdict by hand. The environment was a single-round lab instance,
@@ -699,12 +727,12 @@ Each round generates new ones.
 A \`Connect\` round's six bearer tokens are valid for one hour, so a reader of
 this bundle can do nothing with them; \`provenance/tiger-TOKENS.txt\` records
 each by SHA-256, with its scope, issuer, audience and lifetime, and that hash is
-what the redaction markers in \`<stufe>/run.log\` and \`CASE-EVIDENCE.md\` name.
+what the redaction markers in \`<variant>/run.log\` and \`CASE-EVIDENCE.md\` name.
 The authorization server's client secret and admin password do not expire with
 the round at all — a reader who wants a token mints a fresh one with
 \`make tokens\` — and are withheld for that reason.
 
-\`<stufe>/official/\` is exempt from that withholding and is byte-for-byte as the
+\`<variant>/official/\` is exempt from that withholding and is byte-for-byte as the
 suite wrote it. The traffic recorded in \`debug-report.zip\` therefore contains
 the \`Authorization\` headers as sent, bearer tokens included: it is the artefact
 the *Bestätigungsverfahren* is based on, its checksums are the suite's own, and

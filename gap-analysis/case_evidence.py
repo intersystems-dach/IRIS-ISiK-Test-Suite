@@ -28,7 +28,7 @@ three files of the round's own bundle:
   * `gap-analysis.json`       - what each failure was attributed to, so an entry
                                 carries the same gap id, category and expectation
                                 as `GAP-ANALYSIS.md` rather than a second opinion;
-  * `<stufe>/official/test-report.zip` and `<stufe>/official/debug-report.zip` -
+  * `<variant>/official/test-report.zip` and `<variant>/official/debug-report.zip` -
                                 the suite's own record of the exchange.
 
 The archives are read directly, not through an extraction, so this document can be
@@ -175,7 +175,7 @@ class Bundle:
     """The round's official archives, addressed by the paths results.json cites.
 
     results.json cites a case as
-    `<stufe>/official/extracted/test-report/unresolvedReports/<sha>.json`, which
+    `<variant>/official/extracted/test-report/unresolvedReports/<sha>.json`, which
     exists only where `make report` extracted the archive. The zips are therefore
     served from the same citation, so an entry reads identically whether the
     extraction is present or not and the citation printed in the document stays
@@ -519,7 +519,7 @@ def expected_received(failure: dict, failing: dict | None,
             "line": "the official report records no response for this case"}
 
 
-def curl_for(request: dict | None, level_run: dict, level_dir: str) -> list[str]:
+def curl_for(request: dict | None, level_run: dict, archive_dir: str) -> list[str]:
     """The request replayed against the round's own endpoint, as shell.
 
     Built from the raw request the SUT received rather than from the suite's own
@@ -528,6 +528,12 @@ def curl_for(request: dict | None, level_run: dict, level_dir: str) -> list[str]
     (`Proxy-Connection`, `Host`), the one curl must compute itself
     (`Content-Length`), and the credential. `Accept-Encoding` is dropped as well,
     so the reply comes back readable.
+
+    The credential is dropped but not replaced by a fixed one: a request the
+    suite presented with a SMART-on-FHIR access token is not the same request
+    when replayed with the harness's own user, and a scope verdict replayed that
+    way would be a measurement of something else. Which form was on the wire is
+    read off the header that was dropped.
     """
     if not request:
         return []
@@ -551,11 +557,38 @@ def curl_for(request: dict | None, level_run: dict, level_dir: str) -> list[str]
             "accept-encoding:", "user-agent:")
     headers = [h for h in head[1:]
                if h.strip() and not h.lower().startswith(drop)]
+    # The scheme, read off the header that is dropped below. By the time this runs
+    # the credential itself is withheld and the scheme is not - see _withhold().
+    bearer = any(h.lower().startswith("authorization: bearer") for h in head[1:])
     body = request.get("body") or ""
 
-    lines = [f'BASE={base}' + (f"   # {level_dir}/run.json, sut.baseUrlFromHost"
+    lines = [f'BASE={base}' + (f"   # {archive_dir}/run.json, sut.baseUrlFromHost"
                                if base else "")]
-    cmd = ['curl -i -u "$SUT_USER:$SUT_PASSWORD"']
+    if bearer:
+        # No token is quoted here, nor is one recoverable from the archive: the
+        # record keeps the SHA-256 of the ones this round used and the parameters
+        # they were minted with. A replay therefore needs a token of its own, of
+        # the same scope, and needs it fresh - they live one hour. The record is
+        # cited as it names itself, not under the archive directory: it is one
+        # file of the round's provenance, which is shared by the archives.
+        record = (level_run.get("authorizationServer") or {}).get("tokenRecord")
+        lines.append('TOKEN=   # a token of this scenario\'s scope, minted as '
+                     + (f"{record} records" if record
+                        else "this round's token record records")
+                     + " ('make tokens')")
+        cmd = ['curl -i -H "Authorization: Bearer $TOKEN"']
+    else:
+        cmd = ['curl -i -u "$SUT_USER:$SUT_PASSWORD"']
+    # The TLS listener is addressed by the name its certificate was issued for,
+    # which is not in DNS and whose issuer is this round's own authority: both
+    # are supplied here rather than left for the reader to discover from a
+    # handshake failure. run/tls/ca.crt is re-created by `make all`, together
+    # with the certificate it signs.
+    if base.startswith("https://"):
+        authority = base.split("://", 1)[1].split("/", 1)[0]
+        host, _, port = authority.partition(":")
+        cmd.append(f"     --resolve {host}:{port or '443'}:127.0.0.1")
+        cmd.append("     --cacert run/tls/ca.crt")
     for h in headers:
         k, _, v = h.partition(":")
         cmd.append(f"     -H '{k.strip()}: {v.strip()}'")
@@ -618,14 +651,29 @@ def build(results: dict, gap_doc: dict | None, bundle: Bundle) -> dict:
     for level, L in (results.get("levels") or {}).items():
         level_dir = L.get("directory") or level.lower()
         run = L.get("run") or {}
+        # The run record of each archive that measured this level, so that a case
+        # superseded by a module variant is described by the invocation that
+        # actually produced it - its endpoint, and whether it ran with bearer
+        # tokens - and not by the complete run's.
+        runs = {m.get("directory"): (m.get("run") or {})
+                for m in (L.get("measurements") or []) if m.get("directory")}
         failing = [c for c in (L.get("cases") or [])
                    if c.get("result") not in ("SUCCESS", None)]
         for case in sorted(failing, key=sort_key):
-            entries.append(entry_for(case, level, level_dir, run, gaps, bundle))
+            # The archive to read this case's artefacts out of is the one its
+            # verdict was measured in, which is not always the level's own: a
+            # module variant (Connect) is a second invocation with its own
+            # archive, and its cases supersede the complete run's, so they carry
+            # `measuredIn` naming that archive. Reading them from the level's
+            # directory finds the complete run's traffic log, or - because the
+            # two invocations number their logs independently - none at all.
+            archive_dir = case.get("measuredIn") or level_dir
+            entries.append(entry_for(case, level, archive_dir,
+                                     runs.get(archive_dir) or run, gaps, bundle))
     return {"entries": entries}
 
 
-def entry_for(case: dict, level: str, level_dir: str, run: dict,
+def entry_for(case: dict, level: str, archive_dir: str, run: dict,
               gaps: dict, bundle: Bundle) -> dict:
     report = case.get("report") or {}
     doc = bundle.outcome(report.get("outcomeJson") or "")
@@ -637,11 +685,12 @@ def entry_for(case: dict, level: str, level_dir: str, run: dict,
     traffic_path = ""
     traffic_note = ""
     if steps["rbel"]:
-        got = bundle.traffic(level_dir, steps["rbel"])
+        got = bundle.traffic(archive_dir, steps["rbel"])
         if got:
             msgs = messages(got[0])
             traffic_path = got[1]
             request, response = last_exchange(msgs)
+            request, response = mask_message(request), mask_message(response)
             if not msgs:
                 traffic_note = NOTE_LOG_EMPTY
         else:
@@ -656,7 +705,9 @@ def entry_for(case: dict, level: str, level_dir: str, run: dict,
 
     return {
         "level": level,
-        "levelDir": level_dir,
+        # The archive this case was read from, which for a case a module variant
+        # superseded is the variant's and not the level's.
+        "archiveDir": archive_dir,
         "baseUrl": (run.get("sut") or {}).get("baseUrlFromHost") or "",
         "module": case.get("module"),
         "feature": case.get("feature"),
@@ -697,7 +748,7 @@ def entry_for(case: dict, level: str, level_dir: str, run: dict,
             "note": traffic_note,
         },
         "outcomeLine": verdict["line"],
-        "reproduce": curl_for(request, run, level_dir),
+        "reproduce": curl_for(request, run, archive_dir),
     }
 
 
@@ -728,7 +779,7 @@ def fence(text: str, lang: str = "") -> list[str]:
 
 
 def body_block(body: str, nbytes: int, lang: str, what: str,
-               level_dir: str, traffic: str, limit: int) -> list[str]:
+               archive_dir: str, traffic: str, limit: int) -> list[str]:
     """One body, quoted in full or cut with a statement of what was cut.
 
     A cut quote names the sha256 of the complete body and the command that reads
@@ -754,7 +805,7 @@ def body_block(body: str, nbytes: int, lang: str, what: str,
                f"whole message, so a recovered copy can be checked against it:")
     out.append("")
     rel = traffic.split("official/extracted/debug-report/")[-1] if traffic else ""
-    out += fence(f"unzip -p {level_dir}/official/debug-report.zip \\\n"
+    out += fence(f"unzip -p {archive_dir}/official/debug-report.zip \\\n"
                  f"  '{rel}' > /tmp/exchange.html", "sh")
     return out
 
@@ -805,8 +856,8 @@ def render(results: dict, gap_doc: dict | None, analysis: dict, generated: str,
     w.append("Every claim below is a join over three files and nothing else: this "
              "run's `analysis/results.json` (which cases failed), this run's "
              "`gap-analysis.json` (what each failure was attributed to) and the "
-             "official archives `<stufe>/official/test-report.zip` and "
-             "`<stufe>/official/debug-report.zip` (what went over the wire). "
+             "official archives `<variant>/official/test-report.zip` and "
+             "`<variant>/official/debug-report.zip` (what went over the wire). "
              "Re-running `make case-evidence` on a bundle that carries both "
              "archives reproduces this document exactly.")
     w.append("")
@@ -854,7 +905,7 @@ def render(results: dict, gap_doc: dict | None, analysis: dict, generated: str,
         w.append(f"> **This bundle does not carry the exchange for "
                  f"{len(missing_debug)} of these cases.** The traffic logs the "
                  f"official report names are not in it, because "
-                 f"`<stufe>/official/debug-report.zip` is absent from the run "
+                 f"`<variant>/official/debug-report.zip` is absent from the run "
                  f"directory this document was generated from — which is what a "
                  f"slim archive carries. Those cases are in section 5 and state "
                  f"their input data, their expectation and the error the test "
@@ -922,7 +973,7 @@ def render(results: dict, gap_doc: dict | None, analysis: dict, generated: str,
              "that made it. This is a property of the test suite"),
             (NOTE_LOG_ABSENT,
              "the traffic log the official report names is not in this bundle, "
-             "because `<stufe>/official/debug-report.zip` is absent from it. "
+             "because `<variant>/official/debug-report.zip` is absent from it. "
              "**This says nothing about the case:** the request was made and was "
              "logged, and regenerating from a bundle that carries both archives "
              "recovers it. See the warning in section 1"),
@@ -963,7 +1014,7 @@ def derivation_clause() -> list[str]:
     w.append("| Output received | the response out of the same traffic log, with "
              "the suite's own FHIRPath evaluation and assertion error beside it |")
     w.append("| How to reproduce | the request, rewritten onto the endpoint "
-             "`<stufe>/run.json` records for host access |")
+             "`<variant>/run.json` records for host access |")
     w.append("")
     w.append("**Which exchange belongs to a case.** A Scenario Outline writes one "
              "outcome record for all of its examples, so the record is first "
@@ -984,8 +1035,12 @@ def derivation_clause() -> list[str]:
              "much was cut and names the command that reads the rest out of the "
              "archive.")
     w.append("")
-    w.append("**Two things are withheld, both of them `Authorization` values.** "
-             f"The `Authorization: Basic …` header is replaced by `{REDACTED}`. "
+    w.append("**Two things are withheld, both of them `Authorization` "
+             "credentials.** The credential of an `Authorization: Basic …` "
+             f"header is replaced by `{REDACTED}`, the scheme kept — which "
+             "scheme a request carried is not a secret and is what tells the "
+             "reader, and the replay command, whether an access token was "
+             "presented at all. "
              "This laboratory's credentials are generated per deployment and are "
              "recorded on purpose in `provenance/CREDENTIALS.md` and in section 1 "
              "of `analysis/results.md`, so withholding them protects nothing — but "
@@ -993,7 +1048,8 @@ def derivation_clause() -> list[str]:
              "a credential in a form that can be pasted into a shell.")
     w.append("")
     w.append("A bearer token of the `Connect` module is replaced by "
-             f"`{REDACTED_TOKEN}`, wherever it occurs: in a request header, in a "
+             f"`{REDACTED_TOKEN}`, in both forms of this annex and wherever it "
+             "occurs: in a request header, in a "
              "step description the test suite logged with the test-data value "
              "substituted, and in an assertion that reported the value it saw. "
              "Such a token is valid for one hour and is therefore of no use to a "
@@ -1041,6 +1097,20 @@ def derivation_clause() -> list[str]:
              "per-resource write and read-back records, so a case that depends on "
              "one can be checked against the instance the run actually had.")
     w.append("")
+    w.append("A case whose request was presented with a SMART-on-FHIR access "
+             "token is replayed with one, not with the two variables above: its "
+             "command carries `TOKEN=` and the `Authorization: Bearer` header "
+             "instead of `-u`, and the endpoint it names is the TLS one its own "
+             "archive's `run.json` records, because that is the listener the "
+             "token was presented to. No token is recoverable from the bundle — "
+             "it keeps the SHA-256 of the ones the round used and the parameters "
+             "they were minted with — so the replay needs a freshly minted token "
+             "of the same scope (`make tokens`); they are valid for one hour. "
+             "Such a command also carries `--resolve` and `--cacert`: the name "
+             "the certificate was issued for is not in DNS, and the issuer is "
+             "this round's own authority, re-created by `make all` together with "
+             "the certificate it signs.")
+    w.append("")
     w.append("Where an entry's request carries a body, the reproduction reads it "
              "from `request-body.json`: save the quoted request body to that name, "
              "unchanged, in the directory the command runs in.")
@@ -1053,10 +1123,16 @@ def derivation_clause() -> list[str]:
              "are addressable inside the two archives themselves, with or without "
              "the extraction `make report` leaves behind:")
     w.append("")
-    w += fence("unzip -p stufe5/official/test-report.zip "
+    w += fence("unzip -p <variant>/official/test-report.zip "
                "'unresolvedReports/<sha>.json' | python3 -m json.tool\n"
-               "unzip -p stufe5/official/debug-report.zip "
+               "unzip -p <variant>/official/debug-report.zip "
                "'serenity/downloadable/<file>' > /tmp/exchange.html", "sh")
+    w.append("`<variant>` is the archive directory the entry's own citations name "
+             "— the level's own archive, or `connect/` for a case the `Connect` "
+             "module's separate measurement superseded. The two archives number "
+             "their traffic logs independently, so a log named by a `connect/` "
+             "citation is not the same file as the identically named one under "
+             "the level's archive.")
     w.append("The second of those two archives is the one that carries the "
              "exchange. A bundle without it — a slim archive, which carries "
              "`test-report.zip` alone — supports every other field of an entry "
@@ -1238,7 +1314,7 @@ def render_entry(e: dict, limit: int) -> list[str]:
         w += fence(redact(req["head"]), "http")
         if req.get("body"):
             w += body_block(req["body"], req.get("bodyBytes") or 0, "json",
-                            "Request body", e["levelDir"],
+                            "Request body", e["archiveDir"],
                             e["citations"].get("trafficLog") or "", limit)
     elif e["input"]["suiteCurl"]:
         w.append("The traffic log records no request for this case. The request "
@@ -1280,7 +1356,7 @@ def render_entry(e: dict, limit: int) -> list[str]:
         w += fence(redact(rsp["head"]), "http")
         if rsp.get("body"):
             w += body_block(rsp["body"], rsp.get("bodyBytes") or 0, "json",
-                            "Response body", e["levelDir"],
+                            "Response body", e["archiveDir"],
                             e["citations"].get("trafficLog") or "", limit)
     elif e["received"]["note"]:
         note = e["received"]["note"]
@@ -1299,8 +1375,16 @@ def render_entry(e: dict, limit: int) -> list[str]:
     w.append("**How to reproduce**")
     w.append("")
     if e["reproduce"]:
-        w.append("With the round's deployment up and the two variables of clause "
-                 "3.1 exported:")
+        # Which credential the command needs is a property of the request that was
+        # replayed, so the sentence that introduces it has to follow the command
+        # rather than name the endpoint's user in every case.
+        if any(line.startswith("TOKEN=") for line in e["reproduce"]):
+            w.append("From the repository root, with the round's deployment up "
+                     "and a freshly minted token of this scenario's scope (clause "
+                     "3.1):")
+        else:
+            w.append("With the round's deployment up and the two variables of "
+                     "clause 3.1 exported:")
         w.append("")
         w += fence("\n".join(e["reproduce"]), "sh")
         if (req or {}).get("body"):
@@ -1352,7 +1436,7 @@ _AUTH_INLINE = re.compile(r'(?i)(-H\s+["\']?Authorization:\s*)([^"\'\n]*)')
 _BASIC = re.compile(r'(?i)\b(Basic|Bearer)\s+[A-Za-z0-9+/=._\-]{8,}')
 
 
-def _hide(value: str) -> str:
+def _hide(value: str) -> bool:
     """Whether this header value is a credential at all.
 
     The test suite sends its own unresolved placeholder as a Bearer token in the
@@ -1360,8 +1444,16 @@ def _hide(value: str) -> str:
     on - it is what `GAP-ANALYSIS.md` cites to place them outside the product.
     Replacing it would remove the finding rather than a secret, so a value that is
     the placeholder is kept.
+
+    A value that has already been withheld is kept as well, so that this pass is
+    idempotent: the entries are masked where they are built, and masking a marker
+    a second time would read its text as a Basic credential and replace the
+    token's note - which names the hash record - with the wrong one.
     """
-    return UNRESOLVED_TOKEN not in (value or "")
+    value = value or ""
+    if UNRESOLVED_TOKEN in value:
+        return False
+    return REDACTED not in value and REDACTED_TOKEN not in value
 
 
 def _marker(value: str) -> str:
@@ -1375,14 +1467,47 @@ def _marker(value: str) -> str:
         else REDACTED
 
 
+def _withhold(value: str) -> str:
+    """One `Authorization` value with its credential out and its scheme kept.
+
+    The scheme is not a credential and it is load-bearing: clause 3 distinguishes
+    a request that carried an access token from one that carried this
+    laboratory's endpoint credential, and a case's replay command picks which of
+    the two it needs by reading it back off this header.
+    """
+    scheme, sep, _rest = (value or "").strip().partition(" ")
+    if sep and scheme.lower() in ("basic", "bearer", "digest"):
+        return f"{scheme} {_marker(value)}"
+    return _marker(value)
+
+
 def redact(text: str) -> str:
     """The credential out, and nothing else - see clause 3 of the document."""
-    out = _AUTH.sub(lambda m: m.group(1) + (_marker(m.group(2)) if _hide(m.group(2))
+    out = _AUTH.sub(lambda m: m.group(1) + (_withhold(m.group(2)) if _hide(m.group(2))
                                             else m.group(2)), text or "")
-    out = _AUTH_INLINE.sub(lambda m: m.group(1) + (_marker(m.group(2)) if _hide(m.group(2))
+    out = _AUTH_INLINE.sub(lambda m: m.group(1) + (_withhold(m.group(2)) if _hide(m.group(2))
                                                    else m.group(2)), out)
     return _BASIC.sub(lambda m: m.group(0) if not _hide(m.group(0))
                       else f"{m.group(1)} {_marker(m.group(0))}", out)
+
+
+def mask_message(msg: dict | None) -> dict | None:
+    """One recorded HTTP message with its credential withheld.
+
+    Applied where the entry is built rather than only where it is rendered,
+    because both forms of this annex are published and the machine-readable one
+    carries the raw message: a `Connect` round presents a real access token, so an
+    unmasked `case-evidence.json` would publish a live credential. The round's
+    publish-time scan (scripts/lib/redact_credentials.py) is what proved this
+    necessary - it caught two tokens here - and it remains the backstop.
+    """
+    if not isinstance(msg, dict):
+        return msg
+    out = dict(msg)
+    for key in ("head", "body"):
+        if out.get(key):
+            out[key] = redact(out[key])
+    return out
 
 
 # =============================================================================
@@ -1454,7 +1579,7 @@ def main() -> int:
     out_json.write_text(json.dumps(
         {"runId": results.get("runId"), "generatedAt": generated,
          "generator": GENERATOR, "audience": "InterSystems IRIS for Health developers",
-         "authoritativeSource": "<stufe>/official/test-report.zip",
+         "authoritativeSource": "<variant>/official/test-report.zip",
          "maxBodyCharacters": args.max_body,
          "entries": [cap_bodies(e, args.max_body)
                      for e in analysis["entries"]]},

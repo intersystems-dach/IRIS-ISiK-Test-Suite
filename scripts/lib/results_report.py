@@ -2,7 +2,7 @@
 """Turn the official ISiK report into a cited results document.
 
 Run by scripts/70-collect-report.sh (`make report`). Reads the archives the test
-suite produced - already extracted, verbatim, under reports/<run-id>/<stufe>/ -
+suite produced - already extracted, verbatim, under reports/<run-id>/<variant>/ -
 and writes:
 
     analysis/results.md              the inspector-facing evidence index
@@ -22,11 +22,11 @@ the only claim that makes the derived document usable as evidence at all.
 
 Two citation targets exist per test case, and both are recorded when present:
 
-    <stufe>/official/extracted/test-report/unresolvedReports/<name>.json
+    <variant>/official/extracted/test-report/unresolvedReports/<name>.json
         The machine-readable Serenity TestOutcome. Part of test-report.zip -
         i.e. part of the artefact submitted to TITUS - so an inspector holding
         only the submission can still follow the citation.
-    <stufe>/official/extracted/debug-report/serenity/<name>.html
+    <variant>/official/extracted/debug-report/serenity/<name>.html
         The same outcome as the browsable Serenity page, with request and
         response bodies. Only in debug-report.zip, which is not submitted.
 
@@ -79,6 +79,34 @@ a pass. Steps are therefore attributed to Examples rows by the parameters each
 step records in its own title; with that, both levels reconcile exactly.
 ``match_step_rows()`` carries the measurement and the failure modes.
 
+Two measurements of one level, and which one counts
+---------------------------------------------------
+A round may hold a second archive for the same specification level, taken under
+a different configuration and restricted to one module. Stufe 5's ``Connect``
+module is the case that exists: its scenarios present a bearer token, which
+needs a Tiger route carrying an ``authentication:`` block, and such a route
+REPLACES the Authorization header every other module relies on - so the module
+cannot share a configuration with the other nine and is run a second time on its
+own. ``scripts/60-run-tests.sh`` ("THE THIRD VARIANT") carries the measurement
+behind that.
+
+The complete-scope run is NOT narrowed to compensate. It keeps selecting all 32
+Connect cases, because ``target/test-report.zip`` in the singular is what the
+conformance certificate is applied for and because it keeps the round comparable
+with every round taken before the capability existed.
+
+Both archives therefore contain the same 32 cases, and this generator
+**supersedes** rather than adds: for each case the module's own archive measured,
+that verdict replaces the complete archive's, and the two are never summed. A
+level's ``cases`` list is the effective set after superseding; every case carries
+``measuredIn``, naming the archive directory its verdict came from, and
+``supersedes`` on a replacing case records what it displaced. The unmerged
+figures stay in ``levels.<L>.measurements[]``, so the complete archive can still
+be read on its own terms. Anything that does not line up case for case -
+a case measured only by the variant, a variant case outside its module - is an
+anomaly and blocks, because a merge that does not reconcile would otherwise be
+indistinguishable from one that does.
+
 Nothing here interprets *why* a case failed. That is the gap report's job
 (gap-analysis/gap_report.py), which joins this file's ``failure`` records
 against the scenario -> validation-module -> FHIR-package index.
@@ -107,6 +135,14 @@ import feature_parser as fp  # noqa: E402  (path set above, by design)
 # a full round.
 ALL_LEVELS = ("Stufe3", "Stufe5")
 STUFE_DIR = {"Stufe3": "stufe3", "Stufe5": "stufe5"}
+
+# Archive directories that are not specification levels: a second measurement of
+# ONE module of a level, under a configuration the level's other modules must not
+# have. Keyed by level, each entry (directory, module). The directory name is the
+# variant name 60-run-tests.sh was invoked with, which is also what it records in
+# <variant>/run.json as `variant`, and the module name is the one
+# vendor/requirements.json uses - the join between the two is this table.
+MODULE_VARIANTS = {"Stufe5": (("connect", "Connect"),)}
 
 # net.thucydides.model.domain.TestResult, in the enum's own order. Grouped into
 # three verdicts because that is the granularity a conformance statement needs;
@@ -606,6 +642,12 @@ def cases_from_outcome(name: str, outcome: dict, index: FeatureIndex,
     base = {
         "level": level,
         "module": module,
+        # Which archive of the round this verdict was read from. For a level with
+        # a module variant, two archives measured the same case, and this is what
+        # a single case record says about which measurement it is. The citations
+        # below carry the same directory, but as part of a path rather than as a
+        # value anything can group or filter by.
+        "measuredIn": level_dir,
         "feature": rel,
         "featureLine": scen.line if scen else None,
         "scenario": scenario_name,
@@ -740,10 +782,76 @@ def read_json(path: Path) -> Any | None:
         return None
 
 
-def collect_level(level: str, run_root: Path, index: FeatureIndex,
-                  reqs: dict) -> dict | None:
-    """Everything known about one specification level's run, or None if absent."""
-    stufe = STUFE_DIR[level]
+def tally_cases(cases: list[dict]) -> dict:
+    """The verdict counts of a set of cases.
+
+    A function rather than inline arithmetic because it is applied twice to the
+    same level: once per archive as measured, and once to the effective set after
+    a module variant has superseded its cases. Counting the merged set the same
+    way the unmerged one was counted is what makes the two tables comparable.
+    """
+    by_result = {r: 0 for r in RESULT_ORDER}
+    for c in cases:
+        by_result[c["result"]] = by_result.get(c["result"], 0) + 1
+    asserting = [c for c in cases if not c["isPrecondition"]]
+    return {
+        "cases": len(cases),
+        "asserting": len(asserting),
+        "precondition": len(cases) - len(asserting),
+        "passed": sum(1 for c in cases if c["verdict"] == "pass"),
+        "failed": sum(1 for c in cases if c["verdict"] == "fail"),
+        "other": sum(1 for c in cases if c["verdict"] == "other"),
+        "assertingPassed": sum(1 for c in asserting if c["verdict"] == "pass"),
+        "assertingFailed": sum(1 for c in asserting if c["verdict"] == "fail"),
+        "assertingOther": sum(1 for c in asserting if c["verdict"] == "other"),
+        "byResult": {k: v for k, v in by_result.items() if v},
+    }
+
+
+def tally_modules(cases: list[dict], lvl: dict) -> dict:
+    """Per-module counts, with the specified figures alongside where known."""
+    modules: dict[str, dict] = {}
+    for c in cases:
+        m = modules.setdefault(c["module"], {
+            "cases": 0, "asserting": 0, "precondition": 0,
+            "passed": 0, "failed": 0, "other": 0,
+        })
+        m["cases"] += 1
+        m["precondition" if c["isPrecondition"] else "asserting"] += 1
+        m[{"pass": "passed", "fail": "failed", "other": "other"}[c["verdict"]]] += 1
+    for mod, exp in (lvl.get("modules") or {}).items():
+        m = modules.setdefault(mod, {"cases": 0, "asserting": 0, "precondition": 0,
+                                     "passed": 0, "failed": 0, "other": 0})
+        m["expectedCases"] = exp["casesExecuted"]
+        m["expectedAsserting"] = exp["casesAssertive"]
+    return modules
+
+
+def case_key(case: dict) -> tuple:
+    """What makes two archives' records the same test case.
+
+    The feature file, the scenario name and - for a Scenario Outline - which
+    Examples row. Deliberately not the Serenity report filename: that is a sha256
+    of the outcome's qualified id, and two runs of the same scenario under
+    different configurations are two different outcomes with two different names.
+    """
+    ex = case.get("example") or {}
+    return (case["feature"], case["scenario"], ex.get("index"))
+
+
+def collect_measurement(level: str, run_root: Path, index: FeatureIndex,
+                        reqs: dict, directory: str | None = None,
+                        module: str | None = None) -> dict | None:
+    """Everything known about one archive of one level, or None if absent.
+
+    `directory` is the archive directory under the round, which for a
+    specification level is the level's own and for a module variant is the
+    variant name 60-run-tests.sh ran (`connect`). `module` restricts what this
+    measurement is expected to contain: with it set, the reconciliation is
+    against that module's specified case count rather than the level's, and a
+    case from any other module is an anomaly rather than an ordinary result.
+    """
+    stufe = directory or STUFE_DIR[level]
     level_root = run_root / stufe
     if not level_root.is_dir():
         return None
@@ -857,32 +965,71 @@ def collect_level(level: str, run_root: Path, index: FeatureIndex,
         cases.extend(got)
         anomalies.extend(found)
 
-    # --- totals ---------------------------------------------------------------
-    by_result = {r: 0 for r in RESULT_ORDER}
-    for c in cases:
-        by_result[c["result"]] = by_result.get(c["result"], 0) + 1
-    asserting = [c for c in cases if not c["isPrecondition"]]
-    totals = {
-        "cases": len(cases),
-        "asserting": len(asserting),
-        "precondition": len(cases) - len(asserting),
-        "passed": sum(1 for c in cases if c["verdict"] == "pass"),
-        "failed": sum(1 for c in cases if c["verdict"] == "fail"),
-        "other": sum(1 for c in cases if c["verdict"] == "other"),
-        "assertingPassed": sum(1 for c in asserting if c["verdict"] == "pass"),
-        "assertingFailed": sum(1 for c in asserting if c["verdict"] == "fail"),
-        "assertingOther": sum(1 for c in asserting if c["verdict"] == "other"),
-        "byResult": {k: v for k, v in by_result.items() if v},
-    }
+    # A module variant that measured something outside its module. The variant
+    # exists because its configuration is one the other modules must not have -
+    # a Tiger route that replaces their Authorization header - so a case from
+    # another module in this archive was measured under a configuration that
+    # invalidates it. Blocking, and reported before the counts, because the
+    # counts would otherwise merely look slightly high.
+    if module:
+        escaped = sorted({(c["module"], c["feature"]) for c in cases
+                          if c["module"] != module})
+        if escaped:
+            shown = ", ".join(f"{rel} ({mod})" for mod, rel in escaped[:5])
+            anomalies.append({
+                "kind": "variantScopeEscaped",
+                "detail": (f"{stufe}/ is the {module} module's own run, but its report "
+                           f"contains {len(escaped)} feature(s) from other module(s): "
+                           f"{shown}. The configuration this variant runs with is one "
+                           "the other modules must not have, so those cases were "
+                           f"measured under a configuration that does not apply to "
+                           f"them. Check TESTS_TO_RUN_{stufe.upper()} and the tag "
+                           "expression recorded in run.json."),
+                "where": f"{stufe}/run.json",
+            })
+
+    totals = tally_cases(cases)
 
     lvl = reqs["levels"][level]
-    expected = {
-        "casesExecuted": lvl["casesExecuted"],
-        "casesAssertive": lvl["casesAssertive"],
-        "features": lvl["features"],
-        "featuresInScope": lvl["featuresInScope"],
-        "tagExpression": reqs["tagExpressions"].get(level),
-    }
+    level_expr = (reqs.get("tagExpressions") or {}).get(level)
+    if module:
+        # The module's own specified scope, which is what this archive is
+        # measured against: reconciling 32 Connect cases against the level's 1233
+        # would report a shortfall of 1201 for a run that is complete.
+        mod_exp = (lvl.get("modules") or {}).get(module)
+        if mod_exp is None:
+            anomalies.append({
+                "kind": "unknownVariantModule",
+                "detail": (f"vendor/requirements.json records no {module!r} module for "
+                           f"{level}, so this archive's {len(cases)} case(s) cannot be "
+                           "reconciled against a specified scope. The requirements index "
+                           "and the suite image that produced this archive are probably "
+                           "different releases: the module was added by a later one."),
+                "where": "vendor/requirements.json",
+            })
+            mod_exp = {}
+        mod_feats = [f for f in reqs["features"]
+                     if f["level"] == level and f.get("module") == module]
+        expected = {
+            "casesExecuted": mod_exp.get("casesExecuted"),
+            "casesAssertive": mod_exp.get("casesAssertive"),
+            "features": mod_exp.get("features"),
+            "featuresInScope": sum(1 for f in mod_feats if f["inScope"]) or None,
+            # The conjunction the variant actually ran, not the level's own: the
+            # module tag is how upstream's README documents selecting a module,
+            # and run.json records the literal string the container was given.
+            "tagExpression": (f"{level_expr} and @{module}" if level_expr else None),
+            "module": module,
+        }
+    else:
+        expected = {
+            "casesExecuted": lvl["casesExecuted"],
+            "casesAssertive": lvl["casesAssertive"],
+            "features": lvl["features"],
+            "featuresInScope": lvl["featuresInScope"],
+            "tagExpression": level_expr,
+            "module": None,
+        }
 
     # --- independent cross-check ---------------------------------------------
     # serenity-summary.json is generated by Serenity's own json-summary reporter
@@ -930,7 +1077,8 @@ def collect_level(level: str, run_root: Path, index: FeatureIndex,
             "where": f"{stufe}/official/extracted/debug-report/serenity/",
         })
 
-    if totals["cases"] and totals["cases"] != expected["casesExecuted"]:
+    if (totals["cases"] and expected["casesExecuted"]
+            and totals["cases"] != expected["casesExecuted"]):
         # The two directions have disjoint causes and the shortfall is the only
         # one that bears on scope, so they are not reported in the same words. An
         # excess cannot mean "fewer cases than the certification scope": no tag
@@ -963,7 +1111,12 @@ def collect_level(level: str, run_root: Path, index: FeatureIndex,
     # clean sheet rather than as missing evidence.
     seen_features = {c["feature"] for c in cases}
     not_executed = sorted(rel for rel, f in reqs_by_rel.items()
-                          if f["inScope"] and rel not in seen_features)
+                          if f["inScope"] and rel not in seen_features
+                          # A module variant is only expected to contain its own
+                          # module. Measuring its 7 features against the level's
+                          # 187 would report 180 features as unexecuted, which is
+                          # the normal state of this archive and not a finding.
+                          and (module is None or f.get("module") == module))
     if not_executed:
         # One anomaly for the set, not one per feature: an aborted run leaves
         # dozens unexecuted and a table of 70 near-identical rows buries the other
@@ -981,20 +1134,12 @@ def collect_level(level: str, run_root: Path, index: FeatureIndex,
         })
 
     # --- per module -----------------------------------------------------------
-    modules: dict[str, dict] = {}
-    for c in cases:
-        m = modules.setdefault(c["module"], {
-            "cases": 0, "asserting": 0, "precondition": 0,
-            "passed": 0, "failed": 0, "other": 0,
-        })
-        m["cases"] += 1
-        m["precondition" if c["isPrecondition"] else "asserting"] += 1
-        m[{"pass": "passed", "fail": "failed", "other": "other"}[c["verdict"]]] += 1
-    for mod, exp in (lvl.get("modules") or {}).items():
-        m = modules.setdefault(mod, {"cases": 0, "asserting": 0, "precondition": 0,
-                                     "passed": 0, "failed": 0, "other": 0})
-        m["expectedCases"] = exp["casesExecuted"]
-        m["expectedAsserting"] = exp["casesAssertive"]
+    # A module variant lists only the module it ran: the level's other nine
+    # would otherwise appear with 0 cases against their full specified count, as
+    # though this archive had failed to measure them.
+    modules = (tally_modules(cases, {"modules": {module: lvl["modules"][module]}}
+                             if module in (lvl.get("modules") or {}) else {})
+               if module else tally_modules(cases, lvl))
 
     # SHA256SUMS as 60-run-tests.sh wrote it, next to the archives: the third
     # independent record of the same digests. Parsed once here so each archive can
@@ -1070,6 +1215,12 @@ def collect_level(level: str, run_root: Path, index: FeatureIndex,
     return {
         "level": level,
         "directory": stufe,
+        "module": module,
+        # What part of the level's scope this archive covers, as 60-run-tests.sh
+        # recorded it when the run finished. Read from the run record rather than
+        # inferred from the directory name, so that a round whose archives were
+        # moved by hand cannot be presented as something it is not.
+        "scopePartition": run_meta.get("scopePartition"),
         "run": run_meta,
         "official": official,
         "expected": expected,
@@ -1080,6 +1231,184 @@ def collect_level(level: str, run_root: Path, index: FeatureIndex,
         "cases": cases,
         "anomalies": dedupe_anomalies(anomalies),
     }
+
+
+def measurement_summary(m: dict) -> dict:
+    """One archive's own figures, kept unmerged next to the merged ones.
+
+    The complete-scope archive is the one the conformance certificate is applied
+    for, so its figures have to remain readable on their own terms after a module
+    variant has superseded part of them. Everything except the per-case list and
+    the anomalies, both of which are carried by the merged level.
+    """
+    return {k: m[k] for k in ("level", "directory", "module", "scopePartition",
+                              "run", "official", "expected", "totals",
+                              "serenitySummaryCounts", "modules", "notExecuted")}
+
+
+def supersede(complete: dict, variant: dict, module: str) -> list[dict]:
+    """The effective case list: the variant's verdicts in place of the complete
+    run's, for the cases the variant measured. Appends anomalies to `complete`.
+
+    Never a sum. Both archives contain the module's cases - the complete-scope
+    run is not narrowed, for the reasons in this file's header - so adding them
+    would report 64 Connect cases for a 32-case module and halve the pass rate
+    of a module that was measured twice.
+    """
+    anomalies: list[dict] = []
+
+    by_key: dict[tuple, dict] = {}
+    for c in variant["cases"]:
+        key = case_key(c)
+        if key in by_key:
+            anomalies.append({
+                "kind": "supersedeAmbiguous",
+                "detail": (f"{variant['directory']}/ contains two records for "
+                           f"{c['feature']} / {c['scenario']}"
+                           + (f" example {key[2]}" if key[2] else "")
+                           + ", so which of them supersedes the complete run's "
+                             "verdict cannot be decided. Neither is used."),
+                "where": c["report"]["outcomeJson"],
+            })
+            by_key[key] = None  # type: ignore[assignment]
+            continue
+        by_key[key] = c
+
+    used: set[tuple] = set()
+    effective: list[dict] = []
+    replaced = 0
+    for c in complete["cases"]:
+        key = case_key(c)
+        repl = by_key.get(key)
+        if repl is None:
+            effective.append(c)
+            continue
+        used.add(key)
+        replaced += 1
+        merged = dict(repl)
+        # What this verdict displaced, so the reader of a single case can see
+        # that a second measurement exists and what the first one said.
+        merged["supersedes"] = {
+            "measuredIn": c["measuredIn"],
+            "result": c["result"],
+            "verdict": c["verdict"],
+            "outcomeJson": c["report"]["outcomeJson"],
+        }
+        effective.append(merged)
+
+    # A case the variant measured and the complete run did not. Blocking: the two
+    # archives then disagree about which cases exist, and the merged figures
+    # cannot be reconciled against either archive's own.
+    orphans = [c for k, c in by_key.items() if c is not None and k not in used]
+    if orphans:
+        shown = ", ".join(f"{c['feature']} / {c['scenario']}" for c in orphans[:5])
+        anomalies.append({
+            "kind": "supersedeUnmatched",
+            "detail": (f"{len(orphans)} case(s) in {variant['directory']}/ have no "
+                       f"counterpart in {complete['directory']}/ and therefore "
+                       f"supersede nothing: {shown}. Both archives come from the same "
+                       "suite image in the same round, so they are expected to contain "
+                       "the same cases for this module. The unmatched records are "
+                       "counted in the merged figures, which consequently reconcile "
+                       "against neither archive alone."),
+            "where": f"{variant['directory']}/official/",
+        })
+        effective.extend(orphans)
+
+    # The module's cases the variant did NOT measure keep the complete run's
+    # verdict, which for Connect means a verdict taken without a bearer token.
+    # Reported, because the merged table would otherwise present them as though
+    # the module's own run had produced them.
+    kept = sorted({(c["feature"], c["scenario"]) for c in complete["cases"]
+                   if c["module"] == module and case_key(c) not in used})
+    if kept:
+        shown = ", ".join(f"{rel} / {scen}" for rel, scen in kept[:5])
+        anomalies.append({
+            "kind": "supersedeIncomplete",
+            "detail": (f"{len(kept)} {module} case(s) were measured only by "
+                       f"{complete['directory']}/ and keep that verdict: {shown}. "
+                       f"The {variant['directory']}/ run did not produce a record for "
+                       "them, so for those cases this document reports a measurement "
+                       "taken under the complete-scope configuration. Each case names "
+                       "the archive it came from in `measuredIn`."),
+            "where": f"{variant['directory']}/official/",
+        })
+
+    complete["anomalies"] = dedupe_anomalies(complete["anomalies"] + anomalies)
+    return effective
+
+
+def collect_level(level: str, run_root: Path, index: FeatureIndex,
+                  reqs: dict) -> dict | None:
+    """Everything known about one specification level, across its archives.
+
+    A level is measured by one archive of its own and, where the round ran one,
+    by a module variant's archive as well. The variant's verdicts supersede the
+    complete archive's for the cases it measured; see this file's header for why
+    they are not summed and why the complete run stays unnarrowed.
+    """
+    complete = collect_measurement(level, run_root, index, reqs)
+    variants = [
+        (module, m)
+        for directory, module in MODULE_VARIANTS.get(level, ())
+        if (m := collect_measurement(level, run_root, index, reqs,
+                                     directory=directory, module=module)) is not None
+    ]
+
+    if complete is None:
+        if not variants:
+            return None
+        # A round that ran a module variant and nothing else. Legitimate - it is
+        # what `make test-connect` alone produces - but it is a measurement of one
+        # module, not a verdict on the level, and this is the only place that can
+        # say so before the figures are read.
+        module, m = variants[0]
+        m["anomalies"] = dedupe_anomalies(m["anomalies"] + [{
+            "kind": "moduleRoundOnly",
+            "detail": (f"this round holds no complete-scope archive for {level}: the "
+                       f"only archive is {m['directory']}/, which ran the {module} "
+                       f"module alone ({m['expected']['tagExpression']}). Every figure "
+                       f"in this document is a statement about {module} and about "
+                       "nothing else; the level's other modules were not run, so "
+                       "neither pass nor fail is reported for them. A conformance "
+                       "statement needs `make test-stufe5`, whose archive is the one "
+                       "the certificate is applied for."),
+            "where": f"{m['directory']}/run.json",
+        }])
+        m["measurements"] = [measurement_summary(v) for _, v in variants]
+        m["superseded"] = None
+        return m
+
+    complete["measurements"] = [measurement_summary(complete)]
+    superseded: list[dict] = []
+    for module, m in variants:
+        before = tally_cases([c for c in complete["cases"] if c["module"] == module])
+        complete["cases"] = supersede(complete, m, module)
+        complete["anomalies"] = dedupe_anomalies(complete["anomalies"] + m["anomalies"])
+        complete["measurements"].append(measurement_summary(m))
+        after = tally_cases([c for c in complete["cases"] if c["module"] == module])
+        superseded.append({
+            "module": module,
+            "from": complete["directory"],
+            "by": m["directory"],
+            "cases": sum(1 for c in complete["cases"]
+                         if c.get("supersedes") and c["measuredIn"] == m["directory"]),
+            "scopePartition": m["scopePartition"],
+            "tagExpression": m["expected"]["tagExpression"],
+            "asMeasuredInComplete": before,
+            "effective": after,
+        })
+    complete["superseded"] = superseded or None
+
+    # Recounted from the effective set, so that no figure in this document is a
+    # sum over two measurements of the same case.
+    if superseded:
+        complete["totals"] = tally_cases(complete["cases"])
+        complete["modules"] = tally_modules(complete["cases"], reqs["levels"][level])
+        complete["scopePartition"] = (
+            f"{complete['scopePartition'] or 'complete'}+"
+            + "+".join(f"{s['module'].lower()}-superseded" for s in superseded))
+    return complete
 
 
 # -----------------------------------------------------------------------------
@@ -1125,7 +1454,7 @@ def render(doc: dict, run_root: Path) -> str:
     w("")
     w("**Derived, not authoritative.** The authoritative record of this test round is")
     w("the report the Gematik ISiK test suite wrote, archived unmodified under")
-    w("`<stufe>/official/`. This document is a machine-generated index into it: every")
+    w("`<variant>/official/`. This document is a machine-generated index into it: every")
     w("verdict below carries the path of the file inside that archive which")
     w("substantiates it, so any statement here can be checked against the official")
     w("report without trusting the generator. Where the two disagree, the official")
@@ -1133,7 +1462,7 @@ def render(doc: dict, run_root: Path) -> str:
     w("")
     w("All paths are relative to this run directory")
     w(f"(`reports/{doc['runId']}/`). See `README.md` there for the directory layout")
-    w("and the `analysis/` files' relationship to `<stufe>/official/`.")
+    w("and the `analysis/` files' relationship to `<variant>/official/`.")
     w("")
     w("`test-report.zip` is the artefact the *Bestätigungsverfahren* is based on.")
     w("`debug-report.zip` is not submitted; it carries the browsable Serenity report")
@@ -1150,12 +1479,25 @@ def render(doc: dict, run_root: Path) -> str:
         w("")
         return "\n".join(out) + "\n"
 
-    w("| | " + " | ".join(lv["level"] for lv in levels) + " |")
-    w("|---|" + "---|" * len(levels))
+    # One column per ARCHIVE, not per level. A level measured twice - a module
+    # variant alongside the complete scope - ran two containers with two
+    # configurations, and every row below differs between them: the tag
+    # expression, the Tiger configuration, the duration, the exit code. Collapsing
+    # them into one column would have to pick one of the two and would silently
+    # describe the other round as if it had those properties.
+    cols = [m for lv in levels for m in lv.get("measurements") or [lv]]
+
+    def col_label(m: dict) -> str:
+        return (f"{m['level']} · {m['module']}" if m.get("module") else m["level"])
+
+    w("| | " + " | ".join(col_label(m) for m in cols) + " |")
+    w("|---|" + "---|" * len(cols))
 
     def row(label: str, fn) -> None:
-        w(f"| {label} | " + " | ".join(cell(fn(lv)) for lv in levels) + " |")
+        w(f"| {label} | " + " | ".join(cell(fn(m)) for m in cols) + " |")
 
+    row("Archive directory", lambda lv: f"`{lv['directory']}/official/`")
+    row("Scope partition", lambda lv: lv.get("scopePartition"))
     row("Specification level", lambda lv: f"ISiK Stufe {lv['level'][-1]}")
     row("Maven profile", lambda lv: lv["run"].get("mavenProfile"))
     row("Tag expression", lambda lv: lv["run"].get("testsToRun"))
@@ -1227,8 +1569,9 @@ def render(doc: dict, run_root: Path) -> str:
           " `make report RUN_ID=<id>` - the report targets only read the archives and"
           " re-run no test.")
         w("")
-    w("Source: `<stufe>/run.json`, written by `scripts/60-run-tests.sh` at the end of")
-    w("each level's run. The container exit code is recorded but says nothing about the")
+    w("Source: `<variant>/run.json`, one per archive, written by")
+    w("`scripts/60-run-tests.sh` at the end of each run. The container exit code is")
+    w("recorded but says nothing about the")
     w("result: the suite's entrypoint ends in `|| true`, so it is 0 whether every")
     w("scenario passed or every scenario failed.")
     w("")
@@ -1275,7 +1618,7 @@ def render(doc: dict, run_root: Path) -> str:
     row("Management Portal user", lambda lv: mgmt(lv).get("user"))
     row("Management Portal password", lambda lv: mgmt(lv).get("password"))
     w("")
-    w("Source: `<stufe>/run.json`, key `credentials`.")
+    w("Source: `<variant>/run.json`, key `credentials`.")
     w("")
     if any(creds(lv) for lv in levels):
         w("These are stated in full on purpose. The environment is a lab instance brought")
@@ -1358,7 +1701,7 @@ def render(doc: dict, run_root: Path) -> str:
     w("(`vendor/requirements.json`, extracted from the test suite image by")
     w("`scripts/25-extract-requirements.sh`) evaluated against the tag expression each")
     w("level ran with. *Report* is counted from the outcomes in")
-    w("`<stufe>/official/extracted/test-report/unresolvedReports/`. *Independent count*")
+    w("`<variant>/official/extracted/test-report/unresolvedReports/`. *Independent count*")
     w("is `results.counts.total` from `serenity-summary.json` in the debug archive,")
     w("which Serenity's own summary reporter produced from the same outcomes - it exists")
     w("to catch a counting error in this generator.")
@@ -1371,6 +1714,56 @@ def render(doc: dict, run_root: Path) -> str:
         w("actually ran. The difference is itemised, per outcome, in section 7, and it")
         w("is *Report* that agrees with *Expected*.")
         w("")
+
+    # --- two measurements of one level --------------------------------------
+    # Rendered only when a round actually holds a module variant. The section
+    # exists because the merged figures above are otherwise unexplainable: they
+    # agree with neither archive's own totals, and a reader is entitled to be
+    # told which measurement each verdict came from before reading any of them.
+    for lv in levels:
+        for sup in lv.get("superseded") or ():
+            w(f"### {lv['level']}: the {sup['module']} module was measured twice")
+            w("")
+            w(f"This round holds two archives for {lv['level']}. The complete-scope run")
+            w(f"(`{sup['from']}/official/`) selected the whole certification scope,")
+            w(f"including the {sup['module']} module's cases, as every round of this")
+            w(f"project has. The {sup['module']} module was then run a second time")
+            w(f"(`{sup['by']}/official/`, `{sup['tagExpression']}`) under the Tiger")
+            w("configuration that module requires - one carrying an `authentication:`")
+            w("block, which replaces the `Authorization` header the other modules")
+            w("depend on and therefore cannot be used for them.")
+            w("")
+            w(f"**The two are superseded, never added.** For the {sup['cases']} case(s)")
+            w(f"the {sup['module']} run measured, the verdict reported in this document")
+            w(f"is that run's; the complete archive's verdict for the same case is")
+            w("recorded alongside it in `analysis/results.json`")
+            w("(`levels.<L>.cases[].supersedes`) and is not counted. Adding the two")
+            w(f"would report {sup['asMeasuredInComplete']['cases'] + sup['effective']['cases']}")
+            w(f"cases for a {sup['effective']['cases']}-case module.")
+            w("")
+            w("| | Cases | Asserting | Passed | Failed | Other | Pass rate |")
+            w("|---|---:|---:|---:|---:|---:|---:|")
+            for label, t in (
+                (f"As measured in `{sup['from']}/` (not counted)",
+                 sup["asMeasuredInComplete"]),
+                (f"As measured in `{sup['by']}/` (**counted**)", sup["effective"]),
+            ):
+                w(f"| {label} | {t['cases']} | {t['asserting']} | {t['passed']} | "
+                  f"{t['failed']} | {t['other']} | "
+                  f"{pct(t['assertingPassed'], t['asserting'])} |")
+            w("")
+            w("Both rows are the same cases. The first is what the complete-scope run")
+            w("measured without a bearer token, kept here because that archive is the")
+            w("one the conformance certificate is applied for and its own totals must")
+            w("stay readable; the per-archive figures are in `analysis/results.json` at")
+            w("`levels.<L>.measurements[]`. The second is what the module's own run")
+            w("measured, and it is what every other table in this document counts.")
+            w("")
+            w("Every case record names the archive it was read from (`measuredIn`), and")
+            w("so does each citation path: a verdict cited to")
+            w(f"`{sup['by']}/official/...` came from the module's own run, one cited to")
+            w(f"`{sup['from']}/official/...` from the complete-scope run.")
+            w("")
 
     # --- results ------------------------------------------------------------
     w("## 3. Results")
@@ -1430,7 +1823,7 @@ def render(doc: dict, run_root: Path) -> str:
         w("**No test case was found in the report at all.** This is not a result: there")
         w("is nothing to pass or fail. Either the archive is absent (see section 7) or")
         w("the run did not reach the point of executing a scenario - a Tiger startup")
-        w("failure against an unreachable SUT is the usual cause, and `<stufe>/run.log`")
+        w("failure against an unreachable SUT is the usual cause, and `<variant>/run.log`")
         w("records it.")
         w("")
     elif not failures:
@@ -1541,10 +1934,10 @@ def render(doc: dict, run_root: Path) -> str:
               f"`{cell(o['sha256'])}` | {dest} | {o.get('extractedFiles', 0)} |")
     w("")
     w("These checksums were computed over the archives as they are now, when this")
-    w("document was generated. `<stufe>/official/SHA256SUMS` and `<stufe>/run.json`")
+    w("document was generated. `<variant>/official/SHA256SUMS` and `<variant>/run.json`")
     w("carry the checksums computed when the run finished; the three are compared")
     w("automatically and any disagreement is reported in section 7. Recompute them")
-    w("yourself with `sha256sum -c SHA256SUMS` inside each `<stufe>/official/`")
+    w("yourself with `sha256sum -c SHA256SUMS` inside each `<variant>/official/`")
     w("directory.")
     w("")
     w("The archives are byte-for-byte as the test suite wrote them:")
@@ -1792,7 +2185,12 @@ def render(doc: dict, run_root: Path) -> str:
 CSV_COLUMNS = ("level", "module", "feature", "featureLine", "scenario", "exampleIndex",
                "exampleLine", "isPrecondition", "inScope", "result", "verdict",
                "durationMs", "failingStep", "failingStepLine", "httpMethod", "httpPath",
-               "httpStatus", "errorType", "message", "outcomeJson", "outcomeHtml")
+               "httpStatus", "errorType", "message", "outcomeJson", "outcomeHtml",
+               # Which archive this verdict came from, and - where a module
+               # variant superseded it - what the complete-scope run had said
+               # about the same case. Two columns rather than a note, because the
+               # audience of this file sorts and filters it.
+               "measuredIn", "supersedesResult", "supersedesOutcomeJson")
 
 
 def write_csv(doc: dict, path: Path) -> int:
@@ -1808,6 +2206,7 @@ def write_csv(doc: dict, path: Path) -> int:
                 ex = c.get("example") or {}
                 f = c.get("failure") or {}
                 h = f.get("http") or {}
+                sup = c.get("supersedes") or {}
                 writer.writerow([
                     c["level"], c["module"], c["feature"], c.get("featureLine") or "",
                     c["scenario"], ex.get("index") or "", ex.get("line") or "",
@@ -1819,6 +2218,8 @@ def write_csv(doc: dict, path: Path) -> int:
                     f.get("errorType") or "",
                     " ".join((f.get("message") or "").split()),
                     c["report"]["outcomeJson"], c["report"]["outcomeHtml"] or "",
+                    c.get("measuredIn") or "",
+                    sup.get("result") or "", sup.get("outcomeJson") or "",
                 ])
                 n += 1
     return n
@@ -1892,7 +2293,7 @@ def main() -> int:
         "runId": args.run_id or run_root.name,
         "generatedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "generator": "scripts/lib/results_report.py",
-        "authoritativeSource": "<stufe>/official/test-report.zip",
+        "authoritativeSource": "<variant>/official/test-report.zip",
         "source": {
             "requirements": str(args.requirements),
             "featuresRoot": str(args.features_root),
@@ -1989,6 +2390,14 @@ def main() -> int:
               f"-> {t['passed']} passed, {t['failed']} failed, {t['other']} other; "
               f"expected {lv['expected']['casesExecuted']} executed",
               file=sys.stderr)
+        for sup in lv.get("superseded") or ():
+            print(f"{level}: {sup['cases']} {sup['module']} case(s) measured in "
+                  f"{sup['by']}/ supersede {sup['from']}/ "
+                  f"({sup['asMeasuredInComplete']['assertingPassed']}/"
+                  f"{sup['asMeasuredInComplete']['asserting']} -> "
+                  f"{sup['effective']['assertingPassed']}/"
+                  f"{sup['effective']['asserting']} asserting passed)",
+                  file=sys.stderr)
     n_anom = len(doc["anomalies"]) + sum(len(lv["anomalies"]) for lv in doc["levels"].values())
     print(f"{rows} case rows, {n_anom} anomaly/anomalies", file=sys.stderr)
 
@@ -2012,8 +2421,18 @@ def main() -> int:
     # generator attributing a duplicated step to an Examples row the run never
     # selected (excluded_example_rows()). Exiting non-zero is what would have put
     # that in front of an operator instead of into a footnote.
+    # supersedeUnmatched, supersedeAmbiguous and variantScopeEscaped are blocking
+    # for the same reason as wrongLevel: each means the merged figures describe
+    # something other than the module they claim to. Two archives of one round
+    # come from one suite image and must contain the same cases for the module
+    # they share; where they do not, the merge is not a reconciliation and the
+    # per-module figures must not be used until it is understood.
+    # supersedeIncomplete is NOT blocking: it is the honest state of a round whose
+    # module run covered part of the module, and the cases that kept the
+    # complete-scope verdict say so individually in `measuredIn`.
     blocking = {"missingTestReport", "noLevels", "totalsDisagree", "unreadableJson",
-                "wrongLevel", "archiveChanged", "scenarioJvmOom", "scopeExcess"}
+                "wrongLevel", "archiveChanged", "scenarioJvmOom", "scopeExcess",
+                "supersedeUnmatched", "supersedeAmbiguous", "variantScopeEscaped"}
     hard = [a for a in doc["anomalies"] if a["kind"] in blocking]
     for lv in doc["levels"].values():
         hard += [a for a in lv["anomalies"] if a["kind"] in blocking]
