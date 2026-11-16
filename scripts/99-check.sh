@@ -230,8 +230,26 @@ section "2b. ObjectScript"
 # The heuristic is deliberately crude - a line containing a macro with more '(' than
 # ')' - because that is precisely the shape of the defect. Build the message into a
 # variable and pass it to the macro on one line instead.
+# The second defect class is the mirror image of the first, and cost a bootstrap
+# cycle on 2026-11-16: a formal specification naming a class the COMPILING
+# namespace cannot see. These classes are loaded into the FHIR namespace, where
+# the system packages (Security, Config, SYS) are not mapped, so
+#
+#     ClassMethod M(app As Security.Applications)
+#
+# fails to load with "ERROR #5373: Class 'Security.Applications' ... does not
+# exist", even though the method body may legitimately reach that class after
+# `set $namespace = "%SYS"`. A `#dim` of the same type is harmless - the compiler
+# treats it as a hint - which is what makes the error look arbitrary. Type the
+# parameter %RegisteredObject and let the property access bind at run time.
 python3 - <<'PY'
-import pathlib, sys
+import pathlib, re, sys
+
+# Packages that exist only in %SYS. Not an exhaustive list of system packages -
+# a list of the ones these classes actually configure.
+SYSTEM_PKGS = ("Security", "Config", "SYS")
+SIGNATURE = re.compile(r"^\s*(?:Class)?Method\s+([A-Za-z0-9]+)\s*\((.*)\)\s*(?:As\s|\{|$)")
+TYPED = re.compile(r"\bAs\s+((?:%s)\.[A-Za-z0-9.]+)" % "|".join(SYSTEM_PKGS))
 
 fails, checked = 0, 0
 for p in sorted(pathlib.Path("iris/src").rglob("*.cls")):
@@ -247,10 +265,22 @@ for p in sorted(pathlib.Path("iris/src").rglob("*.cls")):
             print(f"  FAIL  {p}:{i}: macro invocation split across lines - "
                   f"the preprocessor will reject it (MPP5612)")
             print(f"        {stripped}")
+        sig = SIGNATURE.match(ln)
+        if sig:
+            # Only the formal specification, not the return type: a return type is
+            # resolved the same way, but none of these methods returns one.
+            for cls in TYPED.findall(sig.group(2)):
+                fails += 1
+                print(f"  FAIL  {p}:{i}: {sig.group(1)}() declares a parameter "
+                      f"As {cls}, which the FHIR namespace cannot resolve at "
+                      f"compile time (#5373)")
+                print(f"        type it %RegisteredObject - the body already "
+                      f"switches to %SYS")
 if fails:
     sys.exit(1)
 noun, verb = ("class", "carries") if checked == 1 else ("classes", "carry")
-print(f"  PASS  {checked} ObjectScript {noun} {verb} no line-split macro invocation")
+print(f"  PASS  {checked} ObjectScript {noun} {verb} no line-split macro "
+      f"invocation and no unresolvable formal specification")
 PY
 (( $? == 0 )) || FAILURES=$((FAILURES+1))
 
@@ -1308,19 +1338,46 @@ else
   # on a host that has never been configured; the two passwords are required by
   # docker-compose.yml's ${...:?...} interpolations and are empty in the example,
   # because a real deployment generates them.
+  #
+  # MEASURED, 2026-11-16 (compose v5.7.0): `config` OMITS every service whose
+  # profile is not active, so the profiles a round uses have to be named here or
+  # the resolved document contains the two long-running containers and nothing
+  # else. An earlier version of this check asserted the suite's static address by
+  # grepping the whole document and passed for the wrong reason: the address also
+  # appears in the `x-testsuite-common` extension block, which `config` echoes
+  # verbatim whether any service uses it or not. The assertions below therefore
+  # read the SERVICE, not the document.
   if out="$(SUT_PASSWORD=checkonly IRIS_MGMT_PASSWORD=checkonly docker compose \
               --env-file .env.example \
               -f docker-compose.yml -f compose/testsuite.yml \
+              --profile stufe5 \
               config 2>&1)"; then
     pass "docker compose config validates the base configuration"
     # The static addresses are the whole basis of the isolation claim, so confirm
     # they survive interpolation rather than trusting the file.
-    for ip in "$(grep -E '^IRIS_IP=' .env.example | cut -d= -f2)" \
-              "$(grep -E '^TESTSUITE_IP=' .env.example | cut -d= -f2)"; do
-      printf '%s' "$out" | grep -q "$ip" \
-        || fail "the resolved compose configuration does not contain the static address ${ip}"
-    done
-    note "services: $(printf '%s' "$out" | python3 -c '
+    if ! ip_err="$(printf '%s' "$out" | \
+         EXPECT_IRIS_IP="$(grep -E '^IRIS_IP=' .env.example | cut -d= -f2)" \
+         EXPECT_SUITE_IP="$(grep -E '^TESTSUITE_IP=' .env.example | cut -d= -f2)" \
+         python3 -c '
+import os, sys, yaml
+svc = (yaml.safe_load(sys.stdin) or {}).get("services", {})
+want = {"iris": os.environ["EXPECT_IRIS_IP"],
+        "testsuite-stufe5": os.environ["EXPECT_SUITE_IP"]}
+for name, ip in want.items():
+    s = svc.get(name)
+    if s is None:
+        sys.exit("the resolved configuration defines no %s service" % name)
+    got = ((s.get("networks") or {}).get("isik-net") or {}).get("ipv4_address")
+    if got != ip:
+        sys.exit("%s resolves to address %r, not the configured %r" % (name, got, ip))
+if "stufe5" not in (svc["testsuite-stufe5"].get("profiles") or []):
+    sys.exit("testsuite-stufe5 is not gated by the \"stufe5\" profile"
+             " - it would start together with the environment")
+' 2>&1)"; then
+      fail "the resolved base configuration is wrong:"
+      printf '%s\n' "$ip_err" | sed 's/^/        /' | head -n 5
+    fi
+    note "services (profile stufe5): $(printf '%s' "$out" | python3 -c '
 import sys, yaml
 print(", ".join(sorted((yaml.safe_load(sys.stdin) or {}).get("services", {}))))' 2>/dev/null || echo '?')"
   else
@@ -1344,12 +1401,15 @@ print(", ".join(sorted((yaml.safe_load(sys.stdin) or {}).get("services", {}))))'
                  --env-file .env.example \
                  -f docker-compose.yml -f compose/testsuite.yml \
                  -f "$(bash -c '. scripts/lib.sh >/dev/null 2>&1; printf "%s" "$CONNECT_COMPOSE_FILE"')" \
+                 --profile stufe5 --profile connect \
                  config 2>&1)"; then
     pass "docker compose config validates the configuration with the authorization server"
     # The Connect module's own suite service must be profile-gated, or `make up`
     # would start a second suite container beside the one the round is running,
     # both bound to the same static address. Checked on the RESOLVED
-    # configuration, because a profile can also be lost in a merge.
+    # configuration, because a profile can also be lost in a merge - activating
+    # the profile above is what makes the service visible at all, and the
+    # `profiles` key it carries there is what proves the gate survived.
     if ! conn_err="$(printf '%s' "$out_as" | python3 -c '
 import sys, yaml
 svc = (yaml.safe_load(sys.stdin) or {}).get("services", {})
@@ -1365,7 +1425,7 @@ if "authserver" not in svc:
       fail "the resolved configuration with the authorization server is wrong:"
       printf '%s\n' "$conn_err" | sed 's/^/        /' | head -n 5
     fi
-    note "services with the overlay: $(printf '%s' "$out_as" | python3 -c '
+    note "services with the overlay (profiles stufe5, connect): $(printf '%s' "$out_as" | python3 -c '
 import sys, yaml
 print(", ".join(sorted((yaml.safe_load(sys.stdin) or {}).get("services", {}))))' 2>/dev/null || echo '?')"
   else

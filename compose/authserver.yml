@@ -56,12 +56,19 @@ services:
   # both the realistic and the defendable choice, and it keeps the SUT untouched
   # except for the client/trust configuration a customer performs anyway.
   #
-  # Development mode (`start-dev`) is intentional and is not a weakening of the
-  # test: the realm is ephemeral, imported from run/as/realm-isik.json at every
-  # start, and the server holds no state worth persisting. What matters for the
-  # test - HTTPS only, a pinned issuer, RS256-signed access tokens, client
-  # authentication on the token and introspection endpoints - is configured
-  # explicitly below and is independent of dev/production mode.
+  # PRODUCTION MODE (`start`), not `start-dev`, and the reason is measured rather
+  # than stylistic. MEASURED, 2026-11-16: with `start-dev` the server reported
+  # "Listening on: http://0.0.0.0:8080 and https://0.0.0.0:8443" - development
+  # mode enables the HTTP listener unconditionally and IGNORES KC_HTTP_ENABLED, so
+  # the token endpoint was also reachable without TLS from every container on the
+  # subnet. Nothing was configured to use it, but the round's TLS posture has to
+  # be a property of the deployment and not of what the clients happen to do.
+  #
+  # The state is still ephemeral: the realm is imported from run/as/realm-isik.json
+  # at every start into the file-based development database, which is what
+  # --db=dev-file selects. That is a deliberate choice for a test instance that
+  # holds nothing worth persisting - production mode deprecates it as a DEFAULT,
+  # which is why it is stated explicitly here rather than inherited.
   authserver:
     image: ${AS_IMAGE:-quay.io/keycloak/keycloak}:${AS_VERSION:-26.4.7}
     container_name: ${COMPOSE_PROJECT_NAME:-isik}-authserver
@@ -71,11 +78,12 @@ services:
     # --import-realm reads /opt/keycloak/data/import at startup. The realm is
     # rendered by `make render` from keycloak/realm-isik.json.tmpl, so the client
     # secret and the audience are deploy-time facts and not committed values.
-    command: ["start-dev", "--import-realm"]
+    command: ["start", "--import-realm", "--db=dev-file"]
 
     environment:
-      # HTTPS only. The FHIR server will not accept a bearer token over a
-      # non-TLS connection (HS.FHIRServer.RestHandler.PrelimTokenCheck requires
+      # HTTPS only, and in production mode this setting is honoured (see above).
+      # The FHIR server will not accept a bearer token over a non-TLS connection
+      # (HS.FHIRServer.RestHandler.PrelimTokenCheck requires
       # HS.Local.FHIRServer.Util.BaseURL.IsRequestSecure), and a token endpoint
       # reachable over plain HTTP in the same network would make the round's TLS
       # posture a half-measure that an inspector would rightly question.
@@ -92,9 +100,22 @@ services:
       # requested - which is what makes minting from the host legitimate.
       KC_HOSTNAME: https://${AS_HOSTNAME:-isik-as}:${AS_PORT_HTTPS_INTERNAL:-8443}
 
+      # The admin console is the one thing a human reaches from the HOST, through
+      # the published port, where the pinned name above does not resolve. Keycloak
+      # generates the console's own URLs from this setting, which is what the
+      # option exists for; `iss` keeps coming from KC_HOSTNAME.
+      KC_HOSTNAME_ADMIN: https://127.0.0.1:${AS_PORT_HTTPS:-8443}
+
       # The management interface (port 9000) serves /health/ready; the
       # healthcheck below reads it.
       KC_HEALTH_ENABLED: "true"
+      # MEASURED, 2026-11-16: the management interface inherits the HTTPS settings
+      # of the main one by default, so it came up as https://0.0.0.0:9000 and the
+      # plaintext healthcheck below failed 43 times in a row against a server that
+      # was in fact ready. Plain HTTP here is not a relaxation of the round's TLS
+      # posture: port 9000 is not published, carries no token and no credential,
+      # and serves only /health/ready inside the container.
+      KC_HTTP_MANAGEMENT_SCHEME: http
 
       # Bootstrap administrator. Generated per instance by `make up`, like every
       # other credential of this environment, and reported in run/CREDENTIALS.md.

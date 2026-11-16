@@ -928,7 +928,15 @@ ClassMethod SecureEndpoint(endpoint As %String, config As %DynamicObject) As %St
 ///     this class configured the endpoint, and in that case neither keeping nor
 ///     changing it can be justified in the round's record.</li>
 /// </ul>
-ClassMethod LeaveEndpointAsInstalled(endpoint As %String, app As Security.Applications) As %Status
+/// <p><var>app</var> is a <class>Security.Applications</class> instance, typed
+/// here as <class>%RegisteredObject</class> on purpose: this class is compiled in
+/// the FHIR namespace, where the <code>Security</code> package is not mapped, and
+/// a formal specification naming a class the compiling namespace cannot see is a
+/// hard compile error (#5373) - unlike the <code>#dim</code> hint in
+/// <method>SecureEndpoint</method>, which the compiler only uses for completion.
+/// The property access below resolves at run time, where the method has already
+/// switched to %SYS.</p>
+ClassMethod LeaveEndpointAsInstalled(endpoint As %String, app As %RegisteredObject) As %Status
 {
     new $namespace
     set $namespace = "%SYS"

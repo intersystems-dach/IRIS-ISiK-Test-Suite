@@ -160,6 +160,20 @@ for stufe in $(suite_levels_lc); do
   done
 done
 
+# A connect-only round archives into connect/, not into a level directory, and
+# this stage does not analyse it yet: the Connect module's own archive supersedes
+# the Connect cases of the complete-scope one, and an analysis that counted both
+# would report 64 Connect cases for 32 scenarios. Said plainly rather than
+# reported as a missing level, which is what the generic message below would
+# imply.
+if (( ! found_any )) && [[ -d "${RUN_REPORT_DIR}/connect/official" ]]; then
+  die "${RUN_REPORT_DIR#$REPO_ROOT/} holds only the Connect module's own archive
+  (connect/official/), which this stage does not yet analyse. The archive itself
+  is complete and verified - see connect/official/SHA256SUMS and connect/run.json.
+  A complete-scope round is what 'make report' reads: run 'make test-stufe5'
+  for the same run id, or pass RUN_ID of a round that has one."
+fi
+
 (( found_any )) || die "none of the level directories ($(suite_levels_lc)) exists under ${RUN_REPORT_DIR#$REPO_ROOT/}
   Run 'make test' first, or 'make test-<level>' for a single one. Which levels
   the pinned suite carries is suite_levels() in scripts/lib.sh: release 3.0.0
