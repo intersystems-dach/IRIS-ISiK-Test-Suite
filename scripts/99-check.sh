@@ -1123,11 +1123,12 @@ internal = {
     # follow CONNECT_ENABLE, which IS documented, and are derived from the
     # measurements in INSTALL.md section 2 - a host requirement is measured, not
     # configured, so neither is an operator setting.
-    "NEED_GIB", "NEED_WHY",
-    # Locals of the preflight memory check, MEM_NEED_GIB for the same reason as
-    # NEED_GIB above. TESTSUITE_HEAP_MAX, which that check reads, IS
-    # operator-facing and is documented in .env.example.
-    "MEM_KB", "MEM_GIB", "MEM_NEED_GIB",
+    "NEED_GIB", "NEED_WHY", "AVAIL_GIB",
+    # Locals of the preflight memory check. MEM_NEED_GIB and MEM_OVERLAY_NOTE are
+    # the threshold and the clause of the warning that explains it, set together
+    # for the same reason as NEED_GIB above. TESTSUITE_HEAP_MAX, which that check
+    # reads, IS operator-facing and is documented in .env.example.
+    "MEM_KB", "MEM_GIB", "MEM_NEED_GIB", "MEM_OVERLAY_NOTE",
     "PORT_CLASH", "EXISTING_NET", "KEY", "C_RESET", "C_BOLD", "C_RED", "C_GRN",
     # 00-preflight.sh's licence-key locals. IRIS_KEY_PATH is exported for the compose
     # mount rather than authored: preflight resolves the operator's file
@@ -1362,8 +1363,8 @@ else
     # The static addresses are the whole basis of the isolation claim, so confirm
     # they survive interpolation rather than trusting the file.
     if ! ip_err="$(printf '%s' "$out" | \
-         EXPECT_IRIS_IP="$(grep -E '^IRIS_IP=' .env.example | cut -d= -f2)" \
-         EXPECT_SUITE_IP="$(grep -E '^TESTSUITE_IP=' .env.example | cut -d= -f2)" \
+         EXPECT_IRIS_IP="$(env_file_var .env.example IRIS_IP)" \
+         EXPECT_SUITE_IP="$(env_file_var .env.example TESTSUITE_IP)" \
          python3 -c '
 import os, sys, yaml
 svc = (yaml.safe_load(sys.stdin) or {}).get("services", {})
@@ -1497,8 +1498,10 @@ else
   #      into a redistribution channel for software it does not own. The archive
   #      rule above catches the packed forms; this catches the unpacked one.
   as_fails=0
-  as_image="$(sed -n 's/^AS_IMAGE=//p' .env.example | head -n1)"
-  as_version="$(sed -n 's/^AS_VERSION=//p' .env.example | head -n1)"
+  # As in the address check below: an absent value returns non-zero and is
+  # reported by the emptiness test, not by the status.
+  as_image="$(env_file_var .env.example AS_IMAGE || true)"
+  as_version="$(env_file_var .env.example AS_VERSION || true)"
   if [[ -z "$as_image" || -z "$as_version" ]]; then
     fail "AS_IMAGE / AS_VERSION are not both set in .env.example - the authorization server must be pinned, not floating"
     as_fails=$((as_fails+1))
@@ -1625,7 +1628,10 @@ else
   # purpose, and generated/testsuite-3.0.9/README.md says so.
   host_fails=0
   for var in IRIS_IP TESTSUITE_IP AS_IP; do
-    val="$(sed -n "s/^${var}=//p" .env.example | head -n1)"
+    # env_file_var returns non-zero for an absent or empty value, which the
+    # emptiness test below already reports with a better message, so its status
+    # is deliberately ignored here.
+    val="$(env_file_var .env.example "$var" || true)"
     if [[ -z "$val" ]]; then
       fail "${var} is not set in .env.example"; host_fails=$((host_fails+1))
     elif [[ ! "$val" =~ ^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.) ]]; then

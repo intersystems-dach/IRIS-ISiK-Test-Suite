@@ -256,6 +256,7 @@ ok "output directories writable"
 # round adds two measured items - the 718 MB authorization-server image and the
 # second invocation's own archive (~60 MB) - so its floor is one GiB higher.
 AVAIL_KB="$(df -Pk "$REPO_ROOT" | awk 'NR==2 {print $4}')"
+AVAIL_GIB=$(( AVAIL_KB / 1024 / 1024 ))
 NEED_GIB=25
 NEED_WHY="images ~7 GB, unpacked packages ~1.5 GB, IRIS databases, report archives"
 if connect_enabled; then
@@ -264,9 +265,9 @@ if connect_enabled; then
 fi
 NEED_KB=$(( NEED_GIB * 1024 * 1024 ))
 if (( AVAIL_KB < NEED_KB )); then
-  warn "only $(( AVAIL_KB / 1024 / 1024 )) GiB free at ${REPO_ROOT} - ${NEED_GIB} GiB recommended (${NEED_WHY})"
+  warn "only ${AVAIL_GIB} GiB free at ${REPO_ROOT} - ${NEED_GIB} GiB recommended (${NEED_WHY})"
 else
-  ok "$(( AVAIL_KB / 1024 / 1024 )) GiB free"
+  ok "${AVAIL_GIB} GiB free"
 fi
 
 # --- 10. Memory, and the heap the scenarios get -------------------------------
@@ -286,8 +287,15 @@ fi
 # without the overlay does not clear it with the overlay. INSTALL.md section 2
 # derives both numbers.
 MEM_KB="$(awk '/^MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null || echo 0)"
+#
+# The threshold and the clause that explains it are set together, in one place,
+# because they always change together.
 MEM_NEED_GIB=24
-if connect_enabled; then MEM_NEED_GIB=26; fi
+MEM_OVERLAY_NOTE=''
+if connect_enabled; then
+  MEM_NEED_GIB=26
+  MEM_OVERLAY_NOTE=" for a Connect round: with CONNECT_ENABLE=true the overlay adds ~1.1 GiB on top of what IRIS already claims, for the authorization server and the TLS listener"
+fi
 if (( MEM_KB > 0 )); then
   MEM_GIB=$(( MEM_KB / 1024 / 1024 ))
   if [[ -z "${TESTSUITE_HEAP_MAX:-}" ]]; then
@@ -295,11 +303,9 @@ if (( MEM_KB > 0 )); then
     # value that was not enough on a 31 GiB host.
     warn "TESTSUITE_HEAP_MAX is unset, so the scenario JVM gets the JVM default of about $(( MEM_GIB / 4 )) GiB (1/4 of ${MEM_GIB} GiB). That default was NOT enough for Stufe 5 on a 31 GiB host: the run stalled at ~600 of 895 cases and would have produced no archive. Set TESTSUITE_HEAP_MAX=16g in .env"
   elif (( MEM_GIB < MEM_NEED_GIB )); then
-    if connect_enabled; then
-      warn "${MEM_GIB} GiB RAM, with CONNECT_ENABLE=true. Stufe 5 needs about 16 GiB of heap for the scenario JVM (TESTSUITE_HEAP_MAX=${TESTSUITE_HEAP_MAX}) plus room for IRIS (~2.2 GiB) and the Web Gateway, and the Connect overlay adds ~1.1 GiB on top of what IRIS already claims (authorization server + TLS listener); ${MEM_NEED_GIB} GiB or more is recommended for a Connect round. Below that, expect the Rbel out-of-memory stall described in .env.example"
-    else
-      warn "${MEM_GIB} GiB RAM. Stufe 5 needs about 16 GiB of heap for the scenario JVM (TESTSUITE_HEAP_MAX=${TESTSUITE_HEAP_MAX}) plus room for IRIS (~2.2 GiB) and the Web Gateway; ${MEM_NEED_GIB} GiB or more is recommended. Below that, expect the Rbel out-of-memory stall described in .env.example"
-    fi
+    # One warning, assembled, rather than two that say almost the same thing: a
+    # duplicated sentence this long is a sentence that gets corrected in one copy.
+    warn "${MEM_GIB} GiB RAM. Stufe 5 needs about 16 GiB of heap for the scenario JVM (TESTSUITE_HEAP_MAX=${TESTSUITE_HEAP_MAX}) plus room for IRIS (~2.2 GiB) and the Web Gateway; ${MEM_NEED_GIB} GiB or more is recommended${MEM_OVERLAY_NOTE}. Below that, expect the Rbel out-of-memory stall described in .env.example"
   else
     ok "${MEM_GIB} GiB RAM, scenario heap ${TESTSUITE_HEAP_MAX}"
   fi
