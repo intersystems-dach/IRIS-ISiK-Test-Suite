@@ -107,29 +107,90 @@ def compare_json(a_bytes, b_bytes):
     return 'differ', describe(ka, kb)
 
 
-def describe(a, b, path='', depth=0, out=None):
+class Place:
+    """One place in the two documents: the node each has there.
+
+    The keys walked to reach it are kept as the trail, from which both the path
+    the account prints and the nesting depth it stops at are read - two facts
+    about one walk, so neither is carried separately.
+    """
+
+    def __init__(self, bundled, published, trail=()):
+        self.bundled = bundled
+        self.published = published
+        self.trail = trail
+
+    @property
+    def path(self):
+        """How this place reads in the account."""
+        return '.'.join(self.trail)
+
+    @property
+    def depth(self):
+        """How far into the documents this place is."""
+        return len(self.trail)
+
+    def path_of(self, key):
+        """How a child key reads in the account."""
+        return '.'.join(self.trail + (key,))
+
+    def child(self, key):
+        """The same place, one key deeper into both documents."""
+        return Place(self.bundled[key], self.published[key], self.trail + (key,))
+
+
+class Account:
+    """A short, readable account of where two parsed documents part ways.
+
+    The lines gathered so far travel with the account rather than down the
+    walk, and the two bounds are stated once here: a detail cell in the parity
+    table is read by a human, so six findings and six levels of nesting is
+    where the account stops and says only that the rest differs.
+    """
+
+    ENOUGH_LINES = 6
+    DEEP_ENOUGH = 6
+
+    def __init__(self):
+        self.lines = []
+
+    @property
+    def is_full(self):
+        """Whether enough has been said for a reader to go and look."""
+        return len(self.lines) >= self.ENOUGH_LINES
+
+    @property
+    def text(self):
+        return '; '.join(self.lines) or 'differs'
+
+    def note(self, at):
+        """Record how the two nodes at one place differ, descending as needed."""
+        if self.is_full or at.depth > self.DEEP_ENOUGH:
+            return
+        a, b = at.bundled, at.published
+        if isinstance(a, dict) and isinstance(b, dict):
+            for k in sorted(set(a) | set(b)):
+                if k == 'snapshot':
+                    continue  # reported separately; a derived artefact
+                p = at.path_of(k)
+                if k not in b:
+                    self.lines.append(f'{p} only in bundled')
+                elif k not in a:
+                    self.lines.append(f'{p} only in published')
+                elif a[k] != b[k]:
+                    self.note(at.child(k))
+                if self.is_full:
+                    break
+        elif a != b:
+            sa, sb = str(a)[:60], str(b)[:60]
+            self.lines.append(f'{at.path or "value"}: {sa!r} vs {sb!r}')
+
+
+def describe(a, b):
     """A short, readable account of where two parsed documents part ways."""
-    if out is None:
-        out = []
-    if len(out) >= 6 or depth > 6:
-        return '; '.join(out)
-    if isinstance(a, dict) and isinstance(b, dict):
-        for k in sorted(set(a) | set(b)):
-            if k == 'snapshot':
-                continue  # reported separately; a derived artefact
-            p = f'{path}.{k}' if path else k
-            if k not in b:
-                out.append(f'{p} only in bundled')
-            elif k not in a:
-                out.append(f'{p} only in published')
-            elif a[k] != b[k]:
-                describe(a[k], b[k], p, depth + 1, out)
-            if len(out) >= 6:
-                break
-    elif a != b:
-        sa, sb = str(a)[:60], str(b)[:60]
-        out.append(f'{path or "value"}: {sa!r} vs {sb!r}')
-    return '; '.join(out) or 'differs'
+    account = Account()
+    account.note(Place(a, b))
+    return account.text
 
 
 def compare_package(bundled, published):
