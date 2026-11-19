@@ -41,6 +41,7 @@ BUNDLED rows and are classified there).
 """
 
 import argparse
+import dataclasses
 import json
 import sys
 import tarfile
@@ -107,6 +108,7 @@ def compare_json(a_bytes, b_bytes):
     return 'differ', describe(ka, kb)
 
 
+@dataclasses.dataclass(frozen=True)
 class Place:
     """One place in the two documents: the node each has there.
 
@@ -115,10 +117,9 @@ class Place:
     about one walk, so neither is carried separately.
     """
 
-    def __init__(self, bundled, published, trail=()):
-        self.bundled = bundled
-        self.published = published
-        self.trail = trail
+    bundled: object
+    published: object
+    trail: tuple = ()
 
     @property
     def path(self):

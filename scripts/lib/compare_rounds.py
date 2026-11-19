@@ -105,11 +105,12 @@ opposite, and ``--strict`` fails when a case could not be classified at all.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import sys
 from collections import Counter
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Sequence, Set, Tuple
 
 # The verdict a case carries when it is not a test but a state-establishing
 # block. Kept first in the report's ordering because it is the one a reader must
@@ -230,47 +231,24 @@ def flatten(doc: Dict[str, Any], source: Path) -> List[Case]:
     return out
 
 
-def key_of(case: Case, fields: Sequence[str]) -> Key:
-    return tuple(case.get(f, "") for f in fields)
+@dataclasses.dataclass(frozen=True)
+class JoinKey:
+    """The fields two rounds are joined on.
 
-
-def strictly_joinable(base_cases: Sequence[Case], cand_cases: Sequence[Case]) -> bool:
-    """Whether STRICT_KEY identifies every case of both rounds, and the same ones.
-
-    Asked of the two corpora rather than inferred from the suite version, which
-    would in any case be the wrong test: two rounds of one suite version whose
-    feature corpus was edited in between are not strictly joinable either.
-
-    A repeated key is counted here rather than refused, which is what separates
-    this question from :func:`index_cases`: a corpus the loose key will handle
-    must be allowed to answer "no" instead of aborting the comparison.
+    Two of them exist - STRICT and LOOSE below, the module docstring says why -
+    and which of the two a comparison uses is that comparison's own decision;
+    see Comparison.key.
     """
-    base = [key_of(case, STRICT_KEY) for case in base_cases]
-    cand = [key_of(case, STRICT_KEY) for case in cand_cases]
-    return (len(set(base)) == len(base) and len(set(cand)) == len(cand)
-            and set(base) == set(cand))
+
+    fields: Tuple[str, ...]
+
+    def of(self, case: Case) -> Key:
+        """The key of one case."""
+        return tuple(case.get(f, "") for f in self.fields)
 
 
-def index_cases(cases: Iterable[Case], fields: Sequence[str],
-                source: str) -> Dict[Key, Case]:
-    """Index by key. A repeated key is fatal; it would make the join ambiguous.
-
-    A repeated key means the chosen key does not identify a case uniquely within
-    one round - two Examples rows binding identical values under the loose key,
-    say. Both the silent merge and the first-wins pick would then compare one
-    round's case against an arbitrary one of the other's, so the join is refused
-    instead.
-    """
-    out: Dict[Key, Case] = {}
-    for case in cases:
-        key = key_of(case, fields)
-        if key in out:
-            raise SystemExit(
-                f"{source}: two cases share the join key {key!r}, so joining on "
-                f"{', '.join(fields)} would be ambiguous. This pair of rounds "
-                "cannot be compared on that key; see --join.")
-        out[key] = case
-    return out
+STRICT = JoinKey(STRICT_KEY)
+LOOSE = JoinKey(LOOSE_KEY)
 
 
 def totals(cases: Iterable[Case]) -> Dict[str, Dict[str, Any]]:
@@ -351,167 +329,294 @@ def unmatched(case: Case) -> Dict[str, str]:
     return out
 
 
-def compare(base_cases: List[Case], cand_cases: List[Case],
-            join: str) -> Dict[str, Any]:
-    levels = sorted({c["level"] for c in base_cases}
-                    & {c["level"] for c in cand_cases})
-    if not levels:
-        raise SystemExit(
-            "the two rounds have no level in common, so there is nothing to\n"
-            "  compare: baseline carries "
-            f"{sorted({c['level'] for c in base_cases})}, candidate carries "
-            f"{sorted({c['level'] for c in cand_cases})}")
+@dataclasses.dataclass(frozen=True)
+class Round:
+    """One round of a comparison.
 
-    base_cases = [c for c in base_cases if c["level"] in levels]
-    cand_cases = [c for c in cand_cases if c["level"] in levels]
+    Everything about it that the join and the documents ask for: the analysis
+    file it was read from, that file parsed, the cases flattened out of it, the
+    role the messages give it, and the label it was given on the command line.
 
-    # --join auto keeps the exact key only when it is in fact exact.
-    fields: Sequence[str] = STRICT_KEY
-    if join == "loose":
-        fields = LOOSE_KEY
-    elif join == "auto" and not strictly_joinable(base_cases, cand_cases):
-        fields = LOOSE_KEY
+    The two ways of reading one are written out rather than parameterised,
+    because each names its own two command-line options and nothing derives one
+    from the other.
+    """
 
-    # Under the loose key an Examples row whose bindings were not recorded could
-    # only be joined by its position, which is precisely what that key exists to
-    # avoid. Refused here rather than at read time, because the strict key does
-    # not need those bindings and must not fail for want of them.
-    if fields is LOOSE_KEY:
-        for role, cases in (("baseline", base_cases), ("candidate", cand_cases)):
-            for case in cases:
-                if case["exampleData"] == NO_EXAMPLE_DATA:
-                    raise SystemExit(
-                        f"the {role} round records no row values for row "
-                        f"{case['exampleIndex']} of '{case['scenario']}' in "
-                        f"{case['feature']}, so it can be joined across suite "
-                        "versions only by its position - which this join "
-                        "refuses to do. Re-derive the analysis with "
-                        "'make report RUN_ID=<run-id>', or compare these two "
-                        "rounds with --join strict if they ran one suite "
-                        "version.")
+    source: Path
+    doc: Dict[str, Any]
+    cases: List[Case]
+    role: str
+    given_label: str
 
-    base = index_cases(base_cases, fields, "baseline")
-    cand = index_cases(cand_cases, fields, "candidate")
+    @staticmethod
+    def baseline(args) -> "Round":
+        """The earlier round, as --baseline and --label-baseline name it."""
+        source = results_json(args.baseline)
+        doc = json.loads(source.read_text(encoding="utf-8"))
+        return Round(source, doc, flatten(doc, source), "baseline",
+                     args.label_baseline)
 
-    counts: Counter = Counter()
-    regressions: List[Dict[str, Any]] = []
-    newly_passing: List[Dict[str, Any]] = []
-    unclassified: List[Dict[str, Any]] = []
+    @staticmethod
+    def candidate(args) -> "Round":
+        """The later round, as --candidate and --label-candidate name it."""
+        source = results_json(args.candidate)
+        doc = json.loads(source.read_text(encoding="utf-8"))
+        return Round(source, doc, flatten(doc, source), "candidate",
+                     args.label_candidate)
 
-    for key in sorted(set(base) & set(cand), key=lambda k: sort_key(cand[k])):
-        b, c = base[key], cand[key]
-        if b["isPrecondition"] or c["isPrecondition"]:
-            counts[PRECONDITION] += 1
-            continue
-        if b["verdict"] not in ("pass", "fail") or \
-                c["verdict"] not in ("pass", "fail"):
-            # Unreachable with results_report.py as it stands, which emits only
-            # these two. Kept because a third value would otherwise fall into
-            # the "not passed" branches below and be counted as a failure, which
-            # is the one outcome worse than refusing to classify it.
-            counts["UNCLASSIFIED"] += 1
-            unclassified.append({**address(c),
-                                 "baselineVerdict": b["verdict"],
-                                 "candidateVerdict": c["verdict"]})
-            continue
-        bp, cp = b["verdict"] == "pass", c["verdict"] == "pass"
-        if bp and cp:
-            counts["STABLE"] += 1
-        elif bp and not cp:
-            counts["REGRESSION"] += 1
-            regressions.append({
-                **address(c),
-                "baselineResult": b["result"],
-                "candidateResult": c["result"],
-                "failingStep": c["failingStep"],
-                "httpMethod": c["httpMethod"],
-                "httpPath": c["httpPath"],
-                "httpStatus": c["httpStatus"],
-                "errorType": c["errorType"],
-                "message": c["message"],
-                "evidence": c["evidence"],
-            })
-        elif cp:
-            counts["FIXED"] += 1
-            newly_passing.append({
-                **address(c),
-                "baselineResult": b["result"],
-                "baselineFailingStep": b["failingStep"],
-                "baselineMessage": b["message"],
-            })
+    @property
+    def label(self) -> str:
+        """How the documents name this round: the label given on the command
+        line, else the round's own id, else the directory its bundle sits in.
+        """
+        return (self.given_label or self.doc.get("runId")
+                or self.source.parent.parent.name)
+
+    @property
+    def levels(self) -> Set[str]:
+        """The levels this round carries cases for."""
+        return {case["level"] for case in self.cases}
+
+    def at_levels(self, levels: Sequence[str]) -> "Round":
+        """The same round, carrying only the cases of the levels given."""
+        return dataclasses.replace(
+            self, cases=[c for c in self.cases if c["level"] in levels])
+
+    def indexed_by(self, key: JoinKey) -> Dict[Key, Case]:
+        """This round's cases by key. A repeated key is fatal; it would make
+        the join ambiguous.
+
+        A repeated key means the chosen key does not identify a case uniquely
+        within one round - two Examples rows binding identical values under the
+        loose key, say. Both the silent merge and the first-wins pick would then
+        compare one round's case against an arbitrary one of the other's, so the
+        join is refused instead.
+        """
+        out: Dict[Key, Case] = {}
+        for case in self.cases:
+            at = key.of(case)
+            if at in out:
+                raise SystemExit(
+                    f"{self.role}: two cases share the join key {at!r}, so "
+                    f"joining on {', '.join(key.fields)} would be ambiguous. "
+                    "This pair of rounds cannot be compared on that key; see "
+                    "--join.")
+            out[at] = case
+        return out
+
+
+@dataclasses.dataclass(frozen=True)
+class Comparison:
+    """The two rounds to join, restricted to the levels both of them ran.
+
+    Only levels present in both rounds are compared - the module docstring says
+    why - so the restriction is made once, here, and every figure the join
+    reports is of the comparable part of the two rounds.
+    """
+
+    base: Round
+    cand: Round
+    join: str
+
+    @staticmethod
+    def of(args) -> "Comparison":
+        """The comparison the command line asks for."""
+        base, cand = Round.baseline(args), Round.candidate(args)
+        levels = sorted(base.levels & cand.levels)
+        if not levels:
+            raise SystemExit(
+                "the two rounds have no level in common, so there is nothing to\n"
+                "  compare: baseline carries "
+                f"{sorted(base.levels)}, candidate carries "
+                f"{sorted(cand.levels)}")
+        return Comparison(base.at_levels(levels), cand.at_levels(levels),
+                          args.join)
+
+    @property
+    def levels(self) -> List[str]:
+        """The levels compared: the ones both rounds ran."""
+        return sorted(self.base.levels & self.cand.levels)
+
+    @property
+    def strictly_joinable(self) -> bool:
+        """Whether STRICT identifies every case of both rounds, and the same
+        ones.
+
+        Asked of the two corpora rather than inferred from the suite version,
+        which would in any case be the wrong test: two rounds of one suite
+        version whose feature corpus was edited in between are not strictly
+        joinable either.
+
+        A repeated key is counted here rather than refused, which is what
+        separates this question from Round.indexed_by: a corpus the loose key
+        will handle must be allowed to answer "no" instead of aborting the
+        comparison.
+        """
+        base = [STRICT.of(case) for case in self.base.cases]
+        cand = [STRICT.of(case) for case in self.cand.cases]
+        return (len(set(base)) == len(base) and len(set(cand)) == len(cand)
+                and set(base) == set(cand))
+
+    @property
+    def key(self) -> JoinKey:
+        """The key this comparison joins on: the strict key, unless --join asks
+        for the loose one or --join auto measures the strict one inexact.
+        """
+        if self.join == "loose":
+            return LOOSE
+        if self.join == "auto" and not self.strictly_joinable:
+            return LOOSE
+        return STRICT
+
+    def joined(self) -> Dict[str, Any]:
+        """The case-level join: every verdict, the two unmatched lists, and the
+        per-level totals of both rounds.
+        """
+        join_key = self.key
+        levels = self.levels
+        base_cases, cand_cases = self.base.cases, self.cand.cases
+
+        # Under the loose key an Examples row whose bindings were not recorded could
+        # only be joined by its position, which is precisely what that key exists to
+        # avoid. Refused here rather than at read time, because the strict key does
+        # not need those bindings and must not fail for want of them.
+        if join_key == LOOSE:
+            for role, cases in (("baseline", base_cases), ("candidate", cand_cases)):
+                for case in cases:
+                    if case["exampleData"] == NO_EXAMPLE_DATA:
+                        raise SystemExit(
+                            f"the {role} round records no row values for row "
+                            f"{case['exampleIndex']} of '{case['scenario']}' in "
+                            f"{case['feature']}, so it can be joined across suite "
+                            "versions only by its position - which this join "
+                            "refuses to do. Re-derive the analysis with "
+                            "'make report RUN_ID=<run-id>', or compare these two "
+                            "rounds with --join strict if they ran one suite "
+                            "version.")
+
+        base = self.base.indexed_by(join_key)
+        cand = self.cand.indexed_by(join_key)
+
+        counts: Counter = Counter()
+        regressions: List[Dict[str, Any]] = []
+        newly_passing: List[Dict[str, Any]] = []
+        unclassified: List[Dict[str, Any]] = []
+
+        for key in sorted(set(base) & set(cand), key=lambda k: sort_key(cand[k])):
+            b, c = base[key], cand[key]
+            if b["isPrecondition"] or c["isPrecondition"]:
+                counts[PRECONDITION] += 1
+                continue
+            if b["verdict"] not in ("pass", "fail") or \
+                    c["verdict"] not in ("pass", "fail"):
+                # Unreachable with results_report.py as it stands, which emits only
+                # these two. Kept because a third value would otherwise fall into
+                # the "not passed" branches below and be counted as a failure, which
+                # is the one outcome worse than refusing to classify it.
+                counts["UNCLASSIFIED"] += 1
+                unclassified.append({**address(c),
+                                     "baselineVerdict": b["verdict"],
+                                     "candidateVerdict": c["verdict"]})
+                continue
+            bp, cp = b["verdict"] == "pass", c["verdict"] == "pass"
+            if bp and cp:
+                counts["STABLE"] += 1
+            elif bp and not cp:
+                counts["REGRESSION"] += 1
+                regressions.append({
+                    **address(c),
+                    "baselineResult": b["result"],
+                    "candidateResult": c["result"],
+                    "failingStep": c["failingStep"],
+                    "httpMethod": c["httpMethod"],
+                    "httpPath": c["httpPath"],
+                    "httpStatus": c["httpStatus"],
+                    "errorType": c["errorType"],
+                    "message": c["message"],
+                    "evidence": c["evidence"],
+                })
+            elif cp:
+                counts["FIXED"] += 1
+                newly_passing.append({
+                    **address(c),
+                    "baselineResult": b["result"],
+                    "baselineFailingStep": b["failingStep"],
+                    "baselineMessage": b["message"],
+                })
+            else:
+                counts["PERSISTING"] += 1
+
+        only_base = [unmatched(base[k])
+                     for k in sorted(set(base) - set(cand),
+                                     key=lambda k: sort_key(base[k]))]
+        only_cand = [unmatched(cand[k])
+                     for k in sorted(set(cand) - set(base),
+                                     key=lambda k: sort_key(cand[k]))]
+
+        # Every verdict is emitted, zeros included: "0 regressions" is the sentence
+        # this document exists to support, and a reader must not have to deduce it
+        # from a missing key.
+        out_counts = {k: counts[k] for k in VERDICTS}
+        if counts["UNCLASSIFIED"]:
+            out_counts["UNCLASSIFIED"] = counts["UNCLASSIFIED"]
+
+        doc: Dict[str, Any] = {
+            "joinKey": list(join_key.fields),
+            "levels": levels,
+            "baselineTotals": totals(base_cases),
+            "candidateTotals": totals(cand_cases),
+            "counts": out_counts,
+            "onlyInBaseline": only_base,
+            "onlyInCandidate": only_cand,
+            "regressions": regressions,
+            "newlyPassing": newly_passing,
+        }
+        if unclassified:
+            doc["unclassified"] = unclassified
+        return doc
+
+    def markdown(self, doc: Dict[str, Any]) -> str:
+        """The short summary that is written beside the join."""
+        base_label, cand_label = self.base.label, self.cand.label
+        c = doc["counts"]
+        lines = [
+            f"# {base_label} -> {cand_label}",
+            "",
+            f"Levels compared: {', '.join(doc['levels'])}. "
+            f"Join key: `{'`, `'.join(doc['joinKey'])}`.",
+            "",
+            "| Verdict | Cases |",
+            "|---|---|",
+        ]
+        for k, v in c.items():
+            lines.append(f"| {k} | {v} |")
+        lines += [
+            "",
+            f"Cases only in {base_label}: {len(doc['onlyInBaseline'])}. "
+            f"Only in {cand_label}: {len(doc['onlyInCandidate'])}.",
+            "",
+        ]
+        if doc["regressions"]:
+            lines += ["## Regressions", ""]
+            for r in doc["regressions"]:
+                lines += [
+                    f"* **{r['level']} / {r['module']}** - {r['scenario']}  ",
+                    f"  `{r['feature']}:{r['featureLine']}`, "
+                    f"{r['baselineResult']} -> {r['candidateResult']}  ",
+                    f"  step: {r['failingStep'] or '(none recorded)'}  ",
+                    f"  message: {(r['message'] or '(none recorded)')[:400]}",
+                    "",
+                ]
         else:
-            counts["PERSISTING"] += 1
-
-    only_base = [unmatched(base[k])
-                 for k in sorted(set(base) - set(cand),
-                                 key=lambda k: sort_key(base[k]))]
-    only_cand = [unmatched(cand[k])
-                 for k in sorted(set(cand) - set(base),
-                                 key=lambda k: sort_key(cand[k]))]
-
-    # Every verdict is emitted, zeros included: "0 regressions" is the sentence
-    # this document exists to support, and a reader must not have to deduce it
-    # from a missing key.
-    out_counts = {k: counts[k] for k in VERDICTS}
-    if counts["UNCLASSIFIED"]:
-        out_counts["UNCLASSIFIED"] = counts["UNCLASSIFIED"]
-
-    doc: Dict[str, Any] = {
-        "joinKey": list(fields),
-        "levels": levels,
-        "baselineTotals": totals(base_cases),
-        "candidateTotals": totals(cand_cases),
-        "counts": out_counts,
-        "onlyInBaseline": only_base,
-        "onlyInCandidate": only_cand,
-        "regressions": regressions,
-        "newlyPassing": newly_passing,
-    }
-    if unclassified:
-        doc["unclassified"] = unclassified
-    return doc
-
-
-def markdown(doc: Dict[str, Any], base_label: str, cand_label: str) -> str:
-    c = doc["counts"]
-    lines = [
-        f"# {base_label} -> {cand_label}",
-        "",
-        f"Levels compared: {', '.join(doc['levels'])}. "
-        f"Join key: `{'`, `'.join(doc['joinKey'])}`.",
-        "",
-        "| Verdict | Cases |",
-        "|---|---|",
-    ]
-    for k, v in c.items():
-        lines.append(f"| {k} | {v} |")
-    lines += [
-        "",
-        f"Cases only in {base_label}: {len(doc['onlyInBaseline'])}. "
-        f"Only in {cand_label}: {len(doc['onlyInCandidate'])}.",
-        "",
-    ]
-    if doc["regressions"]:
-        lines += ["## Regressions", ""]
-        for r in doc["regressions"]:
-            lines += [
-                f"* **{r['level']} / {r['module']}** - {r['scenario']}  ",
-                f"  `{r['feature']}:{r['featureLine']}`, "
-                f"{r['baselineResult']} -> {r['candidateResult']}  ",
-                f"  step: {r['failingStep'] or '(none recorded)'}  ",
-                f"  message: {(r['message'] or '(none recorded)')[:400]}",
-                "",
-            ]
-    else:
-        lines += ["No case that passed in the baseline fails in the candidate.",
-                  ""]
-    if doc["newlyPassing"]:
-        lines += ["## Newly passing", ""]
-        for r in doc["newlyPassing"]:
-            lines += [f"* **{r['level']} / {r['module']}** - {r['scenario']}  ",
-                      f"  `{r['feature']}:{r['featureLine']}`, "
-                      f"was {r['baselineResult']}", ""]
-    return "\n".join(lines)
+            lines += ["No case that passed in the baseline fails in the candidate.",
+                      ""]
+        if doc["newlyPassing"]:
+            lines += ["## Newly passing", ""]
+            for r in doc["newlyPassing"]:
+                lines += [f"* **{r['level']} / {r['module']}** - {r['scenario']}  ",
+                          f"  `{r['feature']}:{r['featureLine']}`, "
+                          f"was {r['baselineResult']}", ""]
+        return "\n".join(lines)
 
 
 def main() -> int:
@@ -541,12 +646,9 @@ def main() -> int:
                     help="exit 3 when a joined case could not be classified")
     args = ap.parse_args()
 
-    base_src = results_json(args.baseline)
-    cand_src = results_json(args.candidate)
-    base_doc = json.loads(base_src.read_text(encoding="utf-8"))
-    cand_doc = json.loads(cand_src.read_text(encoding="utf-8"))
-    doc = compare(flatten(base_doc, base_src), flatten(cand_doc, cand_src),
-                  args.join)
+    comparison = Comparison.of(args)
+    base, cand = comparison.base, comparison.cand
+    doc = comparison.joined()
 
     # The sources go in first, so the two files the join came from are the first
     # thing a reader of the JSON sees, as in the comparisons already published.
@@ -555,15 +657,15 @@ def main() -> int:
     # operator could not find. No timestamp goes in: the document is a pure
     # function of the two inputs, and a reader must be able to regenerate it
     # byte for byte.
-    out: Dict[str, Any] = {"baseline": str(base_src),
-                           "candidate": str(cand_src),
-                           "baselineRunId": base_doc.get("runId", ""),
-                           "candidateRunId": cand_doc.get("runId", ""),
+    out: Dict[str, Any] = {"baseline": str(base.source),
+                           "candidate": str(cand.source),
+                           "baselineRunId": base.doc.get("runId", ""),
+                           "candidateRunId": cand.doc.get("runId", ""),
                            "generator": "scripts/lib/compare_rounds.py"}
-    if args.label_baseline:
-        out["baselineLabel"] = args.label_baseline
-    if args.label_candidate:
-        out["candidateLabel"] = args.label_candidate
+    if base.given_label:
+        out["baselineLabel"] = base.given_label
+    if cand.given_label:
+        out["candidateLabel"] = cand.given_label
     out.update(doc)
 
     text = json.dumps(out, indent=2, ensure_ascii=False) + "\n"
@@ -573,11 +675,10 @@ def main() -> int:
     else:
         sys.stdout.write(text)
 
-    bl = args.label_baseline or base_doc.get("runId") or base_src.parent.parent.name
-    cl = args.label_candidate or cand_doc.get("runId") or cand_src.parent.parent.name
+    bl, cl = base.label, cand.label
     if args.out_md:
         args.out_md.parent.mkdir(parents=True, exist_ok=True)
-        args.out_md.write_text(markdown(out, bl, cl), encoding="utf-8")
+        args.out_md.write_text(comparison.markdown(out), encoding="utf-8")
 
     c = out["counts"]
     print(f"  {bl} -> {cl}: "
