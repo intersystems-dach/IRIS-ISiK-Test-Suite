@@ -797,8 +797,16 @@ def enforce(doc: dict, expr: str, ctx: Ctx) -> list[str]:
 # inputs
 # --------------------------------------------------------------------------- #
 
-def load_contract(contract_dir: pathlib.Path, namespaces: set[str]) -> dict[str, str]:
-    """Qualified key -> value, for checking a placeholder against its target."""
+def contract_from_yaml(contract_dir: pathlib.Path,
+                       namespaces: set[str]) -> dict[str, str]:
+    """Qualified key -> value, read from the suite's staged YAML contract files.
+
+    Named for its source. `requirements_corpus.testdata_contract()` returns the
+    same mapping read out of `requirements.json` instead, and the two agree only
+    as long as nothing has gone wrong - which is what this tool exists to check.
+    A single name covering both would have hidden exactly the disagreement it is
+    looking for.
+    """
     import yaml
     values: dict[str, str] = {}
     for path in sorted(contract_dir.glob("*.yaml")):
@@ -1230,7 +1238,7 @@ def main() -> int:
 
     namespaces = {k.split(".", 1)[0] for row in level.get("resources", [])
                   for k in row.get("keys", [])}
-    contract = load_contract(pathlib.Path(args.contract), namespaces)
+    contract = contract_from_yaml(pathlib.Path(args.contract), namespaces)
     displays = build_display_index([pathlib.Path(p) for p in args.package])
     print(f"{len(displays)} code/system pair(s) carry an unambiguous display in the "
           f"{len(args.package)} package(s) read")

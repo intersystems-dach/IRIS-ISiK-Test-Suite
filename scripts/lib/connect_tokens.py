@@ -53,15 +53,17 @@ import sys
 
 import yaml
 
+# Invoked as a standalone script, so sys.path[0] is already this directory;
+# the insert is for the case where a sibling imports this module instead.
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+
+from tool_common import fail  # noqa: E402
+
 PLACEHOLDER = "SET-YOUR-TOKEN-HERE"
 
 # The key in the official test-data contract that names the patient the
 # patient-context tokens must be bound to.
 PATIENT_IN_CONTEXT_KEY = "read-patient-in-context-id"
-
-
-def fail(message):
-    sys.exit("connect_tokens.py: " + message)
 
 
 def read_map(stream):

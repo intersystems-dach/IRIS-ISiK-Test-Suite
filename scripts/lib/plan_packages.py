@@ -86,6 +86,12 @@ import os
 import sys
 from typing import Any
 
+# Invoked as a standalone script, so sys.path[0] is already this directory;
+# the insert is for the case where a sibling imports this module instead.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from tool_common import fail  # noqa: E402
+
 try:
     import yaml
 except ImportError:  # pragma: no cover - preflight checks this
@@ -98,11 +104,6 @@ except ImportError:  # pragma: no cover - preflight checks this
 # for the two endpoints to end up on different core versions.
 FHIR_CORE_NAME = "hl7.fhir.r4.core"
 FHIR_CORE_VERSION = "4.0.1"
-
-
-def fail(msg: str) -> "NoReturn":  # type: ignore[valid-type]
-    print(f"plan_packages.py: {msg}", file=sys.stderr)
-    raise SystemExit(1)
 
 
 def parse_pkg_id(pkg_id: str) -> tuple[str, str]:

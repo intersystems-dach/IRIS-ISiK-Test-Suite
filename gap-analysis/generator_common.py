@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Helpers shared by the generators in this directory.
+"""Helpers shared by the document generators in this directory.
 
 Admission rule: a helper belongs here only when more than one tool in
 `gap-analysis/` needs it *and* it carries no knowledge of the gap analysis
@@ -12,6 +12,17 @@ Before this module existed, `gap_report.py` and `case_evidence.py` each carried
 their own copy of all three functions below. The copies of `md_escape` were
 character-identical, and the two copies of the JSON loader had drifted: one
 treated an unreadable optional file as absent, the other aborted on it.
+
+Why the name is this specific, and must stay unique: `build_index.py` puts
+`scripts/lib/` on sys.path *ahead* of this directory, so every module name here
+shares one namespace with every module name there. `scripts/lib/tool_common.py`
+is that directory's counterpart of this file. Had both been called `common.py`,
+an `import common` in this directory would have silently resolved to the other
+one.
+
+The two are deliberately not merged. `die()` here exits 2 and `fail()` there
+exits 1, and an exit code is part of a tool's contract with the shell script
+that runs it.
 """
 
 from __future__ import annotations

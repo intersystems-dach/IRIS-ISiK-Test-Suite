@@ -148,6 +148,12 @@ import re
 import sys
 from pathlib import Path
 
+# Invoked as a standalone script, so sys.path[0] is already this directory; the
+# insert is for the case where a sibling imports this module instead.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from requirements_corpus import testdata_contract  # noqa: E402
+
 REPO = Path(__file__).resolve().parents[2]
 # `{{<namespace>.<key>}}`. The namespace is matched rather than fixed to `data`,
 # because 3.0.0 replaced the single `data` baseKey with one per module. The shape
@@ -377,30 +383,13 @@ def pattern_resolver(packages_dir: Path, pins: tuple[str, ...]):
     return resolve
 
 
-def load_contract(level: str, req: dict) -> dict[str, str]:
-    """Qualified `<ns>.<key>` -> ID, from the suite's own contract for this level.
-
-    Taken out of requirements.json rather than re-read from the YAML files so that
-    the IDs the seed data is built with are provably the same strings the extractor
-    documented and the suite will send.
-    """
-    out: dict[str, str] = {}
-    for f in req["features"]:
-        if f["level"] != level:
-            continue
-        for key, info in f["dataKeys"].items():
-            if info["value"] not in (None, ""):
-                out[key] = str(info["value"])
-    return out
-
-
 OVERLAY_GLOB = "zz-upstream-key-defects"
 
 
 def load_overlay(level: str, config_dir: Path, staged: Path) -> dict[str, str]:
     """Qualified `<ns>.<key>` -> value, from this project's own overlay files.
 
-    load_contract() above reads the contract out of `requirements.json`, i.e. out
+    testdata_contract() reads the contract out of `requirements.json`, i.e. out
     of the keys the suite's *feature files* reference. That is the right source
     for every key the suite defines, and it is deliberately the only source for
     them - but it cannot see a key the suite references nowhere.
@@ -653,7 +642,7 @@ def main() -> int:
 
     rc = 0
     for level in levels:
-        contract = load_contract(level, req)
+        contract = testdata_contract(level, req)
         # Merged *under* the contract, so requirements.json wins every key it
         # documents and the overlay can only add - the same precedence the Tiger
         # configuration gives these files by listing them last.

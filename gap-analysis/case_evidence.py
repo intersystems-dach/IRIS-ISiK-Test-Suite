@@ -114,7 +114,7 @@ sys.path.insert(0, str(REPO / "gap-analysis"))
 # that are not the product's are properties of the gap analysis, and a second copy
 # of either is how two documents of one round come to disagree - which has happened
 # in this project once already (see NOT_SUT_CATEGORIES in gap_report.py).
-from common import (die, load_json, load_json_if_readable,      # noqa: E402
+from generator_common import (die, load_json, load_json_if_readable,      # noqa: E402
                     md_escape)
 from gap_report import (CAT_TITLE, NOT_SUT_CATEGORIES,          # noqa: E402
                         UNRESOLVED_TOKEN)

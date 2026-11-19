@@ -126,6 +126,7 @@ from feature_parser import (                             # noqa: E402
     load_features,
     parse_tag_expression,
 )
+from requirements_corpus import testdata_contract        # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -258,26 +259,6 @@ STRAY_ANCHOR = "documented at scripts/lib/search_reference_check.py:STRAY_ANCHOR
 def expand(text: str, row: dict[str, str]) -> str:
     """Substitute one Examples row's values into an outline step."""
     return RE_OUTLINE.sub(lambda m: row.get(m.group(1), m.group(0)), text)
-
-
-def contract(level: str, req: dict) -> dict[str, str]:
-    """key -> ID, from the suite's own test-data contract.
-
-    Keyed by the qualified `<namespace>.<key>`, which is the string the feature
-    files write and the string requirements.json records.
-
-    Read out of requirements.json rather than the YAML so that this check and the
-    seed data resolve `${<ns>.*}` through the same path; a discrepancy between the
-    two would make the check pass on values the suite never sends.
-    """
-    out: dict[str, str] = {}
-    for f in req["features"]:
-        if f["level"] != level:
-            continue
-        for key, info in f["dataKeys"].items():
-            if info["value"] not in (None, ""):
-                out[key] = str(info["value"])
-    return out
 
 
 def resolve_keys(text: str, values: dict[str, str]) -> tuple[str, set[str]]:
@@ -707,7 +688,7 @@ def main() -> int:
     rc = 0
     report: list[dict] = []
     for level in selected:
-        values = contract(level, req)
+        values = testdata_contract(level, req)
         predicate = parse_tag_expression(exprs[level])
         reqs = requirements(args.features, level, predicate, values, args.all, params)
         data = corpus(args.data_root, level)

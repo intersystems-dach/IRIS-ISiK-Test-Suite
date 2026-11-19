@@ -74,6 +74,12 @@ import sys
 
 import yaml
 
+# Invoked as a standalone script, so sys.path[0] is already this directory;
+# the insert is for the case where a sibling imports this module instead.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from tool_common import fail  # noqa: E402
+
 PLACEHOLDER = "SET-YOUR-TOKEN-HERE"
 
 # A JWS compact serialisation whose header begins with the usual `{"` - which is
@@ -88,10 +94,6 @@ JWT = re.compile(r"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}")
 # this bound is never reached in practice and is a guard against a hand-edited
 # secrets/ file, not a routine case.
 MIN_SECRET_LEN = 12
-
-
-def fail(message):
-    sys.exit("redact_credentials.py: " + message)
 
 
 def digest(value):

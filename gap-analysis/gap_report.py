@@ -106,7 +106,7 @@ sys.path.insert(0, str(REPO / "gap-analysis"))
 
 from build_index import (CATEGORIES, classify_step,                   # noqa: E402
                          classify_substep, shape_of)
-from common import (die, load_json, load_json_if_readable,             # noqa: E402
+from generator_common import (die, load_json, load_json_if_readable,             # noqa: E402
                     md_escape)
 
 MAX_BODY = 700          # characters of a response body quoted in an entry

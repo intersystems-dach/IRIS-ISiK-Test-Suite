@@ -76,6 +76,13 @@ import json
 import os
 import sys
 
+# Invoked as a standalone script, so sys.path[0] is already this directory;
+# the insert is for the case where a sibling imports this module instead.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from plan_packages import version_key  # noqa: E402
+from tool_common import fail  # noqa: E402
+
 
 # FHIR package `type` values that must not be loaded into the SUT. See the module
 # docstring. "fhir.examples" is the only one in play with the current test suite
@@ -115,29 +122,6 @@ REWRITE_REASONS = {
         "the guide does not declare."
     ),
 }
-
-
-def fail(msg: str) -> "NoReturn":  # type: ignore[valid-type]
-    print(f"order_packages.py: {msg}", file=sys.stderr)
-    raise SystemExit(1)
-
-
-def version_key(version: str) -> tuple:
-    """Sort key for FHIR package versions - see plan_packages.version_key.
-
-    Duplicated deliberately rather than imported: these two modules are invoked as
-    standalone scripts by 20-fetch-packages.sh, and a cross-import would make each
-    depend on the other's directory being on sys.path.
-    """
-    parts = []
-    for piece in version.split("."):
-        digits = ""
-        for ch in piece:
-            if not ch.isdigit():
-                break
-            digits += ch
-        parts.append((int(digits) if digits else -1, piece))
-    return tuple(parts)
 
 
 def read_package_json(pkg_dir: str) -> dict:

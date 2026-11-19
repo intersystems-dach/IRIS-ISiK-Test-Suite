@@ -74,6 +74,12 @@ import os
 import pathlib
 import sys
 
+# Invoked as a standalone script, so sys.path[0] is already this directory;
+# the insert is for the case where a sibling imports this module instead.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from tool_common import fail  # noqa: E402
+
 # Where a reference may appear in a derived body, and which contract key supplies
 # its target. The left-hand side is a dotted path with `[]` marking a list, as
 # produced by walk() below; the right-hand side is a key name that is looked up in
@@ -91,11 +97,6 @@ REFERENCE_KEYS = {
 
 # Removed from every derived body. See the module docstring.
 DROP_TOP_LEVEL = ("id", "meta", "text")
-
-
-def fail(msg: str) -> None:
-    print(f"ERROR: {msg}", file=sys.stderr)
-    raise SystemExit(2)
 
 
 def load_examples(pkg_dir: pathlib.Path) -> dict[str, list[pathlib.Path]]:
