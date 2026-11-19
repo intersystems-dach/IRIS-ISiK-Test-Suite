@@ -743,7 +743,7 @@ for stufe in levels:
     # scope has to be judged before an absent key is called a defect.
     #
     # Scope is evaluated with the real tag expression against real Cucumber tag
-    # inheritance (feature_parser.parse_tag_expression / count_cases), not by
+    # inheritance (parse_tag_expression / count_asserting_cases), not by
     # grepping the file header. The difference is not academic: a tag immediately
     # above an `Examples:` block belongs to that block rather than to the scenario
     # that follows, and Stufe5/Medikation/RiskAssessment-Search.feature is exactly
@@ -755,7 +755,7 @@ for stufe in levels:
         f = feature.path
         text = feature.text
         runtime |= fp.runtime_keys_in(text)
-        skipped = fp.count_cases(feature, predicate) == 0
+        skipped = fp.count_asserting_cases(feature, predicate) == 0
         for i, line in enumerate(text.splitlines(), 1):
             for key in fp.data_keys_in(line):
                 where = f"{f.relative_to(feat_root.parent)}:{i}"

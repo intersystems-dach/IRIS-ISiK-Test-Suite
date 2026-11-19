@@ -30,8 +30,8 @@ of that block only. The second rule is a genuine trap in this suite -
 reads, to the eye, as if it belonged to the scenario below it, when it actually
 belongs to the ``Examples`` block above. Getting that wrong changes whether a
 scenario is in the certification scope. :func:`effective_tags` and
-:func:`count_cases` therefore model the inheritance explicitly instead of
-grepping for tags per file.
+:func:`count_asserting_cases` therefore model the inheritance explicitly instead
+of grepping for tags per file.
 """
 
 from __future__ import annotations
@@ -471,30 +471,45 @@ def effective_tags(feature: Feature, scenario: Scenario,
     return tags
 
 
-def count_cases(feature: Feature, predicate, include_preconditions: bool = False) -> int:
-    """Number of test cases the given tag predicate selects from one feature.
+def _selected_per_scenario(feature: Feature, predicate):
+    """Each scenario of one feature, with the number of cases `predicate` selects.
 
     One plain Scenario is one case; one Scenario Outline is one case per Examples
     *row* - which is how Cucumber and therefore the Serenity report count, and
     the reason the scope figures in the documentation are larger than the
     scenario-keyword count.
 
-    Precondition blocks are excluded by default. They are real Cucumber scenarios
-    and they do execute, but their steps only record prose for the report; counting
-    them would inflate the conformance scope by one per feature file.
+    Yields the scenario alongside its count so that the two counts below differ
+    only in which scenarios they admit, and not in how a case is counted.
     """
-    total = 0
     for scenario in feature.scenarios:
-        if scenario.is_precondition and not include_preconditions:
-            continue
         if scenario.is_outline:
-            for ex in scenario.examples:
-                if predicate(effective_tags(feature, scenario, ex)):
-                    total += len(ex.rows)
+            selected = sum(len(ex.rows) for ex in scenario.examples
+                           if predicate(effective_tags(feature, scenario, ex)))
         else:
-            if predicate(effective_tags(feature, scenario)):
-                total += 1
-    return total
+            selected = 1 if predicate(effective_tags(feature, scenario)) else 0
+        yield scenario, selected
+
+
+def count_asserting_cases(feature: Feature, predicate) -> int:
+    """Cases the tag predicate selects that state something about the SUT.
+
+    This is the conformance denominator. Precondition blocks are left out: they
+    are real Cucumber scenarios and they do execute, but their steps only record
+    prose for the report, so counting them would inflate the conformance scope by
+    one per feature file.
+    """
+    return sum(n for scenario, n in _selected_per_scenario(feature, predicate)
+               if not scenario.is_precondition)
+
+
+def count_executed_cases(feature: Feature, predicate) -> int:
+    """Cases the tag predicate selects that the suite will run, preconditions included.
+
+    This is the figure to compare against a report's own case count, which makes
+    no distinction between a precondition block and an asserting scenario.
+    """
+    return sum(n for _, n in _selected_per_scenario(feature, predicate))
 
 
 # -----------------------------------------------------------------------------

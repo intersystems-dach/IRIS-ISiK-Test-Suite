@@ -432,9 +432,16 @@ def token_criteria(rtype: str, query: str) -> list[tuple[str, str | None, list[s
 
 
 def requirements(features_root: Path, level: str, predicate,
-                 values: dict[str, str], include_out_of_scope: bool,
+                 values: dict[str, str],
                  params: dict[tuple[str, str], dict] | None = None) -> list[dict]:
-    """One entry per (type, path, value) a search scenario requires of the corpus."""
+    """One entry per (type, path, value) a search scenario requires of the corpus.
+
+    Every scenario is described, in or out of the level's scope, and each entry
+    records which it was under `inScope`. Selecting is left to the caller: no
+    entry is ever merged with another, so dropping the out-of-scope ones here or
+    after the fact comes to the same thing, and the predicate then has one
+    meaning in this module instead of two.
+    """
     out: list[dict] = []
     for feature in load_features(features_root):
         if feature.level != level:
@@ -458,8 +465,6 @@ def requirements(features_root: Path, level: str, predicate,
 
             for row, tags in variants:
                 in_scope = predicate(tags) and not disabled
-                if not in_scope and not include_out_of_scope:
-                    continue
 
                 searched: str | None = None
                 query: str = ""
@@ -690,7 +695,9 @@ def main() -> int:
     for level in selected:
         values = testdata_contract(level, req)
         predicate = parse_tag_expression(exprs[level])
-        reqs = requirements(args.features, level, predicate, values, args.all, params)
+        reqs = requirements(args.features, level, predicate, values, params)
+        if not args.all:
+            reqs = [r for r in reqs if r["inScope"]]
         data = corpus(args.data_root, level)
         if not data:
             print(f"{level}: no rendered resources under {args.data_root / level} "

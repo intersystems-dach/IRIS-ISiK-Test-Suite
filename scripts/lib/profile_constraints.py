@@ -39,6 +39,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from typing import NamedTuple
 
 
 def load_index(packages_dir: Path) -> dict[str, tuple[Path, str]]:
@@ -95,37 +96,82 @@ def _short(value) -> str:
     return str(value)
 
 
-def describe(doc: dict, differential: bool, must_support_only: bool) -> list[str]:
+class View(NamedTuple):
+    """One element list of a profile, under the name it is to be reported by."""
+    label: str
+    elements: list[dict]
+
+
+def differential_view(doc: dict) -> View:
+    """The elements the profile itself constrains.
+
+    Usually what an author wants: the snapshot of an ISiK profile carries every
+    inherited element from Patient, which is several hundred rows of noise around
+    the dozen the profile actually constrains. A profile that carries no
+    differential at all is reported from its snapshot, under a label that says so
+    rather than as an empty constraint list.
+    """
+    elements = (doc.get("differential") or {}).get("element") or []
+    if elements:
+        return View("differential", elements)
+    return View("snapshot (no differential in this profile)",
+                (doc.get("snapshot") or {}).get("element") or [])
+
+
+def snapshot_view(doc: dict) -> View:
+    """Every element of the profile, inherited ones included."""
+    return View("snapshot", (doc.get("snapshot") or {}).get("element") or [])
+
+
+def _fixed_value(el: dict):
+    """The element's `fixed[x]` or `pattern[x]` value, or None where it has neither."""
+    return next((v for k, v in el.items()
+                 if k.startswith("fixed") or k.startswith("pattern")), None)
+
+
+def constrained_elements(elements: list[dict]) -> list[dict]:
+    """The elements that decide whether an instance validates, or a test passes.
+
+    That is: must-support, a min cardinality above zero, a fixed or pattern
+    value, a required binding, or slicing. An element the profile leaves exactly
+    as it inherited it tells an author nothing and is left out.
+    """
+    return [el for el in elements
+            if el.get("mustSupport")
+            or isinstance(el.get("min"), int) and el["min"] > 0
+            or _fixed_value(el) is not None
+            or (el.get("binding") or {}).get("strength") == "required"
+            or el.get("slicing")]
+
+
+def must_support_elements(elements: list[dict]) -> list[dict]:
+    """Only the must-support elements - the ones the suite's assertions target."""
+    return [el for el in elements if el.get("mustSupport")]
+
+
+def header_lines(doc: dict, view: View) -> list[str]:
+    """What profile this is and which of its element lists is being reported."""
+    return [
+        f"# {doc.get('name')}  ({doc.get('type')})",
+        f"# url    : {doc.get('url')}",
+        f"# baseOn : {doc.get('baseDefinition')}",
+        f"# view   : {view.label}, {len(view.elements)} elements",
+        "",
+    ]
+
+
+def element_lines(elements: list[dict]) -> list[str]:
+    """One line per element, plus an indented line per slice, fixed value or binding."""
     out: list[str] = []
-    kind = "differential" if differential else "snapshot"
-    elements = (doc.get(kind) or {}).get("element") or []
-    if not elements and differential:
-        elements = (doc.get("snapshot") or {}).get("element") or []
-        kind = "snapshot (no differential in this profile)"
-
-    out.append(f"# {doc.get('name')}  ({doc.get('type')})")
-    out.append(f"# url    : {doc.get('url')}")
-    out.append(f"# baseOn : {doc.get('baseDefinition')}")
-    out.append(f"# view   : {kind}, {len(elements)} elements")
-    out.append("")
-
     for el in elements:
         path = el.get("path", "?")
         ms = bool(el.get("mustSupport"))
         lo, hi = el.get("min"), el.get("max")
-        fixed = next((v for k, v in el.items()
-                      if k.startswith("fixed") or k.startswith("pattern")), None)
+        fixed = _fixed_value(el)
         binding = el.get("binding") or {}
         strength = binding.get("strength")
         vs = binding.get("valueSet")
         slicing = el.get("slicing")
-
-        interesting = ms or (isinstance(lo, int) and lo > 0) or fixed is not None \
-            or strength == "required" or slicing
-        if must_support_only and not ms:
-            continue
-        if not interesting:
-            continue
 
         marks = []
         if isinstance(lo, int) or hi:
@@ -188,7 +234,11 @@ def main() -> int:
     doc = json.loads(path.read_text(encoding="utf-8"))
     print(f"# package: {pkg}")
     print(f"# file   : {path}")
-    print("\n".join(describe(doc, not args.snapshot, args.must_support)))
+    # Both flags choose a function here, at the boundary where argv is read,
+    # rather than being carried into one that then does two things.
+    view = snapshot_view(doc) if args.snapshot else differential_view(doc)
+    chosen = (must_support_elements if args.must_support else constrained_elements)
+    print("\n".join(header_lines(doc, view) + element_lines(chosen(view.elements))))
     return 0
 
 

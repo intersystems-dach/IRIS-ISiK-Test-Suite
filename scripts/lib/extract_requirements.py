@@ -73,8 +73,9 @@ from feature_parser import (  # noqa: E402
     RE_DATA_KEY,
     RE_PROFILE_FULL,
     RE_PROFILE_SHORT,
+    count_asserting_cases,
+    count_executed_cases,
     data_keys_in,
-    count_cases,
     effective_tags,
     load_features,
     parse_tag_expression,
@@ -807,8 +808,8 @@ def analyse(features_root: Path, testdata_root: Path, tag_expr: dict[str, str],
         # In scope = at least one non-precondition case survives the tag filter.
         # Computed per case rather than per file, because a mandatory feature can
         # hold @Optional scenarios and vice versa.
-        assertive = count_cases(f, pred)
-        executed = count_cases(f, pred, include_preconditions=True)
+        assertive = count_asserting_cases(f, pred)
+        executed = count_executed_cases(f, pred)
 
         profiles: dict[str, set[str]] = collections.defaultdict(set)
         for module, canonical in RE_PROFILE_FULL.findall(f.text):

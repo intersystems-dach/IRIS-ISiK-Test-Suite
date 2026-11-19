@@ -98,6 +98,7 @@ import argparse
 import json
 import re
 import sys
+from collections.abc import Collection
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -1577,13 +1578,20 @@ def request_as_resolved(run_dir: Path, case: dict) -> str:
     return last
 
 
-def prerequisite_verdict(resolved: str, tokens_unresolved: bool
+def prerequisite_verdict(resolved: str, run_requests: Collection[str]
                          ) -> tuple[str, str, str] | None:
     """Whether this case's own precondition went unmet - see PREREQUISITE_RULES.
 
     Positive evidence only, and from the official report rather than from a
     module or feature name: a Connect scenario that fails with a real token in
     hand is a conformance finding and has to stay one.
+
+    `run_requests` is every resolved request the round made. The second rule
+    needs it because the evidence it rests on is a property of the round and not
+    of the case: a request for the discovery document says nothing on its own,
+    and only becomes a prerequisite finding once the round elsewhere shows that
+    no token was ever issued. Passed as the requests themselves rather than as a
+    flag computed from them, so that the rule states its own evidence.
     """
     if UNRESOLVED_TOKEN in resolved:
         return "ENVIRONMENT_PREREQUISITE", (
@@ -1592,7 +1600,8 @@ def prerequisite_verdict(resolved: str, tokens_unresolved: bool
             "The scenario's precondition is a valid Bearer token for a named "
             "scope; none was issued, so no scope was presented to the SUT"
         ), "no-access-token-issued"
-    if tokens_unresolved and SMART_DISCOVERY_PATH in resolved:
+    if SMART_DISCOVERY_PATH in resolved and any(UNRESOLVED_TOKEN in text
+                                                for text in run_requests):
         return "ENVIRONMENT_PREREQUISITE", (
             f"the request is for `{SMART_DISCOVERY_PATH}`, the SMART-on-FHIR "
             "authorization discovery document, and this run's unresolved token "
@@ -1814,8 +1823,7 @@ def analyse(results: dict, index: dict, seed: dict, corpus: dict, run_dir: Path,
             rel = ((case.get("report") or {}).get("outcomeJson") or "")
             if rel and rel not in resolved_requests:
                 resolved_requests[rel] = request_as_resolved(run_dir, case)
-    tokens_unresolved = any(UNRESOLVED_TOKEN in text
-                            for text in resolved_requests.values())
+    run_requests = list(resolved_requests.values())
 
     for level, L in (results.get("levels") or {}).items():
         totals = L.get("totals") or {}
@@ -1865,7 +1873,7 @@ def analyse(results: dict, index: dict, seed: dict, corpus: dict, run_dir: Path,
             # test-data override: a case whose own precondition was never met
             # states nothing about either the SUT or our seeded data, so neither
             # of them is the thing to look at.
-            prereq = prerequisite_verdict(resolved, tokens_unresolved)
+            prereq = prerequisite_verdict(resolved, run_requests)
             # Initialised per case, not left to carry over: both are recorded on
             # the group below, and a prerequisite-categorised case used to be
             # given whichever evidence the previous iteration happened to hold.

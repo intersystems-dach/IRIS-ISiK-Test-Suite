@@ -378,7 +378,7 @@ def satisfies(node, conds: list[str], ctx: Ctx) -> bool:
             if not segments:
                 return False
             try:
-                found = navigate(node, segments, ctx, create=False)
+                found = lookup(node, segments, ctx)
             except Unsupported:
                 return False
             if found in (None, [], {}, ""):
@@ -390,7 +390,7 @@ def satisfies(node, conds: list[str], ctx: Ctx) -> bool:
         path, want = m.group("path"), parse_literal(m)
         segments = parse_chain(path)
         try:
-            have = navigate(node, segments, ctx, create=False)
+            have = lookup(node, segments, ctx)
         except Unsupported:
             return False
         if isinstance(have, list):
@@ -416,7 +416,7 @@ def conflicts(node, conds: list[str], ctx: Ctx) -> bool:
     that is merely *silent* where the selector states a value. Only a node carrying
     a different value conflicts.
 
-    The distinction decides, in navigate(), between completing an existing list
+    The distinction decides, in enforce_path(), between completing an existing list
     entry and appending a second one. Getting it wrong is not cosmetic. The ICU
     Extended pressure features assert
 
@@ -459,7 +459,7 @@ def conflicts(node, conds: list[str], ctx: Ctx) -> bool:
             # what the selector states - the case this function exists for.
             if segments[-1].startswith("where(") and segments[-1].endswith(")"):
                 try:
-                    host = navigate(node, segments[:-1], ctx, create=False)
+                    host = lookup(node, segments[:-1], ctx)
                 except Unsupported:
                     return True
                 if host in (None, [], {}, ""):
@@ -469,17 +469,17 @@ def conflicts(node, conds: list[str], ctx: Ctx) -> bool:
                     return True
                 continue
             try:
-                navigate(node, segments, ctx, create=False)
+                lookup(node, segments, ctx)
             except Unsupported:
                 return True
-            # An absent path is what `create` would fill in, not a disagreement.
+            # An absent path is what enforce_path() would fill in, not a disagreement.
             continue
         m = RE_TERM_EQ.match(term)
         if not m:
             return True
         want = parse_literal(m)
         try:
-            have = navigate(node, parse_chain(m.group("path")), ctx, create=False)
+            have = lookup(node, parse_chain(m.group("path")), ctx)
         except Unsupported:
             return True
         if have is None:
@@ -506,14 +506,83 @@ def choice_key(name: str, conds: list[str]) -> str:
                       f"fields ({', '.join(sorted(fields))}) name no FHIR type")
 
 
-def navigate(node, segments: list[str], ctx: Ctx, create: bool, conds_ahead=(),
-             parent: str | None = None):
-    """Walk a chain of names and `where(...)` selectors.
+def segment_kind(segment: str, chain: list[str]) -> str:
+    """`where`, `skip` or `name` - and Unsupported for anything else.
 
-    With `create` false this is a lookup returning None where the path is absent.
-    With `create` true, a missing name is created and a `where` that selects
-    nothing appends an element built from its own conditions - which is the sense
-    in which a feature's `exists()` is read as a requirement.
+    Which FHIRPath forms this module understands is stated here once, because
+    both walks below have to understand exactly the same ones: a form that only
+    the lookup rejected would let a reconciliation write a body the check that
+    follows it then reads differently.
+
+    `chain` is the whole chain the segment came from, which is what the message
+    for an unsupported function has to name - `count()` is unsupported as a
+    statement about its chain, not as a string.
+    """
+    if segment.startswith("where("):
+        if not segment.endswith(")"):
+            raise Unsupported(segment)
+        return "where"
+    if segment in ("exists()", "first()", "toString()"):
+        return "skip"
+    if segment in ("empty()", "not()", "count()") or RE_CONTAINS.match(segment):
+        raise Unsupported(".".join(chain))
+    if not RE_NAME.match(segment):
+        raise Unsupported(segment)
+    return "name"
+
+
+def lookup(node, segments: list[str], ctx: Ctx):
+    """Walk a chain of names and `where(...)` selectors; None where it is absent.
+
+    Reads the body and never writes to it, which is what separates it from
+    :func:`enforce_path`. It therefore needs neither the conditions a caller has
+    ahead of it nor the element `node` sits at: both exist only to decide how a
+    missing element is to be created.
+    """
+    cur = node
+    for segment in segments:
+        kind = segment_kind(segment, segments)
+        if kind == "skip":
+            continue
+        if kind == "where":
+            conds = split_top_level(segment[len("where("):-1], " and ")
+            if isinstance(cur, list):
+                cur = next((item for item in cur if satisfies(item, conds, ctx)), None)
+                if cur is None:
+                    return None
+            elif isinstance(cur, dict):
+                if not satisfies(cur, conds, ctx):
+                    return None
+                # else: the single object already satisfies the selector
+            else:
+                return None
+            continue
+
+        if isinstance(cur, list):
+            # A name after a list without a `where`: the features use this to mean
+            # "of any entry". Unambiguous only for a list of one.
+            if len(cur) == 1 and isinstance(cur[0], dict):
+                cur = cur[0]
+            else:
+                return None
+        if not isinstance(cur, dict):
+            return None
+
+        key = resolve_name(cur, segment)
+        if key is None:
+            return None
+        cur = cur[key]
+    return cur
+
+
+def enforce_path(node, segments: list[str], ctx: Ctx, conds_ahead=(),
+                 parent: str | None = None):
+    """Walk the chain, creating what it names and satisfying what it selects.
+
+    A missing name is created and a `where` that selects nothing appends an
+    element built from its own conditions - which is the sense in which a
+    feature's `exists()` is read as a requirement. Use :func:`lookup` to ask
+    whether a path is there without putting it there.
 
     `parent` is the element `node` itself sits at, where the caller knows it. It is
     what lets the cardinality of a child be decided by its container as well as by
@@ -522,15 +591,14 @@ def navigate(node, segments: list[str], ctx: Ctx, create: bool, conds_ahead=(),
     """
     cur = node
     for index, segment in enumerate(segments):
-        if segment.startswith("where("):
-            if not segment.endswith(")"):
-                raise Unsupported(segment)
+        kind = segment_kind(segment, segments)
+        if kind == "skip":
+            continue
+        if kind == "where":
             conds = split_top_level(segment[len("where("):-1], " and ")
             if isinstance(cur, list):
                 match = next((item for item in cur if satisfies(item, conds, ctx)), None)
                 if match is None:
-                    if not create:
-                        return None
                     # Complete before appending, where that choice is forced: an
                     # entry that disagrees with nothing the selector states, and the
                     # only such entry, is the entry the selector is about. See
@@ -547,31 +615,20 @@ def navigate(node, segments: list[str], ctx: Ctx, create: bool, conds_ahead=(),
                 cur = match
             elif isinstance(cur, dict):
                 if not satisfies(cur, conds, ctx):
-                    if not create:
-                        return None
                     enforce_conds(cur, conds, ctx, at=parent)
                 # else: the single object already satisfies the selector
             else:
                 return None
             continue
 
-        if segment in ("exists()", "first()", "toString()"):
-            continue
-        if segment in ("empty()", "not()", "count()") or RE_CONTAINS.match(segment):
-            raise Unsupported(".".join(segments))
-        if not RE_NAME.match(segment):
-            raise Unsupported(segment)
-
         if isinstance(cur, list):
             # A name after a list without a `where`: the features use this to mean
             # "of any entry". Unambiguous only for a list of one, and an empty list
             # is one this walk has just created, so its single entry belongs here.
-            if not cur and create:
+            if not cur:
                 cur.append({})
             if len(cur) == 1 and isinstance(cur[0], dict):
                 cur = cur[0]
-            elif not create:
-                return None
             else:
                 raise Unsupported(f"{'.'.join(segments[:index + 1])}: the body has "
                                   f"{len(cur)} entries and the assertion names no "
@@ -581,8 +638,6 @@ def navigate(node, segments: list[str], ctx: Ctx, create: bool, conds_ahead=(),
 
         key = resolve_name(cur, segment)
         if key is None:
-            if not create:
-                return None
             if segment in NON_CHOICE_DATETIME:
                 key = segment
                 cur[key] = None
@@ -610,7 +665,7 @@ def enforce_conds(node: dict, conds: list[str], ctx: Ctx,
                   at: str | None = None) -> list[str]:
     """Write every scalar equality of `conds` into `node`; recurse into nested terms.
 
-    `at` is the element `node` itself sits at, passed on to navigate() so a child's
+    `at` is the element `node` itself sits at, passed on to enforce_path() so a child's
     cardinality can be decided by its container. See Ctx.is_list.
     """
     written: list[str] = []
@@ -642,7 +697,7 @@ def enforce_conds(node: dict, conds: list[str], ctx: Ctx,
         if term.endswith(".exists()"):
             inner = term[:-len(".exists()")]
             segments = parse_chain(inner)
-            target = navigate(node, segments, ctx, create=True, parent=at)
+            target = enforce_path(node, segments, ctx, parent=at)
             if target in (None, {}, []) and not segments[-1].startswith("where("):
                 raise Unsupported(f"{inner} must exist and the feature states no "
                                   f"value for it")
@@ -650,7 +705,7 @@ def enforce_conds(node: dict, conds: list[str], ctx: Ctx,
         if term.endswith(".empty().not()"):
             inner = term[:-len(".empty().not()")]
             segments = parse_chain(inner)
-            if navigate(node, segments, ctx, create=False, parent=at) in (None, [], {}, ""):
+            if lookup(node, segments, ctx) in (None, [], {}, ""):
                 # The one such requirement the ISiK features raise is on a coding's
                 # display, which the specification itself supplies (see Displays).
                 if segments == ["display"]:
@@ -670,8 +725,8 @@ def enforce_conds(node: dict, conds: list[str], ctx: Ctx,
             raise Unsupported(term)
         want = parse_literal(m)
         segments = parse_chain(m.group("path"))
-        parent = (navigate(node, segments[:-1], ctx, create=True, parent=at,
-                           conds_ahead=conds) if len(segments) > 1 else node)
+        parent = (enforce_path(node, segments[:-1], ctx, parent=at,
+                               conds_ahead=conds) if len(segments) > 1 else node)
         if isinstance(parent, list):
             # An empty list is one this walk has just created, so the entry the
             # assertion describes is its first.
@@ -696,7 +751,7 @@ def enforce(doc: dict, expr: str, ctx: Ctx) -> list[str]:
     count = RE_COUNT_CMP.match(expr)
     if count and count.group("expr").endswith(".count()"):
         path = count.group("expr")[:-len(".count()")]
-        have = navigate(doc, parse_chain(path), ctx, create=False)
+        have = lookup(doc, parse_chain(path), ctx)
         want = int(count.group("num"))
         size = len(have) if isinstance(have, list) else (0 if have is None else 1)
         if size != want:
@@ -716,7 +771,7 @@ def enforce(doc: dict, expr: str, ctx: Ctx) -> list[str]:
             and segments[-2] == "toString()":
         literal = RE_CONTAINS.match(segments[-1]).group("lit")
         head = segments[:-2]
-        parent = navigate(doc, head[:-1], ctx, create=True) if len(head) > 1 else doc
+        parent = enforce_path(doc, head[:-1], ctx) if len(head) > 1 else doc
         if isinstance(parent, list):
             if len(parent) != 1:
                 raise Unsupported(expr)
@@ -786,7 +841,7 @@ def enforce(doc: dict, expr: str, ctx: Ctx) -> list[str]:
     # `<path>.exists()` and `<path>.where(...).exists()`
     if segments[-1] == "exists()":
         before = json.dumps(doc, sort_keys=True)
-        navigate(doc, segments[:-1], ctx, create=True)
+        enforce_path(doc, segments[:-1], ctx)
         after = json.dumps(doc, sort_keys=True)
         return [expr] if before != after else []
 

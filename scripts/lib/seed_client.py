@@ -205,9 +205,28 @@ def capability(ep: Endpoint) -> dict:
     return info
 
 
-def seed(ep: Endpoint, level: str, data_root: Path, do_validate: bool) -> dict:
+def body_of(level_dir: Path, row: dict) -> dict:
+    """The staged body behind one row of the seed record.
+
+    Read from the directory rather than from a path stored on the row: the record
+    is published as provenance, and an absolute path on it would carry the layout
+    of whichever machine ran the round into the artefact.
+    """
+    return json.loads((level_dir / row["file"]).read_text(encoding="utf-8"))
+
+
+def seed_corpus(ep: Endpoint, level: str, data_root: Path) -> dict:
+    """Write every staged resource of one level to the endpoint and read it back.
+
+    Returns the seed record: the capability facts the writes depended on, and one
+    row per resource carrying what each request answered. `$validate` is a
+    separate pass over that record - see :func:`validate_corpus` - because it
+    asserts something about the corpus rather than putting it in place, and a
+    round may legitimately be run without it.
+    """
     nodes = load(data_root, level)
     sequence = order(nodes)
+    level_dir = data_root / level
 
     caps = capability(ep)
     record = {
@@ -232,15 +251,12 @@ def seed(ep: Endpoint, level: str, data_root: Path, do_validate: bool) -> dict:
         }
     record["resources"] = [rows[n["key"]] for n in sequence]
 
-    def body_of(row: dict) -> dict:
-        return json.loads((data_root / level / row["file"]).read_text(encoding="utf-8"))
-
     # --- pass 1: write -------------------------------------------------------
     print(f"  writing {len(sequence)} resources", file=sys.stderr)
     for n in sequence:
         row = rows[n["key"]]
         status, body = ep.request("PUT", f"/{row['resourceType']}/{row['id']}",
-                                 body_of(row))
+                                 body_of(level_dir, row))
         row["write"] = {"status": status, "detail": summarise(body)}
         if status in (200, 201):
             record["counts"]["written"] += 1
@@ -256,7 +272,7 @@ def seed(ep: Endpoint, level: str, data_root: Path, do_validate: bool) -> dict:
             continue
         row = rows[n["key"]]
         status, body = ep.request("PUT", f"/{row['resourceType']}/{row['id']}",
-                                 body_of(row))
+                                 body_of(level_dir, row))
         row["rewrite"] = {"status": status, "detail": summarise(body),
                           "because": n["cycleBroken"]}
         if status in (200, 201):
@@ -290,17 +306,31 @@ def seed(ep: Endpoint, level: str, data_root: Path, do_validate: bool) -> dict:
             print(f"    FAIL GET {row['key']} -> HTTP {status} {row['read']['detail']}",
                   file=sys.stderr)
 
-    # --- pass 4: validate ----------------------------------------------------
-    if not do_validate:
-        record["counts"]["validationSkipped"] = len(sequence)
-        print("  $validate skipped (SEED_VALIDATE=0)", file=sys.stderr)
-        return record
+    return record
 
+
+def record_validation_skipped(record: dict) -> None:
+    """Note on the record that no resource was validated, and why.
+
+    Every resource is counted as skipped rather than the count being left at
+    zero: a reader of the record has to be able to tell a round that validated
+    nothing from one that validated everything cleanly.
+    """
+    record["counts"]["validationSkipped"] = len(record["resources"])
+    print("  $validate skipped (SEED_VALIDATE=0)", file=sys.stderr)
+
+
+def validate_corpus(ep: Endpoint, record: dict, level_dir: Path) -> None:
+    """`$validate` every seeded resource, recording the verdict on its own row.
+
+    Runs over the record :func:`seed_corpus` returned, in the order it seeded, so
+    that a resource's validation verdict sits beside the write that put it there.
+    """
+    sequence = record["resources"]
     print(f"  validating {len(sequence)} resources", file=sys.stderr)
-    for n in sequence:
-        row = rows[n["key"]]
+    for row in sequence:
         status, body = ep.request("POST", f"/{row['resourceType']}/$validate",
-                                  body_of(row))
+                                  body_of(level_dir, row))
         issues = outcome_issues(body)
         errors = [i for i in issues if i["severity"] in FATAL_SEVERITIES]
         # HTTP status alone does not decide this. A conformant server may answer 200
@@ -329,8 +359,6 @@ def seed(ep: Endpoint, level: str, data_root: Path, do_validate: bool) -> dict:
                 where = f" at {i['expression']}" if i["expression"] else ""
                 print(f"            {i['code']}{where}: {i['text']}", file=sys.stderr)
 
-    return record
-
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -354,7 +382,14 @@ def main() -> int:
         return 2
 
     ep = Endpoint(args.base_url, user, password, args.timeout)
-    record = seed(ep, args.level, args.data_root, not args.no_validate)
+    record = seed_corpus(ep, args.level, args.data_root)
+    # A record that already carries `fatal` was not seeded at all, so there is
+    # nothing to validate and nothing to call skipped.
+    if not record.get("fatal"):
+        if args.no_validate:
+            record_validation_skipped(record)
+        else:
+            validate_corpus(ep, record, args.data_root / args.level)
 
     if args.out:
         args.out.parent.mkdir(parents=True, exist_ok=True)

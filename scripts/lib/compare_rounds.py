@@ -234,24 +234,37 @@ def key_of(case: Case, fields: Sequence[str]) -> Key:
     return tuple(case.get(f, "") for f in fields)
 
 
+def strictly_joinable(base_cases: Sequence[Case], cand_cases: Sequence[Case]) -> bool:
+    """Whether STRICT_KEY identifies every case of both rounds, and the same ones.
+
+    Asked of the two corpora rather than inferred from the suite version, which
+    would in any case be the wrong test: two rounds of one suite version whose
+    feature corpus was edited in between are not strictly joinable either.
+
+    A repeated key is counted here rather than refused, which is what separates
+    this question from :func:`index_cases`: a corpus the loose key will handle
+    must be allowed to answer "no" instead of aborting the comparison.
+    """
+    base = [key_of(case, STRICT_KEY) for case in base_cases]
+    cand = [key_of(case, STRICT_KEY) for case in cand_cases]
+    return (len(set(base)) == len(base) and len(set(cand)) == len(cand)
+            and set(base) == set(cand))
+
+
 def index_cases(cases: Iterable[Case], fields: Sequence[str],
-                source: str, probe: bool = False) -> Dict[Key, Case]:
+                source: str) -> Dict[Key, Case]:
     """Index by key. A repeated key is fatal; it would make the join ambiguous.
 
     A repeated key means the chosen key does not identify a case uniquely within
     one round - two Examples rows binding identical values under the loose key,
     say. Both the silent merge and the first-wins pick would then compare one
     round's case against an arbitrary one of the other's, so the join is refused
-    instead. ``probe`` is for the key-selection pass, which asks only whether
-    the exact key matches and must not fail on a corpus that the loose key will
-    handle.
+    instead.
     """
     out: Dict[Key, Case] = {}
     for case in cases:
         key = key_of(case, fields)
         if key in out:
-            if probe:
-                continue
             raise SystemExit(
                 f"{source}: two cases share the join key {key!r}, so joining on "
                 f"{', '.join(fields)} would be ambiguous. This pair of rounds "
@@ -352,20 +365,12 @@ def compare(base_cases: List[Case], cand_cases: List[Case],
     base_cases = [c for c in base_cases if c["level"] in levels]
     cand_cases = [c for c in cand_cases if c["level"] in levels]
 
-    # --join auto keeps the exact key only when it is in fact exact. Measured
-    # rather than inferred from the suite version, which would in any case be
-    # the wrong test: two rounds of one suite version whose feature corpus was
-    # edited in between are not strictly joinable either.
+    # --join auto keeps the exact key only when it is in fact exact.
     fields: Sequence[str] = STRICT_KEY
     if join == "loose":
         fields = LOOSE_KEY
-    elif join == "auto":
-        strict_base = index_cases(base_cases, STRICT_KEY, "baseline", probe=True)
-        strict_cand = index_cases(cand_cases, STRICT_KEY, "candidate", probe=True)
-        if set(strict_base) != set(strict_cand) \
-                or len(strict_base) != len(base_cases) \
-                or len(strict_cand) != len(cand_cases):
-            fields = LOOSE_KEY
+    elif join == "auto" and not strictly_joinable(base_cases, cand_cases):
+        fields = LOOSE_KEY
 
     # Under the loose key an Examples row whose bindings were not recorded could
     # only be joined by its position, which is precisely what that key exists to
