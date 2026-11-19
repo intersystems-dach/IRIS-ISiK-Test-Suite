@@ -94,32 +94,49 @@ PROXY_ADMIN_PORT=9011
 # password may contain any character (it is generated, and a `/` or `&` would
 # corrupt a sed replacement), and an unsubstituted @@PLACEHOLDER@@ must be a hard
 # error rather than something that reaches the container.
+#
+# The two variants are two functions rather than one with a flag, because they
+# are two configurations and not one configuration with a switch: each states its
+# own output directory and its own pair of Tiger settings, and nothing derives one
+# from the other.
+#
+# The WorkflowUI is the mirror image of runTestsOnStart, and an unattended run
+# must NOT activate it. Tiger blocks for 120 s waiting for a browser to fetch
+# status from the UI and aborts the run outright if none does - `[ERROR] No
+# feedback from workflow Ui, aborting!`, `Tests run: 0`, and a test-report.zip
+# holding only pom.xml, all inside two minutes. In a detached container nothing
+# ever attaches. Upstream's README prescribes exactly this ("set
+# lib.activateWorkflowUi to false" for CI); ours had it hardcoded true for both
+# variants, and that cost a round.
+#
+#   $1  template   $2  file name within the variant's directory   $3  SUT base URL
+
+# Unattended: the suite runs on container start and exits. No browser attaches,
+# so the WorkflowUI stays off.
+render_unattended() {
+  RUN_TESTS_ON_START=true ACTIVATE_WORKFLOW_UI=false \
+    render "$1" "${OUT_TIGER}/$2" "$3"
+}
+
+# Manual: the container comes up, serves the WorkflowUI and waits for an operator
+# to start the run from it. This is the case the UI exists for.
+render_manual() {
+  RUN_TESTS_ON_START=false ACTIVATE_WORKFLOW_UI=true \
+    render "$1" "${OUT_TIGER_MANUAL}/$2" "$3"
+}
+
 render() {
-  local tmpl="$1" out="$2" run_tests="$3" base_url="$4"
+  local tmpl="$1" out="$2" base_url="$3"
 
   mkdir -p "$(dirname "$out")"
-
-  # The WorkflowUI is the mirror image of runTestsOnStart, and deliberately derived
-  # from it rather than passed separately: an unattended run must NOT activate it.
-  # Tiger blocks for 120 s waiting for a browser to fetch status from the UI and
-  # aborts the run outright if none does - `[ERROR] No feedback from workflow Ui,
-  # aborting!`, `Tests run: 0`, and a test-report.zip holding only pom.xml, all
-  # inside two minutes. In a detached container nothing ever attaches. Upstream's
-  # README prescribes exactly this ("set lib.activateWorkflowUi to false" for CI);
-  # ours had it hardcoded true for both variants, and that cost a round.
-  #
-  # MODE=manual is the case the UI exists for, and there runTestsOnStart is false,
-  # so one boolean serves both: activateWorkflowUi = NOT runTestsOnStart.
-  local activate_ui
-  [[ "$run_tests" == true ]] && activate_ui=false || activate_ui=true
 
   SUT_BASE_URL="$base_url" \
   SUT_USER="$SUT_USER" \
   SUT_PASSWORD="$SUT_PASSWORD" \
   WORKFLOW_UI_PORT="$WORKFLOW_UI_PORT" \
   PROXY_ADMIN_PORT="$PROXY_ADMIN_PORT" \
-  RUN_TESTS_ON_START="$run_tests" \
-  ACTIVATE_WORKFLOW_UI="$activate_ui" \
+  RUN_TESTS_ON_START="${RUN_TESTS_ON_START:?render() is called through render_unattended or render_manual, which set it}" \
+  ACTIVATE_WORKFLOW_UI="${ACTIVATE_WORKFLOW_UI:?render() is called through render_unattended or render_manual, which set it}" \
   python3 - "$tmpl" "$out" <<'PY'
 import os
 import sys
@@ -210,10 +227,8 @@ for stufe in $(suite_levels_lc); do
 
   base_url="$(sut_base_url "$stufe")"
 
-  # Unattended: the suite runs on container start and exits.
-  render "$tmpl" "${OUT_TIGER}/tiger-isik-${stufe}.yaml" true "$base_url"
-  # Manual: the container comes up, serves the WorkflowUI and waits.
-  render "$tmpl" "${OUT_TIGER_MANUAL}/tiger-isik-${stufe}.yaml" false "$base_url"
+  render_unattended "$tmpl" "tiger-isik-${stufe}.yaml" "$base_url"
+  render_manual "$tmpl" "tiger-isik-${stufe}.yaml" "$base_url"
 
   RENDERED_CONFIGS+=("${OUT_TIGER}/tiger-isik-${stufe}.yaml")
   nlevels=$((nlevels+1))
@@ -250,8 +265,8 @@ if connect_enabled; then
   esac
 
   connect_base_url="$(sut_base_url_tls stufe5)"
-  render "$connect_tmpl" "${OUT_TIGER}/tiger-isik-stufe5-connect.yaml" true "$connect_base_url"
-  render "$connect_tmpl" "${OUT_TIGER_MANUAL}/tiger-isik-stufe5-connect.yaml" false "$connect_base_url"
+  render_unattended "$connect_tmpl" "tiger-isik-stufe5-connect.yaml" "$connect_base_url"
+  render_manual "$connect_tmpl" "tiger-isik-stufe5-connect.yaml" "$connect_base_url"
   RENDERED_CONFIGS+=("${OUT_TIGER}/tiger-isik-stufe5-connect.yaml")
   ok "rendered the Connect module's own Tiger configuration (SUT is ${connect_base_url})"
 fi

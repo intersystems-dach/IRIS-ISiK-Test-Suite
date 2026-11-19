@@ -315,8 +315,9 @@ for p in paths:
 #
 # The values stand in for the real ones; only the *shape* of the result is being
 # checked here. The one place a value matters is asserted in section 4, where
-# activateWorkflowUi's polarity is checked against render()'s derivation - false
-# for an unattended run, since a true there aborts the run before any scenario.
+# activateWorkflowUi's polarity is checked against render_unattended()'s pairing -
+# false for an unattended run, since a true there aborts the run before any
+# scenario.
 SUBST = {
     "SUT_BASE_URL": "http://172.31.0.10:52773/isik5/fhir/r4",
     "SUT_USER": "isikapi",
@@ -605,14 +606,25 @@ for p in sorted(pathlib.Path("tiger").rglob("*.tmpl")):
             print(f"  FAIL  {p} hardcodes activateWorkflowUi ({ln.strip()}); it must be rendered per variant")
             fails += 1
 
-# The negation itself, in render(). Matched on the two branches rather than on an
-# exact line, so reformatting the conditional does not fail the check while a
-# reversed polarity still does.
-if not re.search(r'run_tests"?\s*==\s*true\s*\]\]\s*&&\s*activate_ui=false\s*\|\|\s*activate_ui=true',
-                 renderer):
-    print("  FAIL  scripts/30-render-config.sh does not derive activate_ui as the negation of "
-          "run_tests (unattended => activateWorkflowUi: false)")
-    fails += 1
+# The pairing itself, in the two variant functions. The two settings are mirror
+# images: an unattended run must not activate the UI, and a manual run exists to
+# serve it. Matched inside each function rather than on an exact line, so
+# reformatting does not fail the check while a reversed polarity still does.
+VARIANTS = (("render_unattended", "true", "false"),
+            ("render_manual", "false", "true"))
+for func, run_tests, activate_ui in VARIANTS:
+    block = re.search(r"^%s\(\) \{(.*?)^\}" % func, renderer, re.M | re.S)
+    if block is None:
+        print(f"  FAIL  scripts/30-render-config.sh defines no {func}(), which is "
+              f"where the activateWorkflowUi polarity of that variant is stated")
+        fails += 1
+        continue
+    if not re.search(r"RUN_TESTS_ON_START=%s\s+ACTIVATE_WORKFLOW_UI=%s(\s|\\|$)"
+                     % (run_tests, activate_ui), block.group(1)):
+        print(f"  FAIL  {func}() in scripts/30-render-config.sh does not pair "
+              f"RUN_TESTS_ON_START={run_tests} with ACTIVATE_WORKFLOW_UI={activate_ui} "
+              f"(unattended => activateWorkflowUi: false)")
+        fails += 1
 
 if fails:
     sys.exit(1)
@@ -1256,6 +1268,13 @@ internal |= {"R_IRIS_VERSION", "R_IRIS_DIGEST", "R_IRIS_ZV", "R_IRIS_SOURCE",
 # load, not an input to it - setting it in .env would claim an override that never
 # happened. RUN_OVERRIDABLE is the list load_env honours, likewise code.
 internal |= {"ENV_OVERRIDES", "RUN_OVERRIDABLE", "CONFIG_OVERRIDABLE"}
+# Set by render_unattended() / render_manual() in 30-render-config.sh and read by
+# the renderer they call: the two Tiger settings that distinguish the variants.
+# Deliberately not operator-facing - a value set by hand would ask for a
+# configuration that is neither variant, and the one combination that looks
+# plausible (an unattended run with the WorkflowUI on) aborts the run before any
+# scenario. Section 4 checks the pairing in each function.
+internal |= {"RUN_TESTS_ON_START", "ACTIVATE_WORKFLOW_UI"}
 # Recorded into .env.resolved by 10-resolve-versions.sh rather than authored.
 # *_IMAGE_SOURCE says whether the digest beside it is a registry digest or the
 # local ID of a side-loaded image; it is measured at pull time, never authored.
