@@ -104,9 +104,10 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "gap-analysis"))
 
-from build_index import (CATEGORIES, PREREQUISITE_RULES,               # noqa: E402
-                         classify_step, classify_substep,
-                         context_of_request, shape_of)
+from build_index import (CATEGORIES, classify_step,                   # noqa: E402
+                         classify_substep, shape_of)
+from common import (die, load_json, load_json_if_readable,             # noqa: E402
+                    md_escape)
 
 MAX_BODY = 700          # characters of a response body quoted in an entry
 MAX_SCENARIOS = 12      # affected scenarios listed before "... and N more"
@@ -123,28 +124,6 @@ MAX_SCENARIOS = 12      # affected scenarios listed before "... and N more"
 # its closing line charged the product with 21 findings where the report said 20.
 NOT_SUT_CATEGORIES = ("TEST_DATA_DEFECT", "ENVIRONMENT_PREREQUISITE",
                       "UPSTREAM_SUITE_CONFLICT")
-
-
-# =============================================================================
-# Loading
-# =============================================================================
-
-def die(msg: str) -> None:
-    print(f"gap_report.py: {msg}", file=sys.stderr)
-    raise SystemExit(2)
-
-
-def load_json(path: Path, what: str, required: bool = True):
-    if not path.is_file():
-        if required:
-            die(f"{what} not found at {path}")
-        return None
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except ValueError as exc:
-        if required:
-            die(f"{what} at {path} is not valid JSON: {exc}")
-        return None
 
 
 # =============================================================================
@@ -977,8 +956,8 @@ def load_seed(run_dir: Path) -> dict[str, dict]:
     out: dict[str, dict] = {}
     seed_dir = run_dir / "provenance" / "seed"
     for level in ("Stufe3", "Stufe5"):
-        rec = load_json(seed_dir / f"{level}.json", f"seed record for {level}",
-                        required=False)
+        rec = load_json_if_readable(seed_dir / f"{level}.json",
+                                    f"seed record for {level}")
         entry: dict = {"present": rec is not None, "ids": {}, "counts": {},
                        "assertionFailures": {}}
         if rec:
@@ -987,8 +966,8 @@ def load_seed(run_dir: Path) -> dict[str, dict]:
                 rtype, rid = res.get("resourceType"), res.get("id")
                 if rtype and rid:
                     entry["ids"][(rtype, rid)] = res
-        arec = load_json(seed_dir / f"assertions-{level}.json",
-                         f"assertion check for {level}", required=False)
+        arec = load_json_if_readable(seed_dir / f"assertions-{level}.json",
+                                     f"assertion check for {level}")
         if arec:
             for res in arec.get("resources") or []:
                 rtype, rid = res.get("resourceType"), res.get("id")
@@ -1067,7 +1046,7 @@ def load_corpus(run_dir: Path) -> dict[str, dict]:
             continue
         entry: dict = {}
         for path in sorted(level_dir.glob("*.json")):
-            body = load_json(path, f"staged resource {path.name}", required=False)
+            body = load_json_if_readable(path, f"staged resource {path.name}")
             if isinstance(body, dict) and body.get("resourceType") and body.get("id"):
                 entry[(body["resourceType"], body["id"])] = {
                     "file": path.name, "body": body}
@@ -1515,7 +1494,7 @@ def load_bodies(run_dir: Path, case: dict) -> dict:
     rel = ((case.get("report") or {}).get("outcomeJson") or "")
     if not rel:
         return {}
-    doc = load_json(run_dir / rel, "outcome JSON", required=False)
+    doc = load_json_if_readable(run_dir / rel, "outcome JSON")
     if not isinstance(doc, dict):
         return {}
 
@@ -1569,7 +1548,7 @@ def request_as_resolved(run_dir: Path, case: dict) -> str:
     rel = ((case.get("report") or {}).get("outcomeJson") or "")
     if not rel:
         return ""
-    doc = load_json(run_dir / rel, "outcome JSON", required=False)
+    doc = load_json_if_readable(run_dir / rel, "outcome JSON")
     if not isinstance(doc, dict):
         return ""
 
@@ -2181,10 +2160,6 @@ LOADER_OWNERS = {
     "absent-version": "upstream IG — declares a version never published",
     "excluded-from-sut": "this project — the excluded example corpus",
 }
-
-
-def md_escape(text: str) -> str:
-    return (text or "").replace("|", "\\|")
 
 
 def render(results: dict, index: dict, analysis: dict, run_dir: Path,
@@ -2810,8 +2785,8 @@ def main() -> int:
     if not index.get("features"):
         die(f"{args.index} holds no indexed features. Run `make packages` to "
             "rebuild it.")
-    reqs = load_json(run_dir / "provenance" / "requirements.json",
-                     "the requirements corpus", required=False)
+    reqs = load_json_if_readable(run_dir / "provenance" / "requirements.json",
+                                 "the requirements corpus")
     seed = load_seed(run_dir)
     corpus = load_corpus(run_dir)
 

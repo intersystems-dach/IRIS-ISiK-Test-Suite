@@ -114,6 +114,8 @@ sys.path.insert(0, str(REPO / "gap-analysis"))
 # that are not the product's are properties of the gap analysis, and a second copy
 # of either is how two documents of one round come to disagree - which has happened
 # in this project once already (see NOT_SUT_CATEGORIES in gap_report.py).
+from common import (die, load_json, load_json_if_readable,      # noqa: E402
+                    md_escape)
 from gap_report import (CAT_TITLE, NOT_SUT_CATEGORIES,          # noqa: E402
                         UNRESOLVED_TOKEN)
 
@@ -148,23 +150,6 @@ NOTE_LOG_EMPTY = ("the traffic log is present and records no HTTP message: "
                   "this case made no request of its own")
 NOTE_LOG_ABSENT = "the traffic log this case names is not in the bundle"
 NOTE_NO_LOG = "the official report attaches no traffic log to this case"
-
-
-def die(msg: str) -> None:
-    print(f"case_evidence.py: {msg}", file=sys.stderr)
-    raise SystemExit(2)
-
-
-def load_json(path: Path, what: str, required: bool = True):
-    try:
-        with path.open(encoding="utf-8") as fh:
-            return json.load(fh)
-    except FileNotFoundError:
-        if required:
-            die(f"{what} not found at {path}")
-        return None
-    except json.JSONDecodeError as exc:
-        die(f"{what} at {path} is not valid JSON: {exc}")
 
 
 # =============================================================================
@@ -211,7 +196,7 @@ class Bundle:
             return None
         direct = self.run_dir / cited
         if direct.is_file():
-            return load_json(direct, "outcome record", required=False)
+            return load_json_if_readable(direct, "outcome record")
         level_dir = cited.split("/", 1)[0]
         z = self._zip(level_dir, "test-report")
         if z is None:
@@ -765,10 +750,6 @@ ISIK_EXPLAINER = (
     "Gematik's *Bestätigungsverfahren*, for which the authoritative artefact is the "
     "test suite's own `test-report.zip` — not this document."
 )
-
-
-def md_escape(text: str) -> str:
-    return (text or "").replace("|", "\\|")
 
 
 def fence(text: str, lang: str = "") -> list[str]:
@@ -1559,8 +1540,8 @@ def main() -> int:
 
     results = load_json(run_dir / "analysis" / "results.json",
                         "analysis/results.json")
-    gap_doc = load_json(run_dir / "gap-analysis.json", "gap-analysis.json",
-                        required=False)
+    gap_doc = load_json_if_readable(run_dir / "gap-analysis.json",
+                                    "gap-analysis.json")
     if gap_doc is None:
         print("case_evidence.py: gap-analysis.json is absent; entries will carry "
               "no gap id and no expectation in FHIR terms. Run "
