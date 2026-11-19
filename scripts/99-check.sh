@@ -1280,6 +1280,12 @@ internal |= {"ENV_OVERRIDES", "RUN_OVERRIDABLE", "CONFIG_OVERRIDABLE"}
 # plausible (an unattended run with the WorkflowUI on) aborts the run before any
 # scenario. Section 4 checks the pairing in each function.
 internal |= {"RUN_TESTS_ON_START", "ACTIVATE_WORKFLOW_UI"}
+# The four fields of one tag resolution, named by latest_iris_tag() /
+# latest_webgateway_tag() in 10-resolve-versions.sh and read by the resolver they
+# call. Composed from the operator-facing IRIS_IMAGE, WEBGATEWAY_IMAGE,
+# IRIS_VERSION_TRACK and the pinned versions; a value set by hand would ask for a
+# resolution against an image the round does not run.
+internal |= {"TAG_IMAGE", "TAG_TRACK", "TAG_PINNED", "TAG_LABEL"}
 # Recorded into .env.resolved by 10-resolve-versions.sh rather than authored.
 # *_IMAGE_SOURCE says whether the digest beside it is a registry digest or the
 # local ID of a side-loaded image; it is measured at pull time, never authored.

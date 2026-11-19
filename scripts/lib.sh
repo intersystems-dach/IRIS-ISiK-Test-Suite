@@ -667,6 +667,13 @@ _pw_chars() {
 # meaningful secret in this environment - it is documented in the reports on
 # purpose - but because the live environment must keep production-like file modes
 # to be a faithful stand-in for a production deployment.
+#
+# Three positional arguments, where the convention elsewhere in this rig is to
+# name the fields of a record on the call (copy_prov in 70-collect-report.sh,
+# resolve_latest_tag in 10-resolve-versions.sh). The reason is the first one: an
+# assignment on the call is exported, so the configured password would be in the
+# environment of every process this function starts and readable from
+# /proc/<pid>/environ. A positional argument stays inside the shell.
 resolve_password() {
   local explicit="${1:-}" file="$2" what="$3" value='' src=''
   src="${ENV_LOADED_FROM:-${ENV_FILE}}"

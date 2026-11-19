@@ -110,6 +110,14 @@ PROXY_ADMIN_PORT=9011
 # variants, and that cost a round.
 #
 #   $1  template   $2  file name within the variant's directory   $3  SUT base URL
+#
+# Three positional arguments, and they stay positional: all three renderers here
+# (render, render_gateway, render_realm) take the same shape - a template, where
+# it goes, and the one value that cannot be read from the environment - and
+# `make check` finds each renderer and its substitution table by that boundary.
+# The calls here and to render_gateway are inside a loop - over the levels, and
+# over the template directory - so the three are that loop's variables, not
+# settings of the run.
 
 # Unattended: the suite runs on container start and exits. No browser attaches,
 # so the WorkflowUI stays off.

@@ -228,9 +228,16 @@ fi
 # The Dockerfiles live outside the build context on purpose: the context is the
 # kit, and the kit must not be polluted with files of ours.
 
+# build_component <component> <tag> [component-specific --build-arg ...]
+#
+# The component names its own Dockerfile: there is one per component, named after
+# it, and passing the path as well was stating the same fact twice. Everything
+# after the tag is handed to docker build unchanged - the --build-args only that
+# component needs.
 build_component() {
-  local what="$1" dockerfile="$2" tag="$3"
-  shift 3
+  local what="$1" tag="$2"
+  shift 2
+  local dockerfile="${KIT_DIR_TEMPLATES}/Dockerfile.${what}"
 
   step "Building ${tag}"
   log "context ${KIT_CONTEXT}"
@@ -258,7 +265,7 @@ if [[ "$COMPONENT" == iris || "$COMPONENT" == both ]]; then
   # The tag is lower-cased because a docker repository name may not contain
   # capitals, while .product does (IRISHealth).
   IRIS_TAG="${IMAGE_PREFIX}/$(printf '%s' "$KIT_PRODUCT" | tr '[:upper:]' '[:lower:]'):${IMAGE_TAG}"
-  build_component iris "${KIT_DIR_TEMPLATES}/Dockerfile.iris" "$IRIS_TAG" \
+  build_component iris "$IRIS_TAG" \
     --build-arg "SUPERVISOR_REF=${SUPERVISOR_REF}" \
     --build-arg "IRIS_VERSION=${KIT_VERSION}" \
     --build-arg "IRIS_PRODUCT=${KIT_PRODUCT}"
@@ -266,7 +273,7 @@ fi
 
 if [[ "$COMPONENT" == webgateway || "$COMPONENT" == both ]]; then
   GATEWAY_TAG="${IMAGE_PREFIX}/webgateway:${IMAGE_TAG}"
-  build_component webgateway "${KIT_DIR_TEMPLATES}/Dockerfile.webgateway" "$GATEWAY_TAG" \
+  build_component webgateway "$GATEWAY_TAG" \
     --build-arg "GATEWAY_VERSION=${KIT_VERSION}"
 fi
 

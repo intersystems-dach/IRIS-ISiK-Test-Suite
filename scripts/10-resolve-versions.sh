@@ -45,29 +45,39 @@ require_var IRIS_IMAGE TESTSUITE_IMAGE TESTSUITE_REPO WEBGATEWAY_IMAGE IRIS_IP
 # Version resolution
 # -----------------------------------------------------------------------------
 
+testsuite_release_api="https://api.github.com/repos/${TESTSUITE_REPO}/releases/latest"
+
 # Newest published release tag of gematik/isik-testsuite. The GitHub "releases/
 # latest" endpoint already excludes drafts and pre-releases, which is exactly the
-# "latest stable" semantics we want.
+# "latest stable" semantics we want. Upstream tags releases as a bare version
+# ("2.7.0"); a leading "v" is tolerated.
 #
-# Called two ways, which is why the failure mode is a parameter. With $1 empty it is
-# resolving the version to use and unreachable means the round cannot proceed as
-# configured. With $1 = "soft" it is only checking whether the pin is stale, and
-# unreachable is of no consequence: it prints nothing and returns 1.
-resolve_latest_testsuite() {
-  local soft="${1:-}"
-  local api="https://api.github.com/repos/${TESTSUITE_REPO}/releases/latest" body tag
-  if ! body="$(curl -fsSL -H 'Accept: application/vnd.github+json' "$api" 2>/dev/null)"; then
-    if [[ "$soft" == soft ]]; then return 1; fi
-    die "cannot reach ${api} - TESTSUITE_VERSION_TRACK=latest needs internet access; leave it empty to use the pinned TESTSUITE_VERSION"
-  fi
+# This is the measurement, and it is silent about failing, because the caller
+# that only wants to know whether the pin is stale must not cost the round a word
+# over an unreachable GitHub. Why it failed is the exit status: 1 - the endpoint
+# could not be reached; 2 - it answered, but without a usable tag_name.
+latest_testsuite_release() {
+  local body tag
+  body="$(curl -fsSL -H 'Accept: application/vnd.github+json' \
+    "$testsuite_release_api" 2>/dev/null)" || return 1
   tag="$(printf '%s' "$body" \
     | python3 -c 'import json,sys; print(json.load(sys.stdin).get("tag_name",""))' 2>/dev/null)" || true
-  if [[ -z "$tag" ]]; then
-    if [[ "$soft" == soft ]]; then return 1; fi
-    die "could not read tag_name from ${api}"
-  fi
-  # Upstream tags releases as a bare version ("2.7.0"); tolerate a leading "v".
+  [[ -n "$tag" ]] || return 2
   printf '%s' "${tag#v}"
+}
+
+# The same measurement, for the caller that cannot do without it: a
+# TESTSUITE_VERSION_TRACK=latest round has no version to run if the newest
+# release cannot be established, so each way of not getting one is fatal here and
+# says which way it was.
+resolve_latest_testsuite() {
+  local tag status=0
+  tag="$(latest_testsuite_release)" || status=$?
+  case "$status" in
+    0) printf '%s' "$tag" ;;
+    2) die "could not read tag_name from ${testsuite_release_api}" ;;
+    *) die "cannot reach ${testsuite_release_api} - TESTSUITE_VERSION_TRACK=latest needs internet access; leave it empty to use the pinned TESTSUITE_VERSION" ;;
+  esac
 }
 
 # Newest tag on the configured track for an InterSystems registry image. The
@@ -75,18 +85,25 @@ resolve_latest_testsuite() {
 # obtained with the same credentials `docker login` stored, so the credential is
 # read from the Docker config rather than asked for again.
 #
-# Parameterised over the image because two images are resolved this way: IRIS for
-# Health and the Web Gateway, both from containers.intersystems.com and both
-# version-tracked. Every fallback path returns the caller's pinned version, so a
-# registry that cannot be enumerated degrades to MODE=pinned behaviour for that one
-# image rather than failing the round.
+# Two images are resolved this way - IRIS for Health and the Web Gateway, both
+# from containers.intersystems.com and both version-tracked - so the image being
+# resolved is a field rather than part of the function. Every fallback path
+# returns the pinned version, so a registry that cannot be enumerated degrades to
+# MODE=pinned behaviour for that one image rather than failing the round.
 #
-#   $1  image reference without tag (e.g. containers.intersystems.com/intersystems/irishealth)
-#   $2  track prefix (e.g. 2026)
-#   $3  pinned version to fall back to
-#   $4  human label for messages (e.g. "IRIS")
+# The four fields are named at the call, by latest_iris_tag() and
+# latest_webgateway_tag() below, which are the only two callers:
+#
+#   TAG_IMAGE   image reference without tag
+#               (e.g. containers.intersystems.com/intersystems/irishealth)
+#   TAG_TRACK   track prefix (e.g. 2026). May be empty, which is an error here.
+#   TAG_PINNED  pinned version to fall back to. May be empty, which is an error
+#               only on a path that has to fall back.
+#   TAG_LABEL   human label for messages (e.g. "IRIS")
 resolve_latest_tag() {
-  local image="$1" track="$2" fallback="$3" label="$4"
+  local tag_usage="name the fields: TAG_IMAGE, TAG_TRACK, TAG_PINNED, TAG_LABEL"
+  local image="${TAG_IMAGE:?$tag_usage}" track="${TAG_TRACK?$tag_usage}"
+  local fallback="${TAG_PINNED?$tag_usage}" label="${TAG_LABEL:?$tag_usage}"
   local registry="${image%%/*}" repo="${image#*/}"
   local cfg="${DOCKER_CONFIG:-$HOME/.docker}/config.json"
   local auth tags newest
@@ -163,20 +180,30 @@ PY
   printf '%s' "$newest"
 }
 
+# The two images resolved on the IRIS track, each naming its own fields. The
+# Web Gateway is resolved on the IRIS track, not on one of its own, because it is
+# version-matched to IRIS deliberately - see .env.example section 2b. Its
+# published tags follow the same major.minor scheme (2022.1 ... 2026.2), so the
+# same track expression selects the matching build.
+latest_iris_tag() {
+  TAG_IMAGE="$IRIS_IMAGE" TAG_TRACK="${IRIS_VERSION_TRACK:-}" \
+    TAG_PINNED="${IRIS_VERSION:-}" TAG_LABEL="IRIS" \
+    resolve_latest_tag
+}
+latest_webgateway_tag() {
+  TAG_IMAGE="$WEBGATEWAY_IMAGE" TAG_TRACK="${IRIS_VERSION_TRACK:-}" \
+    TAG_PINNED="${WEBGATEWAY_VERSION:-}" TAG_LABEL="Web Gateway" \
+    resolve_latest_tag
+}
+
 # --- Axis 1: the unit under test ---------------------------------------------
 # Floats on MODE=latest. The build under test is a measurement either way: the
 # digest and the IRIS build string (%SYSTEM.Version) are both recorded below, so a
 # floated round is every bit as re-identifiable as a pinned one - it just cannot be
 # re-created by tag alone months later, which is what R_IRIS_SOURCE says.
 if [[ "$MODE" == latest ]]; then
-  R_IRIS_VERSION="$(resolve_latest_tag "$IRIS_IMAGE" "${IRIS_VERSION_TRACK:-}" \
-                      "${IRIS_VERSION:-}" "IRIS")"
-  # The gateway is resolved on the IRIS track, not on one of its own, because it
-  # is version-matched to IRIS deliberately - see .env.example section 2b. Its
-  # published tags follow the same major.minor scheme (2022.1 ... 2026.2), so the
-  # same track expression selects the matching build.
-  R_WEBGATEWAY_VERSION="$(resolve_latest_tag "$WEBGATEWAY_IMAGE" "${IRIS_VERSION_TRACK:-}" \
-                            "${WEBGATEWAY_VERSION:-}" "Web Gateway")"
+  R_IRIS_VERSION="$(latest_iris_tag)"
+  R_WEBGATEWAY_VERSION="$(latest_webgateway_tag)"
   R_IRIS_VERSION_SOURCE=resolved-latest
   log "SUT resolved from the registry: IRIS=${R_IRIS_VERSION}, webgateway=${R_WEBGATEWAY_VERSION} (track ${IRIS_VERSION_TRACK:-unset})"
 else
@@ -212,7 +239,7 @@ case "${TESTSUITE_VERSION_TRACK:-}" in
     log "test suite pinned in .env: isik-testsuite=${R_TESTSUITE_VERSION} (the test definition is deliberately not floated)"
     # A stale pin should be visible, not silent - but discovering it must never cost
     # the round, so an unreachable GitHub is passed over without comment.
-    if R_TESTSUITE_LATEST="$(resolve_latest_testsuite soft)"; then
+    if R_TESTSUITE_LATEST="$(latest_testsuite_release)"; then
       if [[ "$R_TESTSUITE_LATEST" != "$R_TESTSUITE_VERSION" ]]; then
         warn "a newer test suite release exists upstream: ${R_TESTSUITE_LATEST} (pinned here: ${R_TESTSUITE_VERSION}). This is a notice, not a problem: bumping it requires re-verifying the test-data corpus against the new release's feature files. INSTALL.md has the checklist."
       fi
