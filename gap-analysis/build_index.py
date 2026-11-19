@@ -58,6 +58,7 @@ descriptor set narrows the index; it never stops `make packages`.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import re
 import sys
@@ -823,9 +824,14 @@ RE_ATTR_HEADER = re.compile(r"^\$\.header\b")
 RE_ATTR_STATUS = re.compile(r"^\$\.responseCode$")
 
 
-def category_for(kind: str | None, base: str | None, context: str,
-                 args: dict) -> str | None:
-    """The default category of one classified step."""
+def category_for(cls: dict, context: str) -> str | None:
+    """The default category of one classified step in one request context.
+
+    `cls` is what classify_step() returned: its kind, the category that kind
+    carries by default, and the arguments captured from the step text. All three
+    are read here, so the classification travels as one thing.
+    """
+    kind, base, args = cls["kind"], cls["category"], cls["args"]
     if kind is None:
         return "UNCLASSIFIED"
     # An attribute assertion is decided by what it targets, before context: a
@@ -928,7 +934,7 @@ def index_features(root: Path) -> tuple[dict, dict, list[str]]:
                         # rather than reporting it as an independent finding.
                         if context_origin and context_origin["scenario"] != sc.name:
                             entry["inheritedFromScenario"] = context_origin
-                cat = category_for(cls["kind"], cls["category"], context, cls["args"])
+                cat = category_for(cls, context)
                 if cat:
                     entry["category"] = cat
                 # The data keys a step references are what links a failure to the
@@ -1056,6 +1062,60 @@ def expectation_of(node: dict) -> str | None:
     return None
 
 
+@dataclasses.dataclass(frozen=True)
+class DeclaringStatement:
+    """One ISiK CapabilityStatement, and the index its entries are noted into.
+
+    Every entry records the same five facts about where it came from, and the
+    key grammar and the extra fields differ per bucket rather than per call -
+    so there is one method per kind of declaration instead of one function
+    taking the bucket, the key and the extra fields as arguments.
+    """
+
+    index: dict
+    name: str
+    canonical: str
+    package: str
+    isik_level: str | None
+
+    def provenance(self, node: dict) -> dict:
+        """What every entry records about the statement that declared it."""
+        return {"capabilityStatement": self.name, "canonical": self.canonical,
+                "expectation": expectation_of(node), "package": self.package,
+                "isikLevel": self.isik_level}
+
+    def note_interaction(self, rtype: str | None, node: dict) -> None:
+        """That the statement declares one interaction on a resource type."""
+        self.index["interactions"].setdefault(
+            f"{rtype}|{node.get('code')}", []).append(self.provenance(node))
+
+    def note_search_param(self, rtype: str | None, node: dict) -> None:
+        """That the statement declares one search parameter on a resource type."""
+        self.index["searchParams"].setdefault(
+            f"{rtype}|{node.get('name')}|{node.get('type')}", []).append(
+                {**self.provenance(node), "definition": node.get("definition")})
+
+    def note_resource_operation(self, rtype: str | None, node: dict) -> None:
+        """That the statement declares one operation on a resource type."""
+        self.note_operation(f"{rtype}|{node.get('name')}", node)
+
+    def note_system_operation(self, node: dict) -> None:
+        """That the statement declares one operation of the server itself."""
+        self.note_operation(f"*|{node.get('name')}", node)
+
+    def note_operation(self, key: str, node: dict) -> None:
+        """One operation entry, under the key its declaration gives it.
+
+        `*` stands for "no resource type", so a system-level operation and a
+        type-level one of the same name stay apart - and the key is therefore
+        also what says which scope the entry is of.
+        """
+        scope = "system" if key.startswith("*|") else "resource"
+        self.index["operations"].setdefault(key, []).append(
+            {**self.provenance(node), "definition": node.get("definition"),
+             "scope": scope})
+
+
 def index_packages(packages_dir: Path) -> dict:
     """The conformance-requirement index, from the packages the validator uses."""
     out = {
@@ -1135,30 +1195,20 @@ def index_packages(packages_dir: Path) -> dict:
                 "file": path.name,
             }
 
-            def record(bucket: str, key: str, node: dict, extra: dict | None = None):
-                rec = {"capabilityStatement": cs_name, "canonical": cs_url,
-                       "expectation": expectation_of(node), "package": label,
-                       "isikLevel": level}
-                if extra:
-                    rec.update(extra)
-                out[bucket].setdefault(key, []).append(rec)
-
+            declaring = DeclaringStatement(index=out, name=cs_name,
+                                           canonical=cs_url, package=label,
+                                           isik_level=level)
             for rest in doc.get("rest") or []:
                 for op in rest.get("operation") or []:
-                    record("operations", f"*|{op.get('name')}", op,
-                           {"definition": op.get("definition"), "scope": "system"})
+                    declaring.note_system_operation(op)
                 for res in rest.get("resource") or []:
                     rtype = res.get("type")
                     for node in res.get("interaction") or []:
-                        record("interactions", f"{rtype}|{node.get('code')}", node)
+                        declaring.note_interaction(rtype, node)
                     for node in res.get("searchParam") or []:
-                        record("searchParams",
-                               f"{rtype}|{node.get('name')}|{node.get('type')}", node,
-                               {"definition": node.get("definition")})
+                        declaring.note_search_param(rtype, node)
                     for node in res.get("operation") or []:
-                        record("operations", f"{rtype}|{node.get('name')}", node,
-                               {"definition": node.get("definition"),
-                                "scope": "resource"})
+                        declaring.note_resource_operation(rtype, node)
 
         # The element-level constraints of this package's own profiles, from the
         # **snapshot**, not the differential. The differential looks like the
