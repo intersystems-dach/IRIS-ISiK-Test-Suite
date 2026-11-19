@@ -147,9 +147,7 @@ ce_rc=0
 CE_MD="${CE_RUN_DIR}/CASE-EVIDENCE.md"
 CE_JSON="${CE_RUN_DIR}/case-evidence.json"
 
-# --out-md / --out-json in "$@" redirect the output, in which case the defaults
-# below are legitimately absent and there is nothing here to check or to hash.
-if [[ "$*" == *--out-md* || "$*" == *--out-json* ]]; then
+if generator_output_redirected "$@"; then
   log "output was redirected by an explicit --out-* argument"
   step "Case evidence annex generated"
   exit "$ce_rc"
@@ -174,29 +172,11 @@ assert_no_published_credentials "$CE_MD" "$CE_JSON" \
 # -----------------------------------------------------------------------------
 # 5. Keep the bundle manifest honest
 # -----------------------------------------------------------------------------
-# Same reasoning as in 80-gap-report.sh, clause 4: analysis/MANIFEST.txt is
-# written by 70-collect-report.sh, which runs before this script, so an inspector
-# verifying the bundle would find two unlisted files - which looks exactly like
-# tampering. Previous entries for these two paths are dropped first, so
-# re-generating updates the hashes rather than accumulating stale ones, and the
-# result is re-sorted into the byte order 70-collect-report.sh produced so two
-# rounds' manifests stay diffable.
-CE_MANIFEST="${CE_RUN_DIR}/analysis/MANIFEST.txt"
-if [[ -f "$CE_MANIFEST" ]]; then
-  CE_TMP="$(mktemp "${CE_MANIFEST}.XXXXXX")"
-  grep -v -E '[[:space:]]\./(CASE-EVIDENCE\.md|case-evidence\.json)$' \
-    "$CE_MANIFEST" >"$CE_TMP" || true
-  ( cd "$CE_RUN_DIR" \
-    && for f in CASE-EVIDENCE.md case-evidence.json; do
-         [[ -f "$f" ]] && printf '%s  ./%s\n' "$(sha256_of "$f")" "$f"
-       done ) >>"$CE_TMP"
-  LC_ALL=C sort -k2 "$CE_TMP" >"$CE_MANIFEST"
-  rm -f "$CE_TMP"
-  log "recorded both files in analysis/MANIFEST.txt ($(wc -l <"$CE_MANIFEST" | tr -d ' ') entries)"
-else
-  warn "analysis/MANIFEST.txt does not exist, so CASE-EVIDENCE.md is outside the
+# Same reasoning as in 80-gap-report.sh, clause 4, and the same helper:
+# amend_bundle_manifest() in lib.sh.
+amend_bundle_manifest "$CE_RUN_DIR" CASE-EVIDENCE.md case-evidence.json \
+  || warn "analysis/MANIFEST.txt does not exist, so CASE-EVIDENCE.md is outside the
   bundle's integrity check. Run 'make report RUN_ID=$(run_id)' to rebuild it."
-fi
 
 ok "wrote ${CE_MD#$REPO_ROOT/} ($(du -h "$CE_MD" | cut -f1))"
 log "and ${CE_JSON#$REPO_ROOT/} (machine-readable, for diffing two rounds)"

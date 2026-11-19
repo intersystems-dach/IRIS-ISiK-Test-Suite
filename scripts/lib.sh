@@ -63,6 +63,14 @@ ok()   { printf '%s[%s] OK   %s%s\n' "$_C_GRN" "$(_ts)" "$*" "$_C_RESET" >&2; }
 warn() { printf '%s[%s] WARN %s%s\n' "$_C_YEL" "$(_ts)" "$*" "$_C_RESET" >&2; }
 step() { printf '\n%s=== %s ===%s\n' "$_C_BOLD" "$*" "$_C_RESET" >&2; }
 
+# One labelled fact of a report, in the aligned two-column form `make status` and
+# `make credentials` both print. On stdout, not stderr like the four above: these
+# lines ARE the output of those two targets, and a tester who redirects them to a
+# file expects the facts in the file and the progress log on the terminal. The
+# column width is shared rather than per script so that two reports of the same
+# environment can be read, and diffed, side by side.
+kv() { printf '  %-26s %s\n' "$1" "$2"; }
+
 # die prints to stderr and exits 1. Every failure path in this repository goes
 # through it so that a failed run always states what was expected and what to do
 # about it - the deployment host is remote and may not be ours to debug.
@@ -477,7 +485,24 @@ run_id() {
 
 run_report_dir() { printf '%s/%s' "$REPORTS_DIR" "$(run_id)"; }
 
-# --- Misc -------------------------------------------------------------------
+# --- The SUT's FHIR endpoints -----------------------------------------------
+# The configured base path of one level's endpoint, under every spelling of the
+# level the rest of the rig uses. The three URL builders below differ in scheme,
+# host and port and agree on this; written out once so that a level accepted by
+# one of them cannot be rejected by another, which would make a round's URLs
+# disagree between the rendered configuration, the seeder and the status report.
+#
+# The refusal is named after the caller rather than after this function, so that
+# each of the three states the message it always stated: the operator needs to
+# know which URL could not be built, not where the lookup lives.
+fhir_base_path() {
+  case "$1" in
+    stufe3|Stufe3|3) printf '%s' "${FHIR_BASE_STUFE3:?}" ;;
+    stufe5|Stufe5|5) printf '%s' "${FHIR_BASE_STUFE5:?}" ;;
+    *) die "${FUNCNAME[1]}: unknown Stufe '$1'" ;;
+  esac
+}
+
 # The SUT base URL as seen from inside the isolated subnet. The test suite and
 # the seeder both address IRIS by its static IP rather than by container name:
 # the same literal string then appears in the rendered Tiger configuration, in
@@ -495,12 +520,12 @@ run_report_dir() { printf '%s/%s' "$REPORTS_DIR" "$(run_id)"; }
 # the separate official webgateway image, so the rig runs one; see the `webgateway`
 # service in docker-compose.yml and docs/en/01-architecture.md.
 sut_base_url() {
-  local stufe="$1" path
-  case "$stufe" in
-    stufe3|Stufe3|3) path="${FHIR_BASE_STUFE3:?}" ;;
-    stufe5|Stufe5|5) path="${FHIR_BASE_STUFE5:?}" ;;
-    *) die "sut_base_url: unknown Stufe '$stufe'" ;;
-  esac
+  # `|| exit 1` and not a bare assignment: fhir_base_path refuses an unknown
+  # level by calling die, which exits the subshell the substitution runs in, and
+  # without this the caller would carry on and print a URL with no path in the
+  # one context where `set -e` is suspended - a condition.
+  local path
+  path="$(fhir_base_path "$1")" || exit 1
   printf 'http://%s:%s%s' "${WEBGATEWAY_IP:?WEBGATEWAY_IP must be set}" \
                           "${WEBGATEWAY_PORT_INTERNAL:-80}" "$path"
 }
@@ -511,12 +536,8 @@ sut_base_url() {
 # port as far as every operator, document and firewall rule is concerned - but it
 # now maps to the gateway's :80 rather than to IRIS.
 sut_base_url_host() {
-  local stufe="$1" path
-  case "$stufe" in
-    stufe3|Stufe3|3) path="${FHIR_BASE_STUFE3:?}" ;;
-    stufe5|Stufe5|5) path="${FHIR_BASE_STUFE5:?}" ;;
-    *) die "sut_base_url_host: unknown Stufe '$stufe'" ;;
-  esac
+  local path
+  path="$(fhir_base_path "$1")" || exit 1
   printf 'http://127.0.0.1:%s%s' "${IRIS_PORT_WEB:-52773}" "$path"
 }
 
@@ -532,12 +553,8 @@ sut_base_url_host() {
 # Only meaningful for a round with CONNECT_ENABLE=true; the listener does not
 # exist otherwise.
 sut_base_url_tls() {
-  local stufe="$1" path
-  case "$stufe" in
-    stufe3|Stufe3|3) path="${FHIR_BASE_STUFE3:?}" ;;
-    stufe5|Stufe5|5) path="${FHIR_BASE_STUFE5:?}" ;;
-    *) die "sut_base_url_tls: unknown Stufe '$stufe'" ;;
-  esac
+  local path
+  path="$(fhir_base_path "$1")" || exit 1
   # The port is omitted when it is the default for the scheme, so that the URL,
   # the certificate's subject and the token audience read the same in the
   # evidence. A non-default port is spelled out, because a token minted for the
@@ -549,6 +566,41 @@ sut_base_url_tls() {
   else
     printf 'https://%s:%s%s' "$host" "$port" "$path"
   fi
+}
+
+# An authenticated GET against the SUT, in the two forms the rig asks for: the
+# status code alone, and the body. Both are used by `make up`'s startup gate and
+# by `make status`, which had their own copy of the credential and of the FHIR
+# content negotiation - four copies of a request that has to stay identical,
+# because the whole point of the status report is that it probes the same way the
+# gate did and therefore explains what the gate saw.
+#
+# Unauthenticated is not an option: the endpoints require a credential, and an
+# anonymous probe reports 401 everywhere and says nothing about whether the
+# server works.
+#
+# One timeout, at the longer of the two values the copies used. A probe that
+# gives up early on a slow endpoint reports it as unreachable, which is a worse
+# answer than a slow one.
+FHIR_PROBE_TIMEOUT=30
+
+# The status of the GET, or 000 when the request did not complete at all -
+# connection refused, no route, timeout. Never fails, so a caller reads one code
+# and decides, rather than having to tell a curl failure from an HTTP refusal.
+fhir_http_code() {
+  local code
+  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time "$FHIR_PROBE_TIMEOUT" \
+      -u "${SUT_USER}:${SUT_PASSWORD}" \
+      -H 'Accept: application/fhir+json' "$1" 2>/dev/null)" || code=000
+  printf '%s' "$code"
+}
+
+# The body of the same GET. Empty on failure, which every caller here treats as
+# "not the document I expected" - they parse it before believing it.
+fhir_response_body() {
+  curl -s --max-time "$FHIR_PROBE_TIMEOUT" \
+      -u "${SUT_USER}:${SUT_PASSWORD}" \
+      -H 'Accept: application/fhir+json' "$1" 2>/dev/null
 }
 
 # --- Credentials ------------------------------------------------------------
@@ -646,4 +698,55 @@ sha256_of() {
   else
     shasum -a 256 "$1" | cut -d' ' -f1
   fi
+}
+
+# --- Documents generated after the bundle was sealed -------------------------
+# True when a --out-md or --out-json was passed through to one of the document
+# generators, in which case that generator wrote somewhere else, the default
+# paths inside the round are legitimately absent, and there is nothing for the
+# calling script to check, hash or record.
+generator_output_redirected() {
+  [[ "$*" == *--out-md* || "$*" == *--out-json* ]]
+}
+
+# Record documents generated AFTER the bundle manifest was written.
+#
+# analysis/MANIFEST.txt is written by 70-collect-report.sh, and both the gap
+# analysis and the case-evidence annex are generated after it, so an inspector
+# verifying the bundle would find unlisted files - which looks exactly like
+# tampering. Their hashes are appended here in the same `sha256sum`-compatible
+# format and with the same './' prefix, so that `sha256sum -c
+# analysis/MANIFEST.txt` still passes on the finished bundle.
+#
+# Appending is safe against re-runs: the previous entries for these paths are
+# dropped first, so re-generating a document updates its hashes rather than
+# accumulating stale ones. The result is re-sorted into the byte order
+# 70-collect-report.sh produced (LC_ALL=C sort over the find output), which is
+# what makes two rounds' manifests diffable.
+#
+# Returns non-zero, and changes nothing, on a round that has no manifest at all -
+# a bundle `make report` never completed. The caller names the document it could
+# not record, because that is what the operator has to act on.
+amend_bundle_manifest() {
+  local run_dir="$1"; shift
+  local manifest="${run_dir}/analysis/MANIFEST.txt"
+  [[ -f "$manifest" ]] || return 1
+
+  # The names go into a regular expression, so their dots are escaped: an
+  # unescaped `gap-analysis.json` would also drop a `gap-analysis-json` entry.
+  local f alt=''
+  for f in "$@"; do
+    alt+="${alt:+|}${f//./\\.}"
+  done
+
+  local tmp
+  tmp="$(mktemp "${manifest}.XXXXXX")"
+  grep -v -E "[[:space:]]\./(${alt})\$" "$manifest" >"$tmp" || true
+  ( cd "$run_dir" \
+    && for f in "$@"; do
+         [[ -f "$f" ]] && printf '%s  ./%s\n' "$(sha256_of "$f")" "$f"
+       done ) >>"$tmp"
+  LC_ALL=C sort -k2 "$tmp" >"$manifest"
+  rm -f "$tmp"
+  log "recorded $# file(s) in analysis/MANIFEST.txt ($(wc -l <"$manifest" | tr -d ' ') entries)"
 }

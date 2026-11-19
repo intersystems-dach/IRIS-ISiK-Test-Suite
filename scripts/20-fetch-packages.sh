@@ -195,6 +195,20 @@ python3 "${SCRIPTS_DIR}/lib/plan_packages.py" \
 # -----------------------------------------------------------------------------
 rm -rf "$TGZ_DIR"; mkdir -p "$TGZ_DIR"
 
+# Every package the plan requires, one `name#version` per line, in the order the
+# plan lists them. Both loops in collect_from_simplifier() read this - the
+# download pass and the pass that fills whatever the download could not get - and
+# they have to see the same list in the same order, because the second pass
+# decides what is missing by the filenames the first one produced.
+planned_package_ids() {
+  python3 -c '
+import json, sys
+plan = json.load(open(sys.argv[1]))
+for pkg in plan["allPackages"]:
+    print(pkg["id"])
+' "${VENDOR_DIR}/package-plan.json"
+}
+
 collect_from_refv() {
   log "unpacking bundled package payloads"
   local zip n=0
@@ -229,12 +243,7 @@ collect_from_simplifier() {
       rm -f "$out"
       failed=$((failed+1))
     fi
-  done < <(python3 -c '
-import json, sys
-plan = json.load(open(sys.argv[1]))
-for pkg in plan["allPackages"]:
-    print(pkg["id"])
-' "${VENDOR_DIR}/package-plan.json")
+  done < <(planned_package_ids)
 
   if (( failed )); then
     # Falling back rather than failing: the bundled copies are the authoritative
@@ -281,12 +290,7 @@ for pkg in plan["allPackages"]:
       # from independent corroboration.
       SUBSTITUTED+=("${name}-${version}.tgz")
       log "filled from the image: ${name}#${version}"
-    done < <(python3 -c '
-import json, sys
-plan = json.load(open(sys.argv[1]))
-for pkg in plan["allPackages"]:
-    print(pkg["id"])
-' "${VENDOR_DIR}/package-plan.json")
+    done < <(planned_package_ids)
     ok "downloaded $(( total - failed ))/${total} from ${registry}, filled ${filled} from the image"
   else
     ok "downloaded ${total} packages from ${registry}"

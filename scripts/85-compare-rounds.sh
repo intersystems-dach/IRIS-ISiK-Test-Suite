@@ -102,24 +102,20 @@ if [[ "${COMPARE_MD:-0}" == "1" ]]; then
   log "and ${CMP_JSON%.json}.md (the same, for a reader rather than a diff)"
 fi
 
-# Written after analysis/MANIFEST.txt, like GAP-ANALYSIS.md, so the hash is
+# Written after analysis/MANIFEST.txt, like GAP-ANALYSIS.md, so the hashes are
 # appended here for the same reason: an inspector who verifies the bundle must
-# not find an unlisted file. Re-running replaces the previous entry rather than
-# accumulating one.
-CMP_MANIFEST="${CMP_OUT_DIR}/analysis/MANIFEST.txt"
-if [[ -f "$CMP_MANIFEST" ]]; then
-  CMP_REL="$(basename "$CMP_JSON")"
-  CMP_TMP="$(mktemp "${CMP_MANIFEST}.XXXXXX")"
-  grep -v -F "  ./${CMP_REL}" "$CMP_MANIFEST" >"$CMP_TMP" || true
-  ( cd "$CMP_OUT_DIR" && printf '%s  ./%s\n' "$(sha256_of "$CMP_REL")" "$CMP_REL" ) \
-    >>"$CMP_TMP"
-  LC_ALL=C sort -k2 "$CMP_TMP" >"$CMP_MANIFEST"
-  rm -f "$CMP_TMP"
-  log "recorded it in analysis/MANIFEST.txt"
-else
-  warn "analysis/MANIFEST.txt does not exist, so the comparison is outside the
+# not find an unlisted file. See amend_bundle_manifest() in lib.sh.
+#
+# Both forms are named, not only the JSON. This script's own copy of the
+# amendment recorded the JSON alone, so a `make compare COMPARE_MD=1` left the
+# Markdown rendering in the bundle unlisted - the exact condition the amendment
+# exists to prevent. Naming both is also correct when COMPARE_MD is off and a
+# rendering from an earlier comparison is still on disk: it is re-hashed as it
+# stands rather than dropped from the manifest.
+amend_bundle_manifest "$CMP_OUT_DIR" \
+    "$(basename "$CMP_JSON")" "$(basename "${CMP_JSON%.json}.md")" \
+  || warn "analysis/MANIFEST.txt does not exist, so the comparison is outside the
   bundle's integrity check. Run 'make report RUN_ID=$(basename "$CMP_OUT_DIR")'."
-fi
 
 step "Comparison generated"
 exit "$cmp_rc"

@@ -122,8 +122,13 @@ render() {
   ACTIVATE_WORKFLOW_UI="$activate_ui" \
   python3 - "$tmpl" "$out" <<'PY'
 import os
-import re
 import sys
+
+# What counts as a placeholder is one definition for all three renderers; what
+# may be substituted is per family and stays in this function. See the module's
+# own header.
+sys.path.insert(0, os.path.join(os.environ["SCRIPTS_DIR"], "lib"))
+from template_placeholders import leftover_placeholders, unknown_placeholders
 
 tmpl_path, out_path = sys.argv[1], sys.argv[2]
 
@@ -142,16 +147,14 @@ SUBST = {
 with open(tmpl_path, encoding="utf-8") as fh:
     text = fh.read()
 
-unknown = sorted(set(re.findall(r"@@([A-Z0-9_]+)@@", text)) - set(SUBST))
+unknown = unknown_placeholders(text, SUBST)
 if unknown:
     sys.exit(f"30-render-config.sh: {tmpl_path}: unknown placeholder(s): {', '.join(unknown)}")
 
 for key, value in SUBST.items():
     text = text.replace(f"@@{key}@@", value)
 
-# Belt and braces: nothing of the form @@...@@ may survive into a file the test
-# suite reads. A leftover would be interpreted as a literal URL or credential.
-left = re.findall(r"@@[^@]*@@", text)
+left = leftover_placeholders(text)
 if left:
     sys.exit(f"30-render-config.sh: {out_path}: unresolved placeholder(s): {', '.join(left)}")
 
@@ -282,8 +285,10 @@ render_gateway() {
   SUT_PORT_HTTPS_INTERNAL="${SUT_PORT_HTTPS_INTERNAL:-443}" \
   python3 - "$tmpl" "$out" <<'PY'
 import os
-import re
 import sys
+
+sys.path.insert(0, os.path.join(os.environ["SCRIPTS_DIR"], "lib"))
+from template_placeholders import leftover_placeholders, unknown_placeholders
 
 tmpl_path, out_path = sys.argv[1], sys.argv[2]
 
@@ -304,14 +309,14 @@ SUBST = {
 with open(tmpl_path, encoding="utf-8") as fh:
     text = fh.read()
 
-unknown = sorted(set(re.findall(r"@@([A-Z0-9_]+)@@", text)) - set(SUBST))
+unknown = unknown_placeholders(text, SUBST)
 if unknown:
     sys.exit(f"30-render-config.sh: {tmpl_path}: unknown placeholder(s): {', '.join(unknown)}")
 
 for key, value in SUBST.items():
     text = text.replace(f"@@{key}@@", value)
 
-left = re.findall(r"@@[^@]*@@", text)
+left = leftover_placeholders(text)
 if left:
     sys.exit(f"30-render-config.sh: {out_path}: unresolved placeholder(s): {', '.join(left)}")
 
@@ -571,10 +576,12 @@ render_realm() {
   python3 - "$tmpl" "$out" "$contract" <<'PY'
 import json
 import os
-import re
 import sys
 
 import yaml
+
+sys.path.insert(0, os.path.join(os.environ["SCRIPTS_DIR"], "lib"))
+from template_placeholders import leftover_placeholders, unknown_placeholders
 
 tmpl_path, out_path, contract_path = sys.argv[1], sys.argv[2], sys.argv[3]
 
@@ -597,7 +604,7 @@ SUBST = {
 with open(tmpl_path, encoding="utf-8") as fh:
     text = fh.read()
 
-unknown = sorted(set(re.findall(r"@@([A-Z0-9_]+)@@", text)) - set(SUBST))
+unknown = unknown_placeholders(text, SUBST)
 if unknown:
     sys.exit(f"30-render-config.sh: {tmpl_path}: unknown placeholder(s): {', '.join(unknown)}")
 
@@ -612,7 +619,7 @@ for key, value in SUBST.items():
     else:
         text = text.replace(f"@@{key}@@", json.dumps(value)[1:-1])
 
-left = re.findall(r"@@[^@]*@@", text)
+left = leftover_placeholders(text)
 if left:
     sys.exit(f"30-render-config.sh: {out_path}: unresolved placeholder(s): {', '.join(left)}")
 

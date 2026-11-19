@@ -121,9 +121,7 @@ gap_rc=0
 GAP_MD="${GAP_RUN_DIR}/GAP-ANALYSIS.md"
 GAP_JSON="${GAP_RUN_DIR}/gap-analysis.json"
 
-# --out-md / --out-json in "$@" redirect the output, in which case the defaults
-# below are legitimately absent and there is nothing here to check or to hash.
-if [[ "$*" == *--out-md* || "$*" == *--out-json* ]]; then
+if generator_output_redirected "$@"; then
   log "output was redirected by an explicit --out-* argument"
   step "Gap analysis generated"
   exit "$gap_rc"
@@ -147,38 +145,14 @@ assert_no_published_credentials "$GAP_MD" "$GAP_JSON" \
 # -----------------------------------------------------------------------------
 # 4. Keep the bundle manifest honest
 # -----------------------------------------------------------------------------
-# analysis/MANIFEST.txt is written by 70-collect-report.sh, which runs BEFORE this
-# script, so the two files just generated are absent from it. An inspector who
-# verifies the bundle would find two unlisted files, which looks exactly like
-# tampering. Their hashes are therefore appended here, in the same
-# `sha256sum`-compatible format and with the same './' prefix, so that
-# `sha256sum -c analysis/MANIFEST.txt` still passes on the finished bundle.
-#
-# Appending is safe against re-runs: the previous entries for these two paths are
-# dropped first, so re-generating the report updates its hashes rather than
-# accumulating stale ones.
-GAP_MANIFEST="${GAP_RUN_DIR}/analysis/MANIFEST.txt"
-if [[ -f "$GAP_MANIFEST" ]]; then
-  GAP_TMP="$(mktemp "${GAP_MANIFEST}.XXXXXX")"
-  grep -v -E '[[:space:]]\./(GAP-ANALYSIS\.md|gap-analysis\.json)$' \
-    "$GAP_MANIFEST" >"$GAP_TMP" || true
-  ( cd "$GAP_RUN_DIR" \
-    && for f in GAP-ANALYSIS.md gap-analysis.json; do
-         [[ -f "$f" ]] && printf '%s  ./%s\n' "$(sha256_of "$f")" "$f"
-       done ) >>"$GAP_TMP"
-  # Re-sorted so the manifest stays in the byte order 70-collect-report.sh
-  # produced (LC_ALL=C sort over the find output), which is what makes two
-  # rounds' manifests diffable.
-  LC_ALL=C sort -k2 "$GAP_TMP" >"$GAP_MANIFEST"
-  rm -f "$GAP_TMP"
-  log "recorded both files in analysis/MANIFEST.txt ($(wc -l <"$GAP_MANIFEST" | tr -d ' ') entries)"
-else
-  # Only reachable when this script is run by hand on a bundle that never had
-  # `make report` complete. Not fatal: the gap analysis is still correct, it is
-  # just not covered by the bundle's integrity check.
-  warn "analysis/MANIFEST.txt does not exist, so GAP-ANALYSIS.md is outside the
+# Both documents are generated after 70-collect-report.sh sealed the bundle, so
+# they have to be added to its manifest; amend_bundle_manifest() in lib.sh says
+# why and how. The failure branch is only reachable when this script is run by
+# hand on a bundle that never had `make report` complete. Not fatal: the gap
+# analysis is still correct, it is just not covered by the integrity check.
+amend_bundle_manifest "$GAP_RUN_DIR" GAP-ANALYSIS.md gap-analysis.json \
+  || warn "analysis/MANIFEST.txt does not exist, so GAP-ANALYSIS.md is outside the
   bundle's integrity check. Run 'make report RUN_ID=$(run_id)' to rebuild it."
-fi
 
 ok "wrote ${GAP_MD#$REPO_ROOT/}"
 log "and ${GAP_JSON#$REPO_ROOT/} (machine-readable, for diffing two rounds)"

@@ -37,9 +37,9 @@ IRIS_CONTAINER="${PROJECT}-iris"
 GATEWAY_CONTAINER="${PROJECT}-webgateway"
 STATE_DIR="${RUN_DIR}/iris-state"
 
-# Two-column key/value output. Plain text on purpose: this gets pasted into
-# tickets and into the documentation.
-kv() { printf '  %-26s %s\n' "$1" "$2"; }
+# Two-column key/value output is kv() in lib.sh, shared with `make credentials`
+# so the two reports align. Plain text on purpose: this gets pasted into tickets
+# and into the documentation.
 
 # -----------------------------------------------------------------------------
 step "Configuration"
@@ -188,8 +188,9 @@ fi
 step "FHIR endpoints"
 # Probed from the host over the published port - the same path the seeder uses, and
 # one hop further out than the suite's, which goes straight to the gateway on the
-# subnet. Authenticated, because the endpoints require it; an unauthenticated probe
-# would report 401 everywhere and say nothing about whether the server works.
+# subnet. The request itself is fhir_http_code / fhir_response_body in lib.sh,
+# shared with `make up`'s startup gate so that this report explains what the gate
+# saw rather than answering a slightly different question.
 probe_endpoint() {
   local stufe="$1" url code body
 
@@ -200,9 +201,7 @@ probe_endpoint() {
     return
   fi
 
-  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 \
-      -u "${SUT_USER}:${SUT_PASSWORD}" \
-      -H 'Accept: application/fhir+json' "$url" 2>/dev/null)" || code=000
+  code="$(fhir_http_code "$url")"
 
   if [[ "$code" != 200 ]]; then
     case "$code" in
@@ -226,8 +225,7 @@ probe_endpoint() {
   # resource types the endpoint claims. The resource count is a cheap sanity check
   # on the package set - an endpoint with only the core R4 packages exposes
   # noticeably fewer types than one carrying the ISiK profiles.
-  body="$(curl -s --max-time 20 -u "${SUT_USER}:${SUT_PASSWORD}" \
-      -H 'Accept: application/fhir+json' "$url" 2>/dev/null \
+  body="$(fhir_response_body "$url" \
     | python3 -c '
 import json, sys
 # Values are pulled into locals before formatting: a backslash inside an f-string

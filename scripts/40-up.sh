@@ -405,10 +405,7 @@ verify_endpoint() {
   local stufe="$1" url code
   url="$(sut_base_url_host "$stufe")/metadata"
 
-  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 \
-      -u "${SUT_USER}:${SUT_PASSWORD}" \
-      -H 'Accept: application/fhir+json' \
-      "$url" 2>/dev/null)" || code=000
+  code="$(fhir_http_code "$url")"
 
   if [[ "$code" != 200 ]]; then
     warn "${stufe}: ${url} -> HTTP ${code} (expected 200)"
@@ -420,9 +417,7 @@ verify_endpoint() {
   # report the FHIR version while the response is in hand - a mismatch with R4
   # would invalidate the entire round.
   local fhir_version
-  fhir_version="$(curl -s --max-time 30 \
-      -u "${SUT_USER}:${SUT_PASSWORD}" \
-      -H 'Accept: application/fhir+json' "$url" 2>/dev/null \
+  fhir_version="$(fhir_response_body "$url" \
     | python3 -c '
 import json, sys
 try:

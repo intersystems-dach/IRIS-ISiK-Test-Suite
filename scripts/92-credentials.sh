@@ -54,8 +54,6 @@ fi
 
 step "Access credentials (run/CREDENTIALS.md is absent - showing the live values)"
 
-kv() { printf '  %-26s %s\n' "$1" "$2"; }
-
 kv "source" "${ENV_LOADED_FROM#$REPO_ROOT/} + secrets/"
 printf '\n'
 kv "FHIR API user" "$sut_user"
