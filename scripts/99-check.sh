@@ -1211,8 +1211,13 @@ internal = {
     # Measured, never configured: an operator-supplied value would defeat the
     # very assertion it feeds.
     "STARTED_AT",
-    # 70-collect-report.sh
+    # 70-collect-report.sh. PROV_FROM / PROV_TO / PROV_WHAT / PROV_BY are the
+    # four fields of one archived artefact, named at the call rather than passed
+    # positionally (see copy_prov there); they exist for the duration of that one
+    # call. An operator-supplied value would describe an artefact the round never
+    # produced, so they are not .env.example settings.
     "RUN_REPORT_DIR", "ANALYSIS_DIR", "PROV_DIR",
+    "PROV_FROM", "PROV_TO", "PROV_WHAT", "PROV_BY",
     # 80-gap-report.sh
     "GAP_DIR", "GAP_INDEX", "GAP_RUN_DIR", "GAP_RESULTS", "GAP_FEATURES",
     "GAP_MD", "GAP_JSON",

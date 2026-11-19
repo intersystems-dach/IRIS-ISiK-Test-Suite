@@ -229,11 +229,32 @@ step "2/5 Copying the provenance into the bundle"
 
 : >"${PROV_DIR}/.index.tmp"
 
-# copy_prov <source> <destination-relative-to-provenance/> <description> <writer>
+# An artefact's entry in the bundle is a four-field record - where it comes from,
+# where it goes, what it is, which script wrote it - so the two functions below
+# are called with their fields named rather than with four positional arguments:
+#
+#   PROV_FROM=<source> PROV_TO=<destination under provenance/> \
+#     PROV_WHAT=<description> PROV_BY=<writer> copy_prov
+#
+# Each assignment lives for the one call and is gone afterwards, so nothing
+# carries from one artefact to the next. The names are deliberately not
+# operator-facing; 99-check.sh §8 lists them as internal.
+#
+# note_prov writes one line of the provenance index. copy_prov archives an
+# artefact and records it with note_prov; the one artefact that is written in
+# place rather than copied (rig-version.txt, below) calls note_prov on its own,
+# so the index's line format has a single home.
+prov_usage="name the fields: PROV_FROM, PROV_TO, PROV_WHAT, PROV_BY"
+note_prov() {
+  printf '%s\t%s\t%s\n' "provenance/${PROV_TO:?$prov_usage}" \
+    "${PROV_WHAT:?$prov_usage}" "${PROV_BY:?$prov_usage}" \
+    >>"${PROV_DIR}/.index.tmp"
+}
 # Absent sources are reported, not fatal: a bundle from a partial round is still
 # worth having, and results.md says which provenance is missing.
 copy_prov() {
-  local src="$1" rel="$2" what="$3" by="$4"
+  local src="${PROV_FROM:?$prov_usage}" rel="${PROV_TO:?$prov_usage}"
+  local what="${PROV_WHAT:?$prov_usage}"
   local dest="${PROV_DIR}/${rel}"
   if [[ ! -e "$src" ]]; then
     warn "provenance missing: ${src#$REPO_ROOT/} (${what})"
@@ -255,23 +276,29 @@ copy_prov() {
   ${PROV_DIR#$REPO_ROOT/}, because replacing it is a recursive delete."
   rm -rf "$dest"
   cp -a "$src" "$dest"
-  printf '%s\t%s\t%s\n' "provenance/${rel}" "$what" "$by" >>"${PROV_DIR}/.index.tmp"
+  note_prov
 }
 
-copy_prov "${RUN_DIR}/seed/SEED.txt" "seed/SEED.txt" \
-  "human-readable summary of what was seeded into every endpoint" \
-  "scripts/50-seed.sh"
+PROV_FROM="${RUN_DIR}/seed/SEED.txt" PROV_TO="seed/SEED.txt" \
+  PROV_WHAT="human-readable summary of what was seeded into every endpoint" \
+  PROV_BY="scripts/50-seed.sh" \
+  copy_prov
 for level in $(suite_levels); do
-  copy_prov "${RUN_DIR}/seed/${level}.json" "seed/${level}.json" \
-    "per-resource seed record: PUT status, read-back, \$validate issues" \
-    "scripts/lib/seed_client.py"
-  copy_prov "${RUN_DIR}/seed/assertions-${level}.json" "seed/assertions-${level}.json" \
-    "the rendered corpus checked against the assertions the feature files make" \
-    "scripts/lib/assertion_check.py"
+  PROV_FROM="${RUN_DIR}/seed/${level}.json" PROV_TO="seed/${level}.json" \
+    PROV_WHAT="per-resource seed record: PUT status, read-back, \$validate issues" \
+    PROV_BY="scripts/lib/seed_client.py" \
+    copy_prov
+  PROV_FROM="${RUN_DIR}/seed/assertions-${level}.json" \
+    PROV_TO="seed/assertions-${level}.json" \
+    PROV_WHAT="the rendered corpus checked against the assertions the feature files make" \
+    PROV_BY="scripts/lib/assertion_check.py" \
+    copy_prov
 done
-copy_prov "${RUN_DIR}/seed/search-references.json" "seed/search-references.json" \
-  "the search scenarios' reference requirements, checked against the corpus" \
-  "scripts/lib/search_reference_check.py"
+PROV_FROM="${RUN_DIR}/seed/search-references.json" \
+  PROV_TO="seed/search-references.json" \
+  PROV_WHAT="the search scenarios' reference requirements, checked against the corpus" \
+  PROV_BY="scripts/lib/search_reference_check.py" \
+  copy_prov
 
 # The rendered corpus itself, one directory per level (~550 KB in total). Without
 # it the bundle can say that a resource was seeded but not what was in it, and
@@ -280,37 +307,45 @@ copy_prov "${RUN_DIR}/seed/search-references.json" "seed/search-references.json"
 # from the bundle at all. gap_report.py reads these files to decide exactly that;
 # see corpus_evidence() there.
 for level in $(suite_levels); do
-  copy_prov "${REPO_ROOT}/build/fhir/${level}" "corpus/${level}" \
-    "the rendered FHIR instances this round seeded, as built from testdata/fhir/" \
-    "scripts/lib/build_testdata.py"
+  PROV_FROM="${REPO_ROOT}/build/fhir/${level}" PROV_TO="corpus/${level}" \
+    PROV_WHAT="the rendered FHIR instances this round seeded, as built from testdata/fhir/" \
+    PROV_BY="scripts/lib/build_testdata.py" \
+    copy_prov
 done
 
-copy_prov "${RUN_DIR}/iris-state/iris-provenance.json" "iris-provenance.json" \
-  "the SUT's own record: \$ZV, namespaces, endpoints, loaded package ids" \
-  "iris/src/ISiK/Setup.cls"
-copy_prov "${RUN_DIR}/iris-state/bootstrap.log" "iris-bootstrap.log" \
-  "the SUT's install log, verbatim" \
-  "iris/bootstrap.sh"
+PROV_FROM="${RUN_DIR}/iris-state/iris-provenance.json" \
+  PROV_TO="iris-provenance.json" \
+  PROV_WHAT="the SUT's own record: \$ZV, namespaces, endpoints, loaded package ids" \
+  PROV_BY="iris/src/ISiK/Setup.cls" \
+  copy_prov
+PROV_FROM="${RUN_DIR}/iris-state/bootstrap.log" PROV_TO="iris-bootstrap.log" \
+  PROV_WHAT="the SUT's install log, verbatim" \
+  PROV_BY="iris/bootstrap.sh" \
+  copy_prov
 
 # Checksums of the rendered Tiger configuration, plus the substituted values.
 # RENDERED.txt lists each file with its sha256, which is what an inspector needs to
 # confirm that the config in debug-report.zip is the one this project generated.
 # The configuration itself is not copied twice - debug-report.zip already contains
 # it verbatim at config/tiger.yaml.
-copy_prov "${RUN_DIR}/tiger/RENDERED.txt" "tiger-RENDERED.txt" \
-  "checksums of the rendered Tiger configuration and test-data files, and the values substituted into them" \
-  "scripts/30-render-config.sh"
+PROV_FROM="${RUN_DIR}/tiger/RENDERED.txt" PROV_TO="tiger-RENDERED.txt" \
+  PROV_WHAT="checksums of the rendered Tiger configuration and test-data files, and the values substituted into them" \
+  PROV_BY="scripts/30-render-config.sh" \
+  copy_prov
 
 # The credential sheet the deployment generated, copied in as evidence: it is the
 # one place that states, in one screen, which credentials this round used and how
 # to re-issue a request with them. run/ is deleted by `make clean`, so a bundle
 # that only pointed at it would decay.
-copy_prov "${RUN_DIR}/CREDENTIALS.md" "CREDENTIALS.md" \
-  "the credentials this round used, as generated at deployment" \
-  "scripts/30-render-config.sh"
-copy_prov "${RUN_DIR}/tiger/TESTDATA-PARITY.txt" "tiger-TESTDATA-PARITY.txt" \
-  "line-by-line parity of the rendered test-data contract against the suite's own" \
-  "scripts/30-render-config.sh"
+PROV_FROM="${RUN_DIR}/CREDENTIALS.md" PROV_TO="CREDENTIALS.md" \
+  PROV_WHAT="the credentials this round used, as generated at deployment" \
+  PROV_BY="scripts/30-render-config.sh" \
+  copy_prov
+PROV_FROM="${RUN_DIR}/tiger/TESTDATA-PARITY.txt" \
+  PROV_TO="tiger-TESTDATA-PARITY.txt" \
+  PROV_WHAT="line-by-line parity of the rendered test-data contract against the suite's own" \
+  PROV_BY="scripts/30-render-config.sh" \
+  copy_prov
 # The Connect round's access tokens, by SHA-256. This is what the bundle carries
 # INSTEAD of the token values - see the CREDENTIAL HANDLING note above - and it
 # is what ties a redacted exchange back to a scope: each hash here appears in
@@ -318,9 +353,10 @@ copy_prov "${RUN_DIR}/tiger/TESTDATA-PARITY.txt" "tiger-TESTDATA-PARITY.txt" \
 # a round that ran no Connect module, where its absence is the normal state and
 # not something to report, hence the guard rather than copy_prov's own warning.
 if [[ -f "${RUN_DIR}/tiger/TOKENS.txt" ]]; then
-  copy_prov "${RUN_DIR}/tiger/TOKENS.txt" "tiger-TOKENS.txt" \
-    "the Connect access tokens by SHA-256, with the scope, issuer, audience and lifetime of each" \
-    "scripts/lib/connect_tokens.py"
+  PROV_FROM="${RUN_DIR}/tiger/TOKENS.txt" PROV_TO="tiger-TOKENS.txt" \
+    PROV_WHAT="the Connect access tokens by SHA-256, with the scope, issuer, audience and lifetime of each" \
+    PROV_BY="scripts/lib/connect_tokens.py" \
+    copy_prov
 fi
 # The certificate inventory of a Connect round. A round in this configuration
 # addresses the SUT over TLS under a certificate issued by its own local CA, and
@@ -331,26 +367,32 @@ fi
 # Guarded for the same reason as TOKENS.txt above: absent in a round without the
 # authorization server, where the absence is the normal state.
 if [[ -f "${RUN_DIR}/tls/TLS.txt" ]]; then
-  copy_prov "${RUN_DIR}/tls/TLS.txt" "tiger-TLS.txt" \
-    "the CA and server certificates this round issued, with the fingerprint and subject of each" \
-    "scripts/22-make-tls.sh"
+  PROV_FROM="${RUN_DIR}/tls/TLS.txt" PROV_TO="tiger-TLS.txt" \
+    PROV_WHAT="the CA and server certificates this round issued, with the fingerprint and subject of each" \
+    PROV_BY="scripts/22-make-tls.sh" \
+    copy_prov
 fi
 
-copy_prov "${PACKAGES_DIR}/MANIFEST.txt" "packages/MANIFEST.txt" \
-  "every FHIR package loaded into the SUT, with its tarball sha256" \
-  "scripts/20-fetch-packages.sh"
-copy_prov "${PACKAGES_DIR}/PARITY.txt" "packages/PARITY.txt" \
-  "the downloaded packages compared against the versions the suite pins" \
-  "scripts/20-fetch-packages.sh"
+PROV_FROM="${PACKAGES_DIR}/MANIFEST.txt" PROV_TO="packages/MANIFEST.txt" \
+  PROV_WHAT="every FHIR package loaded into the SUT, with its tarball sha256" \
+  PROV_BY="scripts/20-fetch-packages.sh" \
+  copy_prov
+PROV_FROM="${PACKAGES_DIR}/PARITY.txt" PROV_TO="packages/PARITY.txt" \
+  PROV_WHAT="the downloaded packages compared against the versions the suite pins" \
+  PROV_BY="scripts/20-fetch-packages.sh" \
+  copy_prov
 # The table above says EQUIV or DIFFER; this says on what grounds. Without it a
 # DIFFER row is a claim the bundle cannot substantiate, and an EQUIV row is a
 # judgement the reader has to take on trust.
-copy_prov "${PACKAGES_DIR}/PARITY-DETAIL.txt" "packages/PARITY-DETAIL.txt" \
-  "field-level account of every package whose bytes differ from the published one" \
-  "scripts/lib/package_parity.py"
-copy_prov "${VENDOR_DIR}/package-plan.json" "package-plan.json" \
-  "which package version is assigned to which endpoint, and why" \
-  "scripts/lib/plan_packages.py"
+PROV_FROM="${PACKAGES_DIR}/PARITY-DETAIL.txt" \
+  PROV_TO="packages/PARITY-DETAIL.txt" \
+  PROV_WHAT="field-level account of every package whose bytes differ from the published one" \
+  PROV_BY="scripts/lib/package_parity.py" \
+  copy_prov
+PROV_FROM="${VENDOR_DIR}/package-plan.json" PROV_TO="package-plan.json" \
+  PROV_WHAT="which package version is assigned to which endpoint, and why" \
+  PROV_BY="scripts/lib/plan_packages.py" \
+  copy_prov
 
 # --- Did this round measure the plan it is about to publish? -----------------
 # The two files just archived are the round's claim and the SUT's own record of
@@ -479,16 +521,18 @@ fi
     printf 'rig_commit=unrecorded\nrig_describe=unrecorded\nrig_worktree=unrecorded\n'
   fi
 } >"${PROV_DIR}/rig-version.txt"
-printf '%s\t%s\t%s\n' "provenance/rig-version.txt" \
-  "the version and revision of this test rig that produced the round" \
-  "scripts/70-collect-report.sh" >>"${PROV_DIR}/.index.tmp"
+PROV_TO="rig-version.txt" \
+  PROV_WHAT="the version and revision of this test rig that produced the round" \
+  PROV_BY="scripts/70-collect-report.sh" \
+  note_prov
 log "recorded the rig version: $(sed -n 's/^rig_describe=//p' "${PROV_DIR}/rig-version.txt")"
 
 # The requirement extraction the analysis joins against. 1.5 MB, and it is what
 # makes the scope figures in results.md checkable without the test suite image.
-copy_prov "${VENDOR_DIR}/requirements.json" "requirements.json" \
-  "every scenario, precondition block and assertion extracted from the suite's own feature files" \
-  "scripts/25-extract-requirements.sh"
+PROV_FROM="${VENDOR_DIR}/requirements.json" PROV_TO="requirements.json" \
+  PROV_WHAT="every scenario, precondition block and assertion extracted from the suite's own feature files" \
+  PROV_BY="scripts/25-extract-requirements.sh" \
+  copy_prov
 
 python3 - "${PROV_DIR}/.index.tmp" "$PROV_INDEX" <<'PY'
 import json
