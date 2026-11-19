@@ -355,6 +355,22 @@ def parse_literal(match: re.Match):
 # navigation
 # --------------------------------------------------------------------------- #
 
+# Every element FHIR R4 gives a Coding, plus the two every element may carry. A
+# Quantity also has `code` and `system`, and has no `display` at all, so matching on
+# code+system alone would write an element that does not exist into every asserted
+# measurement - rejected by the server as an unknown property, and rejected for the
+# right reason. Membership is checked against the whole node rather than by element
+# path because the walker has no schema; a node whose keys are all a Coding's keys
+# is a Coding.
+CODING_KEYS = frozenset({"system", "version", "code", "display", "userSelected",
+                         "id", "extension"})
+
+
+def is_coding(node: dict) -> bool:
+    """Whether a dict carrying `code` and `system` is a Coding and not a Quantity."""
+    return set(node) <= CODING_KEYS
+
+
 def resolve_name(node: dict, name: str) -> str | None:
     """`effective` -> `effectivePeriod`, where the body carries exactly one such key."""
     if name in node:
@@ -364,132 +380,11 @@ def resolve_name(node: dict, name: str) -> str | None:
     return candidates[0] if len(candidates) == 1 else None
 
 
-def satisfies(node, conds: list[str], ctx: Ctx) -> bool:
-    """Whether `node` already meets every term of `conds`. Pure; never mutates."""
-    if isinstance(node, list):
-        return any(satisfies(item, conds, ctx) for item in node)
-    if not isinstance(node, dict):
-        return False
-    for term in conds:
-        if term.endswith(".exists()") or term.endswith(".empty().not()"):
-            inner = term[:-len(".exists()")] if term.endswith(".exists()") \
-                else term[:-len(".empty().not()")]
-            segments = parse_chain(inner)
-            if not segments:
-                return False
-            try:
-                found = lookup(node, segments, ctx)
-            except Unsupported:
-                return False
-            if found in (None, [], {}, ""):
-                return False
-            continue
-        m = RE_TERM_EQ.match(term)
-        if not m:
-            raise Unsupported(term)
-        path, want = m.group("path"), parse_literal(m)
-        segments = parse_chain(path)
-        try:
-            have = lookup(node, segments, ctx)
-        except Unsupported:
-            return False
-        if isinstance(have, list):
-            if not any(equalish(h, want) for h in have):
-                return False
-        elif not equalish(have, want):
-            return False
-    return True
-
-
 def equalish(have, want) -> bool:
     """Equality as the features use it: `=` and `~` over scalars."""
     if isinstance(have, (int, float)) and isinstance(want, (int, float)):
         return float(have) == float(want)
     return have == want
-
-
-def conflicts(node, conds: list[str], ctx: Ctx) -> bool:
-    """Whether `node` disagrees with anything `conds` states. Pure; never mutates.
-
-    This is the complement of satisfies() for the undecided middle: a node that
-    already satisfies the selector does not conflict with it, and neither does one
-    that is merely *silent* where the selector states a value. Only a node carrying
-    a different value conflicts.
-
-    The distinction decides, in enforce_path(), between completing an existing list
-    entry and appending a second one. Getting it wrong is not cosmetic. The ICU
-    Extended pressure features assert
-
-        component.count() = 3
-        component.where(code.coding.where(code = '8480-6' and system =
-            'http://loinc.org' and version = '2.81').exists()).exists()
-
-    against a package example whose three components carry those very LOINC codes
-    without a `version`. Read as "no component satisfies this, so append one", the
-    three selectors produce three further components and a body with six, failing
-    the count assertion in the same feature - the specification contradicting
-    itself, which is never the reading to take. Read as "exactly one component
-    disagrees with nothing here, so it is the component this is about", the
-    `version` is written into the coding that already carries the code.
-
-    Silence is not agreement, so this is not used to decide whether an assertion
-    holds - satisfies() does that, unchanged. It is used only to choose *where* to
-    write, and only when exactly one candidate is non-conflicting; two are
-    ambiguous and the caller falls back to appending.
-    """
-    if isinstance(node, list):
-        # One entry that can be completed means the selector is about that entry.
-        # An empty list conflicts with nothing: its entry is still to be created.
-        return bool(node) and all(conflicts(item, conds, ctx) for item in node)
-    if not isinstance(node, dict):
-        return True
-    for term in conds:
-        inner = None
-        if term.endswith(".exists()"):
-            inner = term[:-len(".exists()")]
-        elif term.endswith(".empty().not()"):
-            inner = term[:-len(".empty().not()")]
-        if inner is not None:
-            segments = parse_chain(inner)
-            if not segments:
-                return True
-            # A trailing `where` has to be recursed into rather than merely looked
-            # up. `code.coding.where(...)` selecting nothing says nothing about
-            # agreement: it is the case where the coding exists and lacks exactly
-            # what the selector states - the case this function exists for.
-            if segments[-1].startswith("where(") and segments[-1].endswith(")"):
-                try:
-                    host = lookup(node, segments[:-1], ctx)
-                except Unsupported:
-                    return True
-                if host in (None, [], {}, ""):
-                    continue            # absent entirely: nothing to disagree with
-                sub = split_top_level(segments[-1][len("where("):-1], " and ")
-                if conflicts(host, sub, ctx):
-                    return True
-                continue
-            try:
-                lookup(node, segments, ctx)
-            except Unsupported:
-                return True
-            # An absent path is what enforce_path() would fill in, not a disagreement.
-            continue
-        m = RE_TERM_EQ.match(term)
-        if not m:
-            return True
-        want = parse_literal(m)
-        try:
-            have = lookup(node, parse_chain(m.group("path")), ctx)
-        except Unsupported:
-            return True
-        if have is None:
-            continue
-        if isinstance(have, list):
-            if not any(equalish(h, want) for h in have):
-                return True
-        elif not equalish(have, want):
-            return True
-    return False
 
 
 def choice_key(name: str, conds: list[str]) -> str:
@@ -531,321 +426,512 @@ def segment_kind(segment: str, chain: list[str]) -> str:
     return "name"
 
 
-def lookup(node, segments: list[str], ctx: Ctx):
-    """Walk a chain of names and `where(...)` selectors; None where it is absent.
+@dataclasses.dataclass(frozen=True)
+class Walk:
+    """A chain to walk from one node of a body.
 
-    Reads the body and never writes to it, which is what separates it from
-    :func:`enforce_path`. It therefore needs neither the conditions a caller has
-    ahead of it nor the element `node` sits at: both exist only to decide how a
-    missing element is to be created.
+    `at` is the element `node` itself sits at, where the caller knows it: it is
+    what lets the cardinality of a child be decided by its container as well as
+    by the resource - see Ctx.is_list. A caller that does not know it leaves it
+    out, and a chain walked from the resource root never needs it.
+
+    `conds_ahead` are the conditions the enclosing expression states after the
+    chain. They are read for one thing: a chain that ends in a choice element
+    takes its FHIR type from what is asserted of it.
     """
-    cur = node
-    for segment in segments:
-        kind = segment_kind(segment, segments)
-        if kind == "skip":
-            continue
-        if kind == "where":
-            conds = split_top_level(segment[len("where("):-1], " and ")
-            if isinstance(cur, list):
-                cur = next((item for item in cur if satisfies(item, conds, ctx)), None)
-                if cur is None:
-                    return None
-            elif isinstance(cur, dict):
-                if not satisfies(cur, conds, ctx):
-                    return None
-                # else: the single object already satisfies the selector
-            else:
-                return None
-            continue
 
-        if isinstance(cur, list):
-            # A name after a list without a `where`: the features use this to mean
-            # "of any entry". Unambiguous only for a list of one.
-            if len(cur) == 1 and isinstance(cur[0], dict):
-                cur = cur[0]
-            else:
-                return None
-        if not isinstance(cur, dict):
-            return None
-
-        key = resolve_name(cur, segment)
-        if key is None:
-            return None
-        cur = cur[key]
-    return cur
+    node: object
+    segments: list[str]
+    at: str | None = None
+    conds_ahead: tuple = ()
 
 
-def enforce_path(node, segments: list[str], ctx: Ctx, conds_ahead=(),
-                 parent: str | None = None):
-    """Walk the chain, creating what it names and satisfying what it selects.
+@dataclasses.dataclass(frozen=True)
+class Selector:
+    """The conditions of a `where(...)`, and the node they are stated of."""
 
-    A missing name is created and a `where` that selects nothing appends an
-    element built from its own conditions - which is the sense in which a
-    feature's `exists()` is read as a requirement. Use :func:`lookup` to ask
-    whether a path is there without putting it there.
+    node: dict
+    conds: list[str]
+    at: str | None = None
 
-    `parent` is the element `node` itself sits at, where the caller knows it. It is
-    what lets the cardinality of a child be decided by its container as well as by
-    the resource - see Ctx.is_list. A caller that does not know it passes nothing,
-    and a chain walked from the resource root never needs to.
+
+class Walker:
+    """The walk over one resource body, measured against what the features state.
+
+    The context is held rather than threaded through: it is fixed for one body -
+    which resource this is, which displays the pinned packages define, what the
+    precondition prose states - and every step of the walk is about that one
+    body. What a step takes is therefore only the place in the body it is at and
+    the expression it is about.
+
+    The queries and the walks are separate on purpose. satisfies() and lookup()
+    answer whether the body already states something; enforce_path() and
+    enforce_conds() put it there. A caller that wants to ask without writing
+    calls the former - see lookup().
     """
-    cur = node
-    for index, segment in enumerate(segments):
-        kind = segment_kind(segment, segments)
-        if kind == "skip":
-            continue
-        if kind == "where":
-            conds = split_top_level(segment[len("where("):-1], " and ")
-            if isinstance(cur, list):
-                match = next((item for item in cur if satisfies(item, conds, ctx)), None)
-                if match is None:
-                    # Complete before appending, where that choice is forced: an
-                    # entry that disagrees with nothing the selector states, and the
-                    # only such entry, is the entry the selector is about. See
-                    # conflicts() for why appending instead makes a feature
-                    # contradict its own `count()` assertion.
-                    completable = [item for item in cur
-                                   if not conflicts(item, conds, ctx)]
-                    if len(completable) == 1:
-                        match = completable[0]
-                    else:
-                        match = {}
-                        cur.append(match)
-                    enforce_conds(match, conds, ctx, at=parent)
-                cur = match
-            elif isinstance(cur, dict):
-                if not satisfies(cur, conds, ctx):
-                    enforce_conds(cur, conds, ctx, at=parent)
-                # else: the single object already satisfies the selector
-            else:
-                return None
-            continue
 
-        if isinstance(cur, list):
-            # A name after a list without a `where`: the features use this to mean
-            # "of any entry". Unambiguous only for a list of one, and an empty list
-            # is one this walk has just created, so its single entry belongs here.
-            if not cur:
-                cur.append({})
-            if len(cur) == 1 and isinstance(cur[0], dict):
-                cur = cur[0]
-            else:
-                raise Unsupported(f"{'.'.join(segments[:index + 1])}: the body has "
-                                  f"{len(cur)} entries and the assertion names no "
-                                  f"`where` to choose among them")
-        if not isinstance(cur, dict):
-            return None
+    def __init__(self, ctx: Ctx):
+        self.ctx = ctx
 
-        key = resolve_name(cur, segment)
-        if key is None:
-            if segment in NON_CHOICE_DATETIME:
-                key = segment
-                cur[key] = None
-            elif ctx.is_list(segment, parent):
-                key = segment
-                cur[key] = []
-            elif (segment in CHOICE_ELEMENTS and index + 1 < len(segments)
-                    and segments[index + 1].startswith("where(")):
-                # A `where` follows, so the element's own fields name its type.
-                key = choice_key(segment, split_top_level(
-                    segments[index + 1][len("where("):-1], " and "))
-                cur[key] = {}
-            elif segment in CHOICE_ELEMENTS and conds_ahead:
-                key = choice_key(segment, list(conds_ahead))
-                cur[key] = {}
-            else:
-                key = segment
-                cur[key] = {}
-        parent = segment
-        cur = cur[key]
-    return cur
+    def satisfies(self, node, conds: list[str]) -> bool:
+        """Whether `node` already meets every term of `conds`. Pure; never mutates."""
+        if isinstance(node, list):
+            return any(self.satisfies(item, conds) for item in node)
+        if not isinstance(node, dict):
+            return False
+        for term in conds:
+            if term.endswith(".exists()") or term.endswith(".empty().not()"):
+                inner = term[:-len(".exists()")] if term.endswith(".exists()") \
+                    else term[:-len(".empty().not()")]
+                segments = parse_chain(inner)
+                if not segments:
+                    return False
+                try:
+                    found = self.lookup(node, segments)
+                except Unsupported:
+                    return False
+                if found in (None, [], {}, ""):
+                    return False
+                continue
+            m = RE_TERM_EQ.match(term)
+            if not m:
+                raise Unsupported(term)
+            path, want = m.group("path"), parse_literal(m)
+            segments = parse_chain(path)
+            try:
+                have = self.lookup(node, segments)
+            except Unsupported:
+                return False
+            if isinstance(have, list):
+                if not any(equalish(h, want) for h in have):
+                    return False
+            elif not equalish(have, want):
+                return False
+        return True
 
+    def conflicts(self, node, conds: list[str]) -> bool:
+        """Whether `node` disagrees with anything `conds` states. Pure; never mutates.
 
-def enforce_conds(node: dict, conds: list[str], ctx: Ctx,
-                  at: str | None = None) -> list[str]:
-    """Write every scalar equality of `conds` into `node`; recurse into nested terms.
+        This is the complement of satisfies() for the undecided middle: a node that
+        already satisfies the selector does not conflict with it, and neither does one
+        that is merely *silent* where the selector states a value. Only a node carrying
+        a different value conflicts.
 
-    `at` is the element `node` itself sits at, passed on to enforce_path() so a child's
-    cardinality can be decided by its container. See Ctx.is_list.
-    """
-    written: list[str] = []
-    for term in conds:
-        # Before the generic `.exists()` below, which would otherwise shadow it: a
-        # unit the feature requires without stating, but whose text the precondition
-        # prose gives for that UCUM code.
-        if term == "unit.exists()" and not node.get("unit"):
-            unit = ctx.prose.units.get(node.get("code"))
-            if unit is None and node.get("system") == UCUM \
-                    and isinstance(node.get("code"), str):
-                # The step requires a unit text but states none, and the prose
-                # names none for this code either - which happens where the prose
-                # and the step disagree about the code. `Quantity.unit` is the
-                # human-readable rendering of `Quantity.code` and the step requires
-                # nothing of it but existence, so the code the step itself asserts
-                # is the one text that cannot contradict the step.
-                unit = node["code"]
-                ctx.used.append(f"unit text taken from the asserted UCUM code "
-                                f"{unit!r}, no unit being stated for it")
-            if unit is None:
-                raise Unsupported(f"unit must exist; neither a step nor the "
-                                  f"precondition prose states one for code "
-                                  f"{node.get('code')!r}")
-            node["unit"] = unit
-            ctx.used.append(f"unit of {node.get('code')!r} from the precondition prose")
-            written.append(f"unit = {unit!r}")
-            continue
-        if term.endswith(".exists()"):
-            inner = term[:-len(".exists()")]
-            segments = parse_chain(inner)
-            target = enforce_path(node, segments, ctx, parent=at)
-            if target in (None, {}, []) and not segments[-1].startswith("where("):
-                raise Unsupported(f"{inner} must exist and the feature states no "
-                                  f"value for it")
-            continue
-        if term.endswith(".empty().not()"):
-            inner = term[:-len(".empty().not()")]
-            segments = parse_chain(inner)
-            if lookup(node, segments, ctx) in (None, [], {}, ""):
-                # The one such requirement the ISiK features raise is on a coding's
-                # display, which the specification itself supplies (see Displays).
-                if segments == ["display"]:
-                    display = ctx.display_for(node.get("code"), node.get("system"))
-                    if display is None:
-                        raise Unsupported(
-                            f"coding {node.get('code')!r} must carry a display and "
-                            f"the pinned packages give this code no unambiguous one")
-                    node["display"] = display
-                    written.append(f"display = {display!r}")
+        The distinction decides, in enforce_path(), between completing an existing list
+        entry and appending a second one. Getting it wrong is not cosmetic. The ICU
+        Extended pressure features assert
+
+            component.count() = 3
+            component.where(code.coding.where(code = '8480-6' and system =
+                'http://loinc.org' and version = '2.81').exists()).exists()
+
+        against a package example whose three components carry those very LOINC codes
+        without a `version`. Read as "no component satisfies this, so append one", the
+        three selectors produce three further components and a body with six, failing
+        the count assertion in the same feature - the specification contradicting
+        itself, which is never the reading to take. Read as "exactly one component
+        disagrees with nothing here, so it is the component this is about", the
+        `version` is written into the coding that already carries the code.
+
+        Silence is not agreement, so this is not used to decide whether an assertion
+        holds - satisfies() does that, unchanged. It is used only to choose *where* to
+        write, and only when exactly one candidate is non-conflicting; two are
+        ambiguous and the caller falls back to appending.
+        """
+        if isinstance(node, list):
+            # One entry that can be completed means the selector is about that entry.
+            # An empty list conflicts with nothing: its entry is still to be created.
+            return bool(node) and all(self.conflicts(item, conds) for item in node)
+        if not isinstance(node, dict):
+            return True
+        for term in conds:
+            inner = None
+            if term.endswith(".exists()"):
+                inner = term[:-len(".exists()")]
+            elif term.endswith(".empty().not()"):
+                inner = term[:-len(".empty().not()")]
+            if inner is not None:
+                segments = parse_chain(inner)
+                if not segments:
+                    return True
+                # A trailing `where` has to be recursed into rather than merely looked
+                # up. `code.coding.where(...)` selecting nothing says nothing about
+                # agreement: it is the case where the coding exists and lacks exactly
+                # what the selector states - the case this function exists for.
+                if segments[-1].startswith("where(") and segments[-1].endswith(")"):
+                    try:
+                        host = self.lookup(node, segments[:-1])
+                    except Unsupported:
+                        return True
+                    if host in (None, [], {}, ""):
+                        continue            # absent entirely: nothing to disagree with
+                    sub = split_top_level(segments[-1][len("where("):-1], " and ")
+                    if self.conflicts(host, sub):
+                        return True
                     continue
-                raise Unsupported(f"{inner} must be non-empty and the feature states "
-                                  f"no value for it")
-            continue
-        m = RE_TERM_EQ.match(term)
-        if not m:
-            raise Unsupported(term)
-        want = parse_literal(m)
-        segments = parse_chain(m.group("path"))
-        parent = (enforce_path(node, segments[:-1], ctx, parent=at,
-                               conds_ahead=conds) if len(segments) > 1 else node)
-        if isinstance(parent, list):
-            # An empty list is one this walk has just created, so the entry the
-            # assertion describes is its first.
-            if not parent:
-                parent.append({})
-            if len(parent) != 1:
-                raise Unsupported(f"{'.'.join(segments[:-1])} has {len(parent)} "
-                                  f"entries and the assertion names no `where` to "
-                                  f"choose among them")
-            parent = parent[0]
-        if not isinstance(parent, dict):
-            raise Unsupported(term)
-        leaf = resolve_name(parent, segments[-1]) or segments[-1]
-        if not equalish(parent.get(leaf), want):
-            parent[leaf] = want
-            written.append(f"{'.'.join(segments)} = {want!r}")
-    return written
+                try:
+                    self.lookup(node, segments)
+                except Unsupported:
+                    return True
+                # An absent path is what enforce_path() would fill in, not a disagreement.
+                continue
+            m = RE_TERM_EQ.match(term)
+            if not m:
+                return True
+            want = parse_literal(m)
+            try:
+                have = self.lookup(node, parse_chain(m.group("path")))
+            except Unsupported:
+                return True
+            if have is None:
+                continue
+            if isinstance(have, list):
+                if not any(equalish(h, want) for h in have):
+                    return True
+            elif not equalish(have, want):
+                return True
+        return False
 
+    def lookup(self, node, segments: list[str]):
+        """Walk a chain of names and `where(...)` selectors; None where it is absent.
 
-def enforce(doc: dict, expr: str, ctx: Ctx) -> list[str]:
-    """Read one feature expression as a requirement and make the body meet it."""
-    count = RE_COUNT_CMP.match(expr)
-    if count and count.group("expr").endswith(".count()"):
-        path = count.group("expr")[:-len(".count()")]
-        have = lookup(doc, parse_chain(path), ctx)
-        want = int(count.group("num"))
-        size = len(have) if isinstance(have, list) else (0 if have is None else 1)
-        if size != want:
-            raise Unsupported(f"{path}.count() = {want}; the body has {size} - "
-                              f"which entries are missing is not stated by this "
-                              f"assertion")
-        return []
+        Reads the body and never writes to it, which is what separates it from
+        :func:`enforce_path`. It therefore needs neither the conditions a caller has
+        ahead of it nor the element `node` sits at: both exist only to decide how a
+        missing element is to be created.
+        """
+        cur = node
+        for segment in segments:
+            kind = segment_kind(segment, segments)
+            if kind == "skip":
+                continue
+            if kind == "where":
+                conds = split_top_level(segment[len("where("):-1], " and ")
+                if isinstance(cur, list):
+                    cur = next((item for item in cur if self.satisfies(item, conds)), None)
+                    if cur is None:
+                        return None
+                elif isinstance(cur, dict):
+                    if not self.satisfies(cur, conds):
+                        return None
+                    # else: the single object already satisfies the selector
+                else:
+                    return None
+                continue
 
-    # A bare equality: `note.text = "..."`, `device.display = '...'`, `value.code = ...`
-    if RE_TERM_EQ.match(expr):
-        return enforce_conds(doc, [expr], ctx)
+            if isinstance(cur, list):
+                # A name after a list without a `where`: the features use this to mean
+                # "of any entry". Unambiguous only for a list of one.
+                if len(cur) == 1 and isinstance(cur[0], dict):
+                    cur = cur[0]
+                else:
+                    return None
+            if not isinstance(cur, dict):
+                return None
 
-    segments = parse_chain(expr)
+            key = resolve_name(cur, segment)
+            if key is None:
+                return None
+            cur = cur[key]
+        return cur
 
-    # `<path>.toString().contains('<literal>')`: a literal date or time.
-    if len(segments) >= 2 and RE_CONTAINS.match(segments[-1]) \
-            and segments[-2] == "toString()":
-        literal = RE_CONTAINS.match(segments[-1]).group("lit")
-        head = segments[:-2]
-        parent = enforce_path(doc, head[:-1], ctx) if len(head) > 1 else doc
-        if isinstance(parent, list):
-            if len(parent) != 1:
-                raise Unsupported(expr)
-            parent = parent[0]
-        if not isinstance(parent, dict):
-            raise Unsupported(expr)
-        key = resolve_name(parent, head[-1])
-        if key is None:
-            if head[-1] in NON_CHOICE_DATETIME:
-                key = head[-1]
-            else:
-                raise Unsupported(f"{head[-1]} must contain {literal!r} but the body "
-                                  f"carries no such element - the choice type is not "
-                                  f"determined by the feature")
-        if isinstance(parent.get(key), dict):
-            # The body carries the wrong member of a choice: the example has
-            # `effectivePeriod`, the assertion wants a value. The feature's own
-            # precondition prose names the type (`* Effective date/time:`), so
-            # take the correction from there and from nowhere else.
-            base = head[-1]
-            stated = ctx.prose.choice_types.get(base.lower()) if base in CHOICE_ELEMENTS else None
-            if stated is None or f"{base}{stated}" == key:
-                raise Unsupported(f"{key} must contain {literal!r} but it is an "
-                                  f"object, not a value - which of its parts is "
-                                  f"meant is not determined by the feature")
-            # The value, like the type, is taken from the prose where the prose
-            # states one of which the asserted literal is a substring.
-            value = ctx.prose.timestamps.get(base.lower())
-            if value is None or literal not in value:
-                value = literal
-            del parent[key]
-            parent[f"{base}{stated}"] = value
-            ctx.used.append(f"{base} is a {stated} per the precondition prose, "
-                            f"replacing the example's {key}")
-            return [f"{key} -> {base}{stated} = {value}"]
-        current = parent.get(key)
-        # The step asserts a substring; the prose of the same feature states the
-        # whole value. Writing the substring satisfies the step and misstates the
-        # specification, and for an `instant` element the substring is not even a
-        # legal value: `Observation.issued` is an instant, so `2024-05-14` is
-        # rejected with "malformed 'instant'" while the prose's
-        # `2024-05-14T09:15:00+02:00` is accepted and contains it.
-        #
-        # Checked before the body's current value, not after: a body already
-        # carrying the bare literal satisfies the step, so a rule that stopped
-        # there would leave the wrong value in place and make the outcome depend
-        # on what the body happened to arrive with. As written, the tool converges
-        # on the same body from any starting point and running it twice is a no-op.
-        stated = ctx.prose.timestamps.get(head[-1].lower())
-        if stated is not None and literal in stated:
-            if current == stated:
-                return []
-            parent[key] = stated
-            ctx.used.append(f"{head[-1]} = {stated} from the precondition prose, "
-                            f"of which the asserted {literal!r} is a substring")
-            return [f"{key} = {stated}"]
-        if isinstance(current, str) and literal in current:
-            # Already satisfied, and the prose states nothing fuller. `contains` is
-            # a substring test, so narrowing the value to the bare literal would
-            # change a body that passes into a different body that also passes.
+    def enforce_path(self, walk: Walk):
+        """Walk the chain, creating what it names and satisfying what it selects.
+
+        A missing name is created and a `where` that selects nothing appends an
+        element built from its own conditions - which is the sense in which a
+        feature's `exists()` is read as a requirement. Use lookup() to ask
+        whether a path is there without putting it there.
+
+        What the walk carries besides the chain - the element its node sits at,
+        and the conditions stated after the chain - is documented on Walk.
+        """
+        node, segments = walk.node, walk.segments
+        conds_ahead, parent = walk.conds_ahead, walk.at
+        cur = node
+        for index, segment in enumerate(segments):
+            kind = segment_kind(segment, segments)
+            if kind == "skip":
+                continue
+            if kind == "where":
+                conds = split_top_level(segment[len("where("):-1], " and ")
+                if isinstance(cur, list):
+                    match = next((item for item in cur if self.satisfies(item, conds)), None)
+                    if match is None:
+                        # Complete before appending, where that choice is forced: an
+                        # entry that disagrees with nothing the selector states, and the
+                        # only such entry, is the entry the selector is about. See
+                        # conflicts() for why appending instead makes a feature
+                        # contradict its own `count()` assertion.
+                        completable = [item for item in cur
+                                       if not self.conflicts(item, conds)]
+                        if len(completable) == 1:
+                            match = completable[0]
+                        else:
+                            match = {}
+                            cur.append(match)
+                        self.enforce_conds(Selector(match, conds, at=parent))
+                    cur = match
+                elif isinstance(cur, dict):
+                    if not self.satisfies(cur, conds):
+                        self.enforce_conds(Selector(cur, conds, at=parent))
+                    # else: the single object already satisfies the selector
+                else:
+                    return None
+                continue
+
+            if isinstance(cur, list):
+                # A name after a list without a `where`: the features use this to mean
+                # "of any entry". Unambiguous only for a list of one, and an empty list
+                # is one this walk has just created, so its single entry belongs here.
+                if not cur:
+                    cur.append({})
+                if len(cur) == 1 and isinstance(cur[0], dict):
+                    cur = cur[0]
+                else:
+                    raise Unsupported(f"{'.'.join(segments[:index + 1])}: the body has "
+                                      f"{len(cur)} entries and the assertion names no "
+                                      f"`where` to choose among them")
+            if not isinstance(cur, dict):
+                return None
+
+            key = resolve_name(cur, segment)
+            if key is None:
+                if segment in NON_CHOICE_DATETIME:
+                    key = segment
+                    cur[key] = None
+                elif self.ctx.is_list(segment, parent):
+                    key = segment
+                    cur[key] = []
+                elif (segment in CHOICE_ELEMENTS and index + 1 < len(segments)
+                        and segments[index + 1].startswith("where(")):
+                    # A `where` follows, so the element's own fields name its type.
+                    key = choice_key(segment, split_top_level(
+                        segments[index + 1][len("where("):-1], " and "))
+                    cur[key] = {}
+                elif segment in CHOICE_ELEMENTS and conds_ahead:
+                    key = choice_key(segment, list(conds_ahead))
+                    cur[key] = {}
+                else:
+                    key = segment
+                    cur[key] = {}
+            parent = segment
+            cur = cur[key]
+        return cur
+
+    def enforce_conds(self, selector: Selector) -> list[str]:
+        """Write every scalar equality the selector states; recurse into its terms.
+
+        The element the selector's node sits at is passed on to enforce_path(),
+        so a child's cardinality can be decided by its container. See Selector
+        and Ctx.is_list.
+        """
+        node, conds, at = selector.node, selector.conds, selector.at
+        written: list[str] = []
+        for term in conds:
+            # Before the generic `.exists()` below, which would otherwise shadow it: a
+            # unit the feature requires without stating, but whose text the precondition
+            # prose gives for that UCUM code.
+            if term == "unit.exists()" and not node.get("unit"):
+                unit = self.ctx.prose.units.get(node.get("code"))
+                if unit is None and node.get("system") == UCUM \
+                        and isinstance(node.get("code"), str):
+                    # The step requires a unit text but states none, and the prose
+                    # names none for this code either - which happens where the prose
+                    # and the step disagree about the code. `Quantity.unit` is the
+                    # human-readable rendering of `Quantity.code` and the step requires
+                    # nothing of it but existence, so the code the step itself asserts
+                    # is the one text that cannot contradict the step.
+                    unit = node["code"]
+                    self.ctx.used.append(
+                        f"unit text taken from the asserted UCUM code {unit!r}, "
+                        f"no unit being stated for it")
+                if unit is None:
+                    raise Unsupported(f"unit must exist; neither a step nor the "
+                                      f"precondition prose states one for code "
+                                      f"{node.get('code')!r}")
+                node["unit"] = unit
+                self.ctx.used.append(f"unit of {node.get('code')!r} from the "
+                                     f"precondition prose")
+                written.append(f"unit = {unit!r}")
+                continue
+            if term.endswith(".exists()"):
+                inner = term[:-len(".exists()")]
+                segments = parse_chain(inner)
+                target = self.enforce_path(Walk(node, segments, at=at))
+                if target in (None, {}, []) and not segments[-1].startswith("where("):
+                    raise Unsupported(f"{inner} must exist and the feature states no "
+                                      f"value for it")
+                continue
+            if term.endswith(".empty().not()"):
+                inner = term[:-len(".empty().not()")]
+                segments = parse_chain(inner)
+                if self.lookup(node, segments) in (None, [], {}, ""):
+                    # The one such requirement the ISiK features raise is on a coding's
+                    # display, which the specification itself supplies (see Displays).
+                    if segments == ["display"]:
+                        display = self.ctx.display_for(node.get("code"),
+                                                       node.get("system"))
+                        if display is None:
+                            raise Unsupported(
+                                f"coding {node.get('code')!r} must carry a display and "
+                                f"the pinned packages give this code no unambiguous one")
+                        node["display"] = display
+                        written.append(f"display = {display!r}")
+                        continue
+                    raise Unsupported(f"{inner} must be non-empty and the feature states "
+                                      f"no value for it")
+                continue
+            m = RE_TERM_EQ.match(term)
+            if not m:
+                raise Unsupported(term)
+            want = parse_literal(m)
+            segments = parse_chain(m.group("path"))
+            parent = (self.enforce_path(Walk(node, segments[:-1], at=at,
+                                                  conds_ahead=conds)) if len(segments) > 1 else node)
+            if isinstance(parent, list):
+                # An empty list is one this walk has just created, so the entry the
+                # assertion describes is its first.
+                if not parent:
+                    parent.append({})
+                if len(parent) != 1:
+                    raise Unsupported(f"{'.'.join(segments[:-1])} has {len(parent)} "
+                                      f"entries and the assertion names no `where` to "
+                                      f"choose among them")
+                parent = parent[0]
+            if not isinstance(parent, dict):
+                raise Unsupported(term)
+            leaf = resolve_name(parent, segments[-1]) or segments[-1]
+            if not equalish(parent.get(leaf), want):
+                parent[leaf] = want
+                written.append(f"{'.'.join(segments)} = {want!r}")
+        return written
+
+    def enforce(self, doc: dict, expr: str) -> list[str]:
+        """Read one feature expression as a requirement and make the body meet it."""
+        count = RE_COUNT_CMP.match(expr)
+        if count and count.group("expr").endswith(".count()"):
+            path = count.group("expr")[:-len(".count()")]
+            have = self.lookup(doc, parse_chain(path))
+            want = int(count.group("num"))
+            size = len(have) if isinstance(have, list) else (0 if have is None else 1)
+            if size != want:
+                raise Unsupported(f"{path}.count() = {want}; the body has {size} - "
+                                  f"which entries are missing is not stated by this "
+                                  f"assertion")
             return []
-        if current != literal:
-            parent[key] = literal
-            return [f"{key} = {literal}"]
-        return []
 
-    # `<path>.exists()` and `<path>.where(...).exists()`
-    if segments[-1] == "exists()":
-        before = json.dumps(doc, sort_keys=True)
-        enforce_path(doc, segments[:-1], ctx)
-        after = json.dumps(doc, sort_keys=True)
-        return [expr] if before != after else []
+        # A bare equality: `note.text = "..."`, `device.display = '...'`, `value.code = ...`
+        if RE_TERM_EQ.match(expr):
+            return self.enforce_conds(Selector(doc, [expr]))
 
-    raise Unsupported(expr)
+        segments = parse_chain(expr)
+
+        # `<path>.toString().contains('<literal>')`: a literal date or time.
+        if len(segments) >= 2 and RE_CONTAINS.match(segments[-1]) \
+                and segments[-2] == "toString()":
+            literal = RE_CONTAINS.match(segments[-1]).group("lit")
+            head = segments[:-2]
+            parent = self.enforce_path(Walk(doc, head[:-1])) if len(head) > 1 else doc
+            if isinstance(parent, list):
+                if len(parent) != 1:
+                    raise Unsupported(expr)
+                parent = parent[0]
+            if not isinstance(parent, dict):
+                raise Unsupported(expr)
+            key = resolve_name(parent, head[-1])
+            if key is None:
+                if head[-1] in NON_CHOICE_DATETIME:
+                    key = head[-1]
+                else:
+                    raise Unsupported(f"{head[-1]} must contain {literal!r} but the body "
+                                      f"carries no such element - the choice type is not "
+                                      f"determined by the feature")
+            if isinstance(parent.get(key), dict):
+                # The body carries the wrong member of a choice: the example has
+                # `effectivePeriod`, the assertion wants a value. The feature's own
+                # precondition prose names the type (`* Effective date/time:`), so
+                # take the correction from there and from nowhere else.
+                base = head[-1]
+                stated = (self.ctx.prose.choice_types.get(base.lower())
+                          if base in CHOICE_ELEMENTS else None)
+                if stated is None or f"{base}{stated}" == key:
+                    raise Unsupported(f"{key} must contain {literal!r} but it is an "
+                                      f"object, not a value - which of its parts is "
+                                      f"meant is not determined by the feature")
+                # The value, like the type, is taken from the prose where the prose
+                # states one of which the asserted literal is a substring.
+                value = self.ctx.prose.timestamps.get(base.lower())
+                if value is None or literal not in value:
+                    value = literal
+                del parent[key]
+                parent[f"{base}{stated}"] = value
+                self.ctx.used.append(f"{base} is a {stated} per the "
+                                     f"precondition prose, replacing the "
+                                     f"example's {key}")
+                return [f"{key} -> {base}{stated} = {value}"]
+            current = parent.get(key)
+            # The step asserts a substring; the prose of the same feature states the
+            # whole value. Writing the substring satisfies the step and misstates the
+            # specification, and for an `instant` element the substring is not even a
+            # legal value: `Observation.issued` is an instant, so `2024-05-14` is
+            # rejected with "malformed 'instant'" while the prose's
+            # `2024-05-14T09:15:00+02:00` is accepted and contains it.
+            #
+            # Checked before the body's current value, not after: a body already
+            # carrying the bare literal satisfies the step, so a rule that stopped
+            # there would leave the wrong value in place and make the outcome depend
+            # on what the body happened to arrive with. As written, the tool converges
+            # on the same body from any starting point and running it twice is a no-op.
+            stated = self.ctx.prose.timestamps.get(head[-1].lower())
+            if stated is not None and literal in stated:
+                if current == stated:
+                    return []
+                parent[key] = stated
+                self.ctx.used.append(
+                    f"{head[-1]} = {stated} from the precondition prose, of "
+                    f"which the asserted {literal!r} is a substring")
+                return [f"{key} = {stated}"]
+            if isinstance(current, str) and literal in current:
+                # Already satisfied, and the prose states nothing fuller. `contains` is
+                # a substring test, so narrowing the value to the bare literal would
+                # change a body that passes into a different body that also passes.
+                return []
+            if current != literal:
+                parent[key] = literal
+                return [f"{key} = {literal}"]
+            return []
+
+        # `<path>.exists()` and `<path>.where(...).exists()`
+        if segments[-1] == "exists()":
+            before = json.dumps(doc, sort_keys=True)
+            self.enforce_path(Walk(doc, segments[:-1]))
+            after = json.dumps(doc, sort_keys=True)
+            return [expr] if before != after else []
+
+        raise Unsupported(expr)
+
+    def fill_displays(self, doc) -> list[str]:
+        """Give every coding in the body the display the specification gives that code."""
+        written: list[str] = []
+
+        def walk(node, where: str) -> None:
+            if isinstance(node, dict):
+                code, system = node.get("code"), node.get("system")
+                if (isinstance(code, str) and isinstance(system, str)
+                        and not node.get("display") and is_coding(node)):
+                    display = self.ctx.display_for(code, system)
+                    if display is not None:
+                        node["display"] = display
+                        written.append(f"{where}.display = {display!r}")
+                for key, value in node.items():
+                    walk(value, f"{where}.{key}" if where else key)
+            elif isinstance(node, list):
+                for index, item in enumerate(node):
+                    walk(item, f"{where}[{index}]")
+
+        walk(doc, "")
+        return written
 
 
 # --------------------------------------------------------------------------- #
@@ -875,6 +961,59 @@ def contract_from_yaml(contract_dir: pathlib.Path,
     return values
 
 
+@dataclasses.dataclass(frozen=True)
+class SeenDisplay:
+    """One display, with the code and the system it was seen against."""
+
+    code: object
+    system: object
+    display: object
+
+    @property
+    def is_usable(self) -> bool:
+        """Whether all three are strings, which is what makes the triple evidence."""
+        return all(isinstance(v, str)
+                   for v in (self.code, self.system, self.display))
+
+
+class DisplayEvidence:
+    """Displays seen for a code/system pair, kept apart by strength of evidence.
+
+    A `CodeSystem.concept.display` the packages ship is a definition; a
+    `Coding.display` occurring anywhere else in a package is a usage. The two are
+    collected separately because a definition outranks any number of usages - see
+    build_display_index() for why, and for what an ambiguous pair does.
+    """
+
+    def __init__(self):
+        self.definitions: dict[tuple[str, str], set[str]] = {}
+        self.usages: dict[tuple[str, str], set[str]] = {}
+
+    def note_definition(self, seen: SeenDisplay) -> None:
+        """The display a shipped CodeSystem gives a code."""
+        self._note(self.definitions, seen)
+
+    def note_usage(self, seen: SeenDisplay) -> None:
+        """The display some package resource writes against a code."""
+        self._note(self.usages, seen)
+
+    @staticmethod
+    def _note(into: dict, seen: SeenDisplay) -> None:
+        if seen.is_usable:
+            into.setdefault((seen.code, seen.system), set()).add(seen.display)
+
+    def unambiguous(self) -> dict[tuple[str, str], str]:
+        """The pairs exactly one display was seen for, definitions winning."""
+        index = {pair: next(iter(displays))
+                 for pair, displays in self.usages.items() if len(displays) == 1}
+        for pair, displays in self.definitions.items():
+            if len(displays) == 1:
+                index[pair] = next(iter(displays))
+            else:
+                index.pop(pair, None)
+        return index
+
+
 def build_display_index(pkg_dirs: list[pathlib.Path]) -> dict[tuple[str, str], str]:
     """(code, system) -> display, as the pinned packages themselves give it.
 
@@ -899,16 +1038,12 @@ def build_display_index(pkg_dirs: list[pathlib.Path]) -> dict[tuple[str, str], s
     answers. A display is consequently only ever written where the specification is
     unambiguous at the strongest level of evidence available for that code.
     """
-    definitions: dict[tuple[str, str], set[str]] = {}
-    usages: dict[tuple[str, str], set[str]] = {}
-
-    def note(into, code, system, display) -> None:
-        if isinstance(code, str) and isinstance(system, str) and isinstance(display, str):
-            into.setdefault((code, system), set()).add(display)
+    seen = DisplayEvidence()
 
     def walk(node) -> None:
         if isinstance(node, dict):
-            note(usages, node.get("code"), node.get("system"), node.get("display"))
+            seen.note_usage(SeenDisplay(node.get("code"), node.get("system"),
+                                        node.get("display")))
             for value in node.values():
                 walk(value)
         elif isinstance(node, list):
@@ -924,7 +1059,8 @@ def build_display_index(pkg_dirs: list[pathlib.Path]) -> dict[tuple[str, str], s
             for concept in nodes or []:
                 if not isinstance(concept, dict):
                     continue
-                note(definitions, concept.get("code"), url, concept.get("display"))
+                seen.note_definition(SeenDisplay(concept.get("code"), url,
+                                                 concept.get("display")))
                 concepts(concept.get("concept"))
 
         concepts(doc.get("concept"))
@@ -941,14 +1077,7 @@ def build_display_index(pkg_dirs: list[pathlib.Path]) -> dict[tuple[str, str], s
             if doc.get("resourceType") == "CodeSystem":
                 walk_codesystem(doc)
 
-    index = {pair: next(iter(displays)) for pair, displays in usages.items()
-             if len(displays) == 1}
-    for pair, displays in definitions.items():
-        if len(displays) == 1:
-            index[pair] = next(iter(displays))
-        else:
-            index.pop(pair, None)
-    return index
+    return seen.unambiguous()
 
 
 # The formulaic prose constructs, and nothing else. A value in parentheses
@@ -1116,152 +1245,167 @@ def mine_prose(feature_root: pathlib.Path, rel_paths: list[str]) -> Prose:
     )
 
 
-# Every element FHIR R4 gives a Coding, plus the two every element may carry. A
-# Quantity also has `code` and `system`, and has no `display` at all, so matching on
-# code+system alone would write an element that does not exist into every asserted
-# measurement - rejected by the server as an unknown property, and rejected for the
-# right reason. Membership is checked against the whole node rather than by element
-# path because the walker has no schema; a node whose keys are all a Coding's keys
-# is a Coding.
-CODING_KEYS = frozenset({"system", "version", "code", "display", "userSelected",
-                         "id", "extension"})
-
-
-def is_coding(node: dict) -> bool:
-    """Whether a dict carrying `code` and `system` is a Coding and not a Quantity."""
-    return set(node) <= CODING_KEYS
-
-
-def fill_displays(doc, ctx: Ctx) -> list[str]:
-    """Give every coding in the body the display the specification gives that code."""
-    written: list[str] = []
-
-    def walk(node, where: str) -> None:
-        if isinstance(node, dict):
-            code, system = node.get("code"), node.get("system")
-            if (isinstance(code, str) and isinstance(system, str)
-                    and not node.get("display") and is_coding(node)):
-                display = ctx.display_for(code, system)
-                if display is not None:
-                    node["display"] = display
-                    written.append(f"{where}.display = {display!r}")
-            for key, value in node.items():
-                walk(value, f"{where}.{key}" if where else key)
-        elif isinstance(node, list):
-            for index, item in enumerate(node):
-                walk(item, f"{where}[{index}]")
-
-    walk(doc, "")
-    return written
-
-
 # --------------------------------------------------------------------------- #
 # per-resource reconciliation
 # --------------------------------------------------------------------------- #
 
-def reconcile(doc: dict, row: dict, namespace: str, contract: dict[str, str],
-              displays: dict[tuple[str, str], str],
-              prose: Prose) -> tuple[list[str], list[str], list[str]]:
-    """Apply what the assertions determine.
+@dataclasses.dataclass(frozen=True)
+class Reconciled:
+    """What one pass over one body did, and what it could not do.
 
-    Returns (changes, items left for a human, prose facts relied on).
+    `unhandled` is the list this tool is read for as much as for the changes: an
+    assertion that requires something without stating it is reported by name
+    rather than guessed at, so the items left for a person are countable.
     """
-    changes: list[str] = []
-    unhandled: list[str] = []
-    ctx = Ctx(resource_type=row["resourceType"], resource_id=row["id"],
-              displays=displays, prose=prose)
 
-    for a in row.get("assertions") or []:
-        kind = a.get("kind")
+    changes: list[str]
+    unhandled: list[str]
+    used: list[str]
 
-        if kind == "reference":
-            element, target = a.get("element"), a.get("target") or ""
-            # REFERENCE_KEYS is keyed on the body path, where a list-valued element
-            # carries a `[]` suffix; a feature names the element plainly.
-            data_key = REFERENCE_KEYS.get(element) or REFERENCE_KEYS.get(f"{element}[]")
-            if data_key is None:
-                unhandled.append(f"reference on {element!r}: no entry in REFERENCE_KEYS")
+
+@dataclasses.dataclass(frozen=True)
+class Level:
+    """The level being reconciled, and what the specification states for it.
+
+    These three are fixed for a whole run and are read for every body: the
+    contract maps a qualified data key to the id the rig stages under it, the
+    display index is built once from the pinned packages, and the feature root
+    is where a resource's own precondition prose is mined from.
+    """
+
+    name: str
+    contract: dict[str, str]
+    displays: dict[tuple[str, str], str]
+    features: pathlib.Path | None
+
+    def prose_of(self, row: dict) -> Prose:
+        """What the features using this resource state only in their prose."""
+        return (mine_prose(self.features, row.get("usedBy") or [])
+                if self.features else Prose())
+
+
+class StagedResource:
+    """One resource of the level, and what its assertions determine about it.
+
+    The row names the resource, the data keys that place it in the rig's
+    contract and the features that use it. The namespace of those keys and the
+    prose of those features are derived here, so that reconciling a body takes
+    the body and nothing else.
+    """
+
+    def __init__(self, level: Level, row: dict):
+        self.level = level
+        self.row = row
+        self.namespaces = {key.split(".", 1)[0] for key in row.get("keys", [])}
+        self.prose = level.prose_of(row)
+
+    @property
+    def file_name(self) -> str:
+        """The staged body's file name, as derive_testdata.py writes it."""
+        return f"{self.row['resourceType']}-{self.row['id']}.json"
+
+    def reconcile(self, doc: dict) -> Reconciled:
+        """Apply what the assertions determine to one staged body, in place."""
+        row, prose = self.row, self.prose
+        contract, displays = self.level.contract, self.level.displays
+        namespace = next(iter(self.namespaces))
+        changes: list[str] = []
+        unhandled: list[str] = []
+        ctx = Ctx(resource_type=row["resourceType"], resource_id=row["id"],
+                  displays=displays, prose=prose)
+        walker = Walker(ctx)
+
+        for a in row.get("assertions") or []:
+            kind = a.get("kind")
+
+            if kind == "reference":
+                element, target = a.get("element"), a.get("target") or ""
+                # REFERENCE_KEYS is keyed on the body path, where a list-valued element
+                # carries a `[]` suffix; a feature names the element plainly.
+                data_key = REFERENCE_KEYS.get(element) or REFERENCE_KEYS.get(f"{element}[]")
+                if data_key is None:
+                    unhandled.append(f"reference on {element!r}: no entry in REFERENCE_KEYS")
+                    continue
+                qualified = f"{namespace}.{data_key}"
+                expected_id = target.split("/", 1)[1] if "/" in target else target
+                if contract.get(qualified) != expected_id:
+                    unhandled.append(
+                        f"reference on {element!r} asserts {target}, but {qualified} is "
+                        f"{contract.get(qualified)!r} - the mapping would write the wrong id")
+                    continue
+                placeholder = f"{target.split('/', 1)[0]}/{{{{{qualified}}}}}"
+                current = doc.get(element)
+                # Keep any sibling the example carries, e.g. `device.display`.
+                existing = (current[0] if isinstance(current, list) and current
+                            and isinstance(current[0], dict)
+                            else current if isinstance(current, dict) else {})
+                body = dict(existing)
+                if body.get("reference") != placeholder:
+                    body["reference"] = placeholder
+                    doc[element] = [body] if element in LIST_VALUED else body
+                    changes.append(f"{element} -> {placeholder}")
                 continue
-            qualified = f"{namespace}.{data_key}"
-            expected_id = target.split("/", 1)[1] if "/" in target else target
-            if contract.get(qualified) != expected_id:
-                unhandled.append(
-                    f"reference on {element!r} asserts {target}, but {qualified} is "
-                    f"{contract.get(qualified)!r} - the mapping would write the wrong id")
+
+            if kind == "attribute":
+                m = RE_ATTR_FIELD.match(a.get("path") or "")
+                match = a.get("matches") or ""
+                if not m or RE_HAS_META.search(match):
+                    unhandled.append(f"attribute {a.get('path')} matches {match!r}")
+                    continue
+                field = m.group("field")
+                if doc.get(field) != match:
+                    doc[field] = match
+                    changes.append(f"{field} = {match}")
                 continue
-            placeholder = f"{target.split('/', 1)[0]}/{{{{{qualified}}}}}"
-            current = doc.get(element)
-            # Keep any sibling the example carries, e.g. `device.display`.
-            existing = (current[0] if isinstance(current, list) and current
-                        and isinstance(current[0], dict)
-                        else current if isinstance(current, dict) else {})
-            body = dict(existing)
-            if body.get("reference") != placeholder:
-                body["reference"] = placeholder
-                doc[element] = [body] if element in LIST_VALUED else body
-                changes.append(f"{element} -> {placeholder}")
-            continue
 
-        if kind == "attribute":
-            m = RE_ATTR_FIELD.match(a.get("path") or "")
-            match = a.get("matches") or ""
-            if not m or RE_HAS_META.search(match):
-                unhandled.append(f"attribute {a.get('path')} matches {match!r}")
+            if kind == "fhirpath":
+                expr = (a.get("expr") or "").strip()
+                if expr == "identifier.exists()":
+                    if not doc.get("identifier"):
+                        # The prose states the identifier outright in some modules:
+                        # `* Identifier:` / `- System: ...` / `Value: ...`.
+                        if len(prose.identifiers) == 1:
+                            stated = prose.identifiers[0]
+                            doc["identifier"] = [dict(stated)]
+                            changes.append(f"identifier += system {stated['system']}, "
+                                           f"value {stated['value']}")
+                            ctx.used.append("identifier stated by the precondition prose")
+                            continue
+                        systems = prose.identifier_systems
+                        if not systems and prose.identifier_open \
+                                and len(prose.module_identifier_systems) == 1:
+                            # The feature says the identifier may be anything and names
+                            # no system; its module names exactly one. Documented guess.
+                            systems = prose.module_identifier_systems
+                            ctx.used.append(
+                                f"identifier system {systems[0]!r} from the other "
+                                f"features of the same module, the resource's own "
+                                f"prose saying only 'any'")
+                        if len(systems) != 1:
+                            unhandled.append(
+                                f"identifier.exists() - the precondition prose names "
+                                f"{len(systems)} identifier system(s), so the identifier "
+                                f"cannot be written from the specification alone")
+                            continue
+                        # The prose says `any (system: ...)`: the system is stated, the
+                        # value is left open, so it is the resource's own id.
+                        doc["identifier"] = [{"system": systems[0], "value": row["id"]}]
+                        changes.append(f"identifier += system {systems[0]}, "
+                                       f"value {row['id']}")
+                        ctx.used.append(f"identifier system {systems[0]!r} from the "
+                                        f"precondition prose")
+                    continue
+                try:
+                    changes += walker.enforce(doc, expr)
+                except Unsupported as exc:
+                    unhandled.append(f"{exc}" if str(exc) != expr else f"fhirpath {expr}")
                 continue
-            field = m.group("field")
-            if doc.get(field) != match:
-                doc[field] = match
-                changes.append(f"{field} = {match}")
-            continue
 
-        if kind == "fhirpath":
-            expr = (a.get("expr") or "").strip()
-            if expr == "identifier.exists()":
-                if not doc.get("identifier"):
-                    # The prose states the identifier outright in some modules:
-                    # `* Identifier:` / `- System: ...` / `Value: ...`.
-                    if len(prose.identifiers) == 1:
-                        stated = prose.identifiers[0]
-                        doc["identifier"] = [dict(stated)]
-                        changes.append(f"identifier += system {stated['system']}, "
-                                       f"value {stated['value']}")
-                        ctx.used.append("identifier stated by the precondition prose")
-                        continue
-                    systems = prose.identifier_systems
-                    if not systems and prose.identifier_open \
-                            and len(prose.module_identifier_systems) == 1:
-                        # The feature says the identifier may be anything and names
-                        # no system; its module names exactly one. Documented guess.
-                        systems = prose.module_identifier_systems
-                        ctx.used.append(
-                            f"identifier system {systems[0]!r} from the other "
-                            f"features of the same module, the resource's own "
-                            f"prose saying only 'any'")
-                    if len(systems) != 1:
-                        unhandled.append(
-                            f"identifier.exists() - the precondition prose names "
-                            f"{len(systems)} identifier system(s), so the identifier "
-                            f"cannot be written from the specification alone")
-                        continue
-                    # The prose says `any (system: ...)`: the system is stated, the
-                    # value is left open, so it is the resource's own id.
-                    doc["identifier"] = [{"system": systems[0], "value": row["id"]}]
-                    changes.append(f"identifier += system {systems[0]}, "
-                                   f"value {row['id']}")
-                    ctx.used.append(f"identifier system {systems[0]!r} from the "
-                                    f"precondition prose")
-                continue
-            try:
-                changes += enforce(doc, expr, ctx)
-            except Unsupported as exc:
-                unhandled.append(f"{exc}" if str(exc) != expr else f"fhirpath {expr}")
-            continue
+            unhandled.append(f"{kind}: {json.dumps(a, sort_keys=True)[:120]}")
 
-        unhandled.append(f"{kind}: {json.dumps(a, sort_keys=True)[:120]}")
-
-    # Displays last, so codings this run created are covered too.
-    changes += fill_displays(doc, ctx)
-    return changes, unhandled, ctx.used
+        # Displays last, so codings this run created are covered too.
+        changes += walker.fill_displays(doc)
+        return Reconciled(changes, unhandled, ctx.used)
 
 
 def main() -> int:
@@ -1298,29 +1442,29 @@ def main() -> int:
     print(f"{len(displays)} code/system pair(s) carry an unambiguous display in the "
           f"{len(args.package)} package(s) read")
 
-    features = pathlib.Path(args.features) if args.features else None
+    being = Level(name=args.level, contract=contract, displays=displays,
+                  features=pathlib.Path(args.features) if args.features else None)
     staged = pathlib.Path(args.dir)
     citations: list[str] = []
     touched = left = 0
     for row in sorted(level.get("resources", []),
                       key=lambda r: (r["resourceType"], r["id"])):
-        path = staged / f"{row['resourceType']}-{row['id']}.json"
+        resource = StagedResource(being, row)
+        path = staged / resource.file_name
         if not path.is_file():
             continue
-        row_namespaces = {k.split(".", 1)[0] for k in row.get("keys", [])}
-        if len(row_namespaces) != 1:
-            print(f"  skip  {path.name}: keys in {len(row_namespaces)} namespaces")
+        if len(resource.namespaces) != 1:
+            print(f"  skip  {path.name}: keys in "
+                  f"{len(resource.namespaces)} namespaces")
             continue
-        prose = (mine_prose(features, row.get("usedBy") or []) if features
-                 else Prose())
         doc = json.loads(path.read_text(encoding="utf-8"))
-        changes, unhandled, used = reconcile(doc, row, row_namespaces.pop(), contract,
-                                            displays, prose)
-        if used:
+        done = resource.reconcile(doc)
+        changes, unhandled = done.changes, done.unhandled
+        if done.used:
             # Only the prose facts actually relied on, and only the citations for
             # them, so the record carries no value this body does not use.
-            wanted = {u.split("'")[1] for u in used if "'" in u}
-            for citation in prose.citations:
+            wanted = {u.split("'")[1] for u in done.used if "'" in u}
+            for citation in resource.prose.citations:
                 if any(w in citation for w in wanted):
                     citations.append(f"{path.name}  <- {citation}")
         if changes:
