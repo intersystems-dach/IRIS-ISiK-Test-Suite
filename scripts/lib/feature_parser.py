@@ -530,7 +530,7 @@ def count_executed_cases(feature: Feature, predicate) -> int:
 # namespace this rig has not been told about still yields a key rather than
 # unrecognised text that seeds nothing. Whether a namespace is one the test
 # environment actually loads is checked where that is knowable - against the
-# baseKeys of the Tiger configuration, in extract_requirements.analyse.
+# baseKeys of the Tiger configuration, in extract_requirements.Extraction.analyse.
 #
 # Safe because it is measured, not assumed: every one of the 2107 `${...}`
 # occurrences in the 2.7.0 corpus and the 2323 in 3.0.9 is a test-data

@@ -61,6 +61,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+import dataclasses
 import json
 import re
 import sys
@@ -617,460 +618,478 @@ def load_basekeys(tiger_dir: Path) -> dict[str, str]:
     return out
 
 
-def load_testdata(
-    testdata_root: Path, level: str, basekeys: dict[str, str] | None = None
-) -> tuple[dict[str, object], dict[str, str]]:
-    """The suite's key->value contract for one level, plus which file defines each.
+@dataclasses.dataclass(frozen=True)
+class Extraction:
+    """One extraction: the corpus it reads, the test data staged for it, the levels.
 
-    Parsed with a deliberately minimal YAML reader rather than PyYAML: this module
-    is imported by tooling that must run on a bare deployment host, and these
-    files are flat ``key: value`` maps with comments - the one YAML shape that
-    needs no library. (99-check.sh separately parses them with PyYAML, so a file
-    that is *not* this shape is caught there rather than silently misread here.)
+    These four facts are fixed for the whole extraction - the feature tree, the
+    staged test data, the tag expression that puts a case in scope at each level,
+    and the namespace each test-data file is loaded under - so they are stated
+    once here rather than travelling together through every step that needs one
+    of them.
 
-    Quoting is the one piece of real YAML syntax these files use, and it has to be
-    honoured rather than passed through. Seven keys are written quoted so that YAML
-    does not coerce them to another type:
-
-        slot-read-start: "2027-01-01"           # else a YAML 1.1 date, not a string
-        appointment-book-datetime-start: "2027-01-01T11:05:00Z"
-
-    Tiger loads these with snakeyaml, which strips the quotes, so the step
-    ``start.toString().contains('${data.slot-read-start}')`` is sent as
-    ``contains('2027-01-01')``. Taking the raw characters instead would record the
-    required literal as ``"2027-01-01"`` *with* the quote marks - a value no
-    conformant instance can contain - and the seed data would then be authored to
-    satisfy a requirement the suite never makes, or reported as failing one it does.
+    `basekeys` is None for suite generation 2.x, which has the single namespace
+    `data` and no Tiger configuration to read one from.
     """
-    values: dict[str, object] = {}
-    origin: dict[str, str] = {}
-    d = testdata_root / level
-    if not d.is_dir():
-        return values, origin
-    for path in sorted(d.glob("*.yaml")):
-        # The namespace this file's keys live in. Absent a configuration to read
-        # it from, `data` - the single namespace of suite 2.x.
-        if basekeys is None:
-            ns = "data"
-        else:
-            ns = basekeys.get(f"{level}/{path.name}")
-            if ns is None:
-                sys.exit(
-                    f"{path} is staged as test data but no Tiger configuration "
-                    f"loads it, so the namespace its keys live in is unknown. "
-                    f"Either add it to the configuration template or remove it."
-                )
-        for raw in path.read_text(encoding="utf-8").splitlines():
-            line = raw.rstrip()
-            if not line or line.lstrip().startswith("#") or ":" not in line:
-                continue
-            if line[:1] in (" ", "\t", "-"):
-                continue
-            key, _, val = line.partition(":")
-            val = val.strip()
-            if val.startswith("#"):
-                val = ""
-            # A trailing comment after an unquoted scalar is not part of the value.
-            # Checked before dequoting so that a `#` inside a quoted value survives.
-            elif not val[:1] in ("'", '"') and " #" in val:
-                val = val.split(" #", 1)[0].rstrip()
-            elif len(val) >= 2 and val[0] == val[-1] and val[0] in ("'", '"'):
-                val = val[1:-1]
-            qualified = f"{ns}.{key.strip()}"
-            values[qualified] = val
-            origin[qualified] = path.name
-    return values, origin
 
+    features_root: Path
+    testdata_root: Path
+    tag_expr: dict[str, str]
+    basekeys: dict[str, str] | None = None
 
-def analyse(features_root: Path, testdata_root: Path, tag_expr: dict[str, str],
-            basekeys: dict[str, str] | None = None) -> dict:
-    features = load_features(features_root)
+    def staged_contract(self, level: str) -> tuple[dict[str, object], dict[str, str]]:
+        """The suite's key->value contract for one level, plus which file defines each.
 
-    preds = {lvl: parse_tag_expression(expr) for lvl, expr in tag_expr.items()}
-    testdata = {lvl: load_testdata(testdata_root, lvl, basekeys) for lvl in tag_expr}
+        Parsed with a deliberately minimal YAML reader rather than PyYAML: this module
+        is imported by tooling that must run on a bare deployment host, and these
+        files are flat ``key: value`` maps with comments - the one YAML shape that
+        needs no library. (99-check.sh separately parses them with PyYAML, so a file
+        that is *not* this shape is caught there rather than silently misread here.)
 
-    # --- Does the corpus reference a namespace nothing loads? ------------------
-    # KEY matches a namespace by shape, so an unexpected one yields keys rather
-    # than unrecognised text. That is the safe failure mode, but it must not pass
-    # silently: a namespace no configuration loads cannot resolve, and every key
-    # in it would reach the system under test as the literal string
-    # "${namespace.key}" - a request that fails for a reason which has nothing to
-    # do with conformance.
-    if basekeys is not None:
-        declared = set(basekeys.values())
-        seen: dict[str, set[str]] = collections.defaultdict(set)
-        for f in features:
-            for key in data_keys_in(f.text):
-                ns = key.split(".", 1)[0]
-                if ns not in declared:
-                    seen[ns].add(f.rel)
-        if seen:
-            detail = "\n".join(
-                f"    ${{{ns}.*}} in {len(files)} feature file(s), e.g. {sorted(files)[0]}"
-                for ns, files in sorted(seen.items())
-            )
-            sys.exit(
-                "the feature corpus references test-data namespaces that no Tiger "
-                "configuration loads:\n" + detail + "\n"
-                f"  configured namespaces: {', '.join(sorted(declared))}\n"
-                "  Every key in an unloaded namespace reaches the system under test "
-                "as a literal\n  placeholder. Add the module's file and baseKey to the "
-                "configuration template."
-            )
+        Quoting is the one piece of real YAML syntax these files use, and it has to be
+        honoured rather than passed through. Seven keys are written quoted so that YAML
+        does not coerce them to another type:
 
-    out: dict = {
-        "featuresRoot": str(features_root),
-        "tagExpressions": tag_expr,
-        "features": [],
-        "levels": {},
-    }
+            slot-read-start: "2027-01-01"           # else a YAML 1.1 date, not a string
+            appointment-book-datetime-start: "2027-01-01T11:05:00Z"
 
-    # --- Resource types are resolved per LEVEL, not per feature ---------------
-    # A key denotes one resource within its level: patient-read-id is the same
-    # Patient whether Patient-Read reads it directly or Coverage-Search asserts a
-    # reference to it. So evidence from any feature at that level applies to all
-    # of them. Doing this per feature instead would leave 34 of Stufe 3's 65
-    # ID-shaped keys untyped, purely because the feature that happens to state the
-    # type is not the feature being rendered - Patient-Search only ever writes
-    # `?_id=${data.patient-read-id}`, which this deliberately does not read as a
-    # type declaration.
-    #
-    # Merging across features is only safe because it is checked: a key that
-    # collects two different types would mean the merge is invalid for that key,
-    # and rather than silently picking one, it is refused. There are no such keys
-    # in 2.7.0 - both levels come out clean - so this is a guard against a future
-    # release, not a workaround for the present one.
-    #
-    # The evidence corpus is the feature text *plus* the bodies of the fixtures it
-    # sends - see read_fixtures for why omitting the latter loses two in-scope
-    # resources outright.
-    level_types: dict[str, dict[str, set[str]]] = {}
-    type_evidence: dict[tuple[str, str], dict[str, list[str]]] = {}
-
-    # Per feature: the fixture bodies it sends, the keys those bodies use, and the
-    # keys naming a fixture's own ID. Computed once here because both the type walk
-    # below and the per-feature record further down need them.
-    fixture_info: dict[str, tuple[str, set[str], set[str]]] = {}
-    for f in features:
-        rels = sorted({p for p in RE_FIXTURE.findall(f.text) if "<" not in p})
-        body, own = read_fixtures(features_root, rels)
-        fixture_info[f.rel] = (body, data_keys_in(body), own)
-
-    for f in features:
-        acc = level_types.setdefault(f.level, collections.defaultdict(set))
-        for rule, rx in TYPE_RULES:
-            for rtype, key in rx.findall(f.text):
-                if rtype in NOT_A_TYPE or not rtype[:1].isupper():
-                    continue
-                acc[key].add(rtype)
-                where = type_evidence.setdefault((f.level, key), collections.defaultdict(list))
-                where[rtype].append(f"{rule} in {f.rel}")
-        body, _keys, own = fixture_info[f.rel]
-        for key, types in infer_fixture_types(body, own).items():
-            acc[key].update(types)
-            where = type_evidence.setdefault((f.level, key), collections.defaultdict(list))
-            for rtype in types:
-                where[rtype].append(f"fixture-reference in {f.rel}")
-
-    conflicts = {
-        f"{level}:{key}": {t: sorted(set(v))[:3] for t, v in type_evidence[(level, key)].items()}
-        for level, keys in level_types.items()
-        for key, types in keys.items()
-        if len(types) > 1
-    }
-    if conflicts:
-        raise SystemExit(
-            "these ${data.*} keys are used with more than one FHIR resource type, so "
-            "one key does not denote one resource and this extractor's level-wide "
-            "type merge is invalid for them. Resolve by hand before trusting the "
-            "inventory:\n" + json.dumps(conflicts, indent=2)
-        )
-
-    # Feature tag -> rel path, so a prerequisite named in prose can be resolved to
-    # the file that defines it. Built per level: Stufe 3 and Stufe 5 both have a
-    # @Patient-Read, and they are different features.
-    by_tag: dict[tuple[str, str], str] = {}
-    for f in features:
-        for t in f.tags:
-            if t.lower() not in {"@stufe3", "@stufe5", "@mandatory", "@optional", "@disabled"} \
-               and t.lstrip("@") not in {f.module, "Basis", "Basismodul"}:
-                by_tag.setdefault((f.level, t.lower()), f.rel)
-
-    for f in features:
-        pred = preds.get(f.level)
-        if pred is None:
-            raise SystemExit(f"no tag expression configured for level {f.level!r} ({f.rel})")
-
-        values, origin = testdata[f.level]
-        types = level_types[f.level]
-        runtime = runtime_keys_in(f.text)
-
-        # In scope = at least one non-precondition case survives the tag filter.
-        # Computed per case rather than per file, because a mandatory feature can
-        # hold @Optional scenarios and vice versa.
-        assertive = count_asserting_cases(f, pred)
-        executed = count_executed_cases(f, pred)
-
-        profiles: dict[str, set[str]] = collections.defaultdict(set)
-        for module, canonical in RE_PROFILE_FULL.findall(f.text):
-            profiles[canonical].add(module)
-        short = set(RE_PROFILE_SHORT.findall(f.text))
-
-        prereqs: set[str] = set()
-        prose_blocks = []
-        prose_keys: set[str] = set()
-        for scenario in f.precondition_scenarios:
-            # Steps in source order, so the requirement sentence
-            # ("Testbeschreibung: ..." / "the Test Description: ...") precedes the
-            # data prose exactly as the feature file states it. Order matters here
-            # because both are quoted into the requirement tables and the gap
-            # report, where the sentence is the heading the prose explains.
-            for step in scenario.steps:
-                if "Test Description" in step.text or "Testbeschreibung" in step.text:
-                    # The argument is the whole quoted string. Matched greedily to
-                    # the final quote: several of these sentences contain quoted
-                    # words themselves ("... the status 'entered-in-error' ...").
-                    m = re.search(r"[\"'](.*)[\"']\s*$", step.text)
-                    if m:
-                        prose_blocks.append({
-                            "scenario": scenario.name,
-                            "line": step.line,
-                            "description": m.group(1),
-                        })
-                if not step.docstring:
-                    continue
-                prose_blocks.append({
-                    "scenario": scenario.name,
-                    "line": step.docstring_line,
-                    "text": step.docstring,
-                })
-                for m in RE_PREREQ_EN.finditer(step.docstring):
-                    prereqs.update(split_prereqs(m.group(1)))
-                for m in RE_PREREQ_DE.finditer(step.docstring):
-                    prereqs.update(split_prereqs(m.group(1) or m.group(2) or ""))
-                prose_keys.update(RE_PROSE_KEY.findall(step.docstring))
-
-        # Tags that only match because feature_parser normalises them. Surfaced so
-        # the four "@Precondition:" spellings appear in the documentation as an
-        # upstream defect instead of being silently absorbed. See
-        # Scenario.is_precondition for why normalising is nevertheless correct.
-        tag_defects = sorted({
-            t for s in f.scenarios for t in s.tags
-            if t != t.rstrip(":") and t.lower().rstrip(":") in ("@precondition", "@vorbedingung")
-        })
-
-        attributed = attribute_profiles(f)
-        asserted = attribute_assertions(f, values)
-        fixture_body, fixture_keys, fixture_own = fixture_info[f.rel]
-
-        # Keys a fixture body uses that the feature text never mentions. They are
-        # real uses - Tiger resolves them when it renders the payload - so leaving
-        # them out reports them as "defined but never used" and, worse, leaves the
-        # resources they name out of the inventory. The fixtures' own IDs are
-        # excluded: those are resources the suite creates, not ones we seed.
-        keys = {}
-        for key in sorted(data_keys_in(f.text) | (fixture_keys - fixture_own)):
-            keys[key] = {
-                "assertions": asserted.get(key, []),
-                "resourceTypes": sorted(types.get(key, ())),
-                "value": values.get(key),
-                "definedIn": origin.get(key),
-                "definedButEmpty": key in values and values[key] == "",
-                "setAtRuntime": key in runtime,
-                "namedInPrecondition": key in prose_keys,
-                "usedOnlyInFixtureBody": key not in data_keys_in(f.text),
-                "mustConformTo": sorted(attributed[key]["canonical"]) if key in attributed else [],
-                "mustConformToByName": sorted(attributed[key]["byName"]) if key in attributed else [],
-                "readAtInstanceLevel": bool(attributed[key]["fetched"]) if key in attributed else False,
-            }
-
-        # Outline placeholders (`fixtures/<inputFile>`) are resolved per Examples
-        # row, so the literal is not a path. Excluded rather than reported missing.
-        fixtures = sorted({p for p in RE_FIXTURE.findall(f.text) if "<" not in p})
-
-        # The URL of every write step, so the inventory can tell which resources a
-        # feature overwrites with a fixture body rather than reading as seeded.
-        write_targets = [
-            m.group(1)
-            for s in f.scenarios for st in s.steps
-            for m in [re.search(r'(?:PUT|POST) request to "(http://fhirserver/[^"]+)"', st.full)]
-            if m
-        ]
-
-        out["features"].append({
-            "rel": f.rel,
-            "level": f.level,
-            "module": f.module,
-            "name": f.name,
-            "tags": f.tags,
-            "language": f.language or "de (English keywords, German prose)",
-            "casesExecuted": executed,
-            "casesAssertive": assertive,
-            "inScope": assertive > 0,
-            "disabled": any(t.lower() == "@disabled" for t in f.tags),
-            "scenarioCount": len(f.test_scenarios),
-            "preconditionBlocks": prose_blocks,
-            "malformedTags": tag_defects,
-            "prerequisites": sorted(prereqs),
-            "prerequisiteFiles": sorted(
-                {by_tag[(f.level, "@" + p.lower())] for p in prereqs
-                 if (f.level, "@" + p.lower()) in by_tag}
-            ),
-            "dataKeys": keys,
-            "profiles": {c: sorted(m) for c, m in sorted(profiles.items())},
-            "profilesByName": sorted(short),
-            "fixtures": fixtures,
-            "fixtureOwnIdKeys": sorted(fixture_own),
-            "writeTargets": write_targets,
-        })
-
-    # --- Per-level rollup -----------------------------------------------------
-    for level in sorted({f["level"] for f in out["features"]}):
-        feats = [f for f in out["features"] if f["level"] == level]
-        values, origin = testdata[level]
-
-        # The fabrication work list: one entry per resource that must exist.
-        # Grouped by (type, id) rather than by key, because several keys point at
-        # one resource - patient-read-id and medication-patient-id are both
-        # Patient-Read-Example in the Stufe 5 contract, and fabricating it twice
-        # would be a second, conflicting definition of the same instance.
-        inventory: dict[tuple[str, str], dict] = {}
-        untyped: dict[str, dict] = {}
-        for f in feats:
-            for key, info in f["dataKeys"].items():
-                value = info["value"]
-                if info["setAtRuntime"] or value in (None, ""):
-                    continue
-                if not info["resourceTypes"]:
-                    # Recorded, not dropped: an untyped key with an ID-shaped
-                    # value still needs a resource, the type just has to come
-                    # from the prose. Making the author supply it beats guessing.
-                    if key.endswith(("-id", "-Id")):
-                        entry = untyped.setdefault(key, {"value": value, "usedBy": [], "inScope": False})
-                        entry["usedBy"].append(f["rel"])
-                        entry["inScope"] |= f["inScope"]
-                    continue
-                for rtype in info["resourceTypes"]:
-                    entry = inventory.setdefault((rtype, str(value)), {
-                        "resourceType": rtype,
-                        "id": str(value),
-                        "keys": [],
-                        "usedBy": [],
-                        "profiles": [],
-                        "profileNames": [],
-                        "inScope": False,
-                        "overwrittenByFixture": False,
-                        "readAtInstanceLevel": False,
-                        "assertions": [],
-                    })
-                    entry["readAtInstanceLevel"] |= info["readAtInstanceLevel"]
-                    # Deduplicated on the assertion itself, not on (feature, line):
-                    # the same FHIRPath is asserted about Patient-Read-Example in
-                    # several features, and the author needs the requirement once.
-                    # The first occurrence keeps its citation, so every requirement
-                    # still points at one real line in one real feature file.
-                    seen_asserts = {_assert_sig(e) for e in entry["assertions"]}
-                    for a in info["assertions"]:
-                        if _assert_sig(a) in seen_asserts:
-                            continue
-                        seen_asserts.add(_assert_sig(a))
-                        entry["assertions"].append({**a, "feature": f["rel"]})
-                    # A feature that PUTs one of the suite's own fixture bodies to
-                    # this resource's URL replaces its content. Only the ID and the
-                    # type are then requirements on our seed data - which is worth
-                    # flagging, because these rows have no profile attributed and
-                    # would otherwise read as an extraction gap.
-                    if f["fixtures"] and any(
-                        f'/{rtype}/${{data.{key}}}' in step
-                        for step in (f["writeTargets"] or [])
-                    ):
-                        entry["overwrittenByFixture"] = True
-                    if key not in entry["keys"]:
-                        entry["keys"].append(key)
-                    if f["rel"] not in entry["usedBy"]:
-                        entry["usedBy"].append(f["rel"])
-                    entry["inScope"] |= f["inScope"]
-                    # Profiles attributed to THIS key by attribute_profiles, not
-                    # every profile the feature happens to mention: a feature that
-                    # reads a Patient also asserts the core Bundle profile on its
-                    # search results, and listing that against the Patient would
-                    # send the author fabricating to the wrong specification.
-                    for canonical in info["mustConformTo"]:
-                        if canonical not in entry["profiles"]:
-                            entry["profiles"].append(canonical)
-                    for name in info["mustConformToByName"]:
-                        if name not in entry["profileNames"]:
-                            entry["profileNames"].append(name)
-
-        used = set()
-        for f in feats:
-            used.update(f["dataKeys"])
-        runtime_all = set()
-        for f in feats:
-            runtime_all.update(k for k, v in f["dataKeys"].items() if v["setAtRuntime"])
-
-        # Keys that name a fixture's *own* ID. They are excluded from `dataKeys`
-        # (see the per-feature `keys` construction) and so fall out of `used`,
-        # which would otherwise report them as "defined but never referenced" -
-        # a claim that is false in the first clause and right in the second. They
-        # ARE referenced, by the fixture body the suite sends; what makes them
-        # need no seed resource is that the suite creates them, not that nothing
-        # mentions them. Reported separately so the distinction survives into the
-        # documentation: seeding one of these would pre-empt the Create under test.
-        own_id_keys = set()
-        for f in feats:
-            own_id_keys.update(f["fixtureOwnIdKeys"])
-        own_id_keys &= set(values)
-
-        # Why a row can legitimately carry no profile. Computed once here so that
-        # the inventory explains every such row instead of leaving the reader to
-        # decide whether it is an extraction gap. The three causes are distinct
-        # and each has a different consequence for the author:
-        #   fixture-body  the suite PUTs its own payload over this resource, so
-        #                 only its ID and type are requirements on our seed data
-        #   never-read    the resource is only a reference target or a search hit;
-        #                 no `conforms to profile` step can ever apply to it, so
-        #                 its content requirement lives solely in the prose
-        #   not-asserted  it IS read at instance level, yet no profile assertion
-        #                 follows. In 2.7.0 this is the three commented-out
-        #                 assertions (RiskAssessment-Read / -Search) plus reads
-        #                 that only check individual elements. Author to the
-        #                 profile the prose names.
-        for r in inventory.values():
-            if r["profiles"] or r["profileNames"]:
-                r["noProfileReason"] = None
-            elif r["overwrittenByFixture"]:
-                r["noProfileReason"] = "fixture-body"
-            elif not r["readAtInstanceLevel"]:
-                r["noProfileReason"] = "never-read"
+        Tiger loads these with snakeyaml, which strips the quotes, so the step
+        ``start.toString().contains('${data.slot-read-start}')`` is sent as
+        ``contains('2027-01-01')``. Taking the raw characters instead would record the
+        required literal as ``"2027-01-01"`` *with* the quote marks - a value no
+        conformant instance can contain - and the seed data would then be authored to
+        satisfy a requirement the suite never makes, or reported as failing one it does.
+        """
+        testdata_root, basekeys = self.testdata_root, self.basekeys
+        values: dict[str, object] = {}
+        origin: dict[str, str] = {}
+        d = testdata_root / level
+        if not d.is_dir():
+            return values, origin
+        for path in sorted(d.glob("*.yaml")):
+            # The namespace this file's keys live in. Absent a configuration to read
+            # it from, `data` - the single namespace of suite 2.x.
+            if basekeys is None:
+                ns = "data"
             else:
-                r["noProfileReason"] = "not-asserted"
+                ns = basekeys.get(f"{level}/{path.name}")
+                if ns is None:
+                    sys.exit(
+                        f"{path} is staged as test data but no Tiger configuration "
+                        f"loads it, so the namespace its keys live in is unknown. "
+                        f"Either add it to the configuration template or remove it."
+                    )
+            for raw in path.read_text(encoding="utf-8").splitlines():
+                line = raw.rstrip()
+                if not line or line.lstrip().startswith("#") or ":" not in line:
+                    continue
+                if line[:1] in (" ", "\t", "-"):
+                    continue
+                key, _, val = line.partition(":")
+                val = val.strip()
+                if val.startswith("#"):
+                    val = ""
+                # A trailing comment after an unquoted scalar is not part of the value.
+                # Checked before dequoting so that a `#` inside a quoted value survives.
+                elif not val[:1] in ("'", '"') and " #" in val:
+                    val = val.split(" #", 1)[0].rstrip()
+                elif len(val) >= 2 and val[0] == val[-1] and val[0] in ("'", '"'):
+                    val = val[1:-1]
+                qualified = f"{ns}.{key.strip()}"
+                values[qualified] = val
+                origin[qualified] = path.name
+        return values, origin
 
-        out["levels"][level] = {
-            "features": len(feats),
-            "featuresInScope": sum(1 for f in feats if f["inScope"]),
-            "casesExecuted": sum(f["casesExecuted"] for f in feats),
-            "casesAssertive": sum(f["casesAssertive"] for f in feats),
-            "keysDefined": len(values),
-            "keysUsed": len(used),
-            "keysUnused": sorted(set(values) - used - own_id_keys),
-            "keysCreatedByFixture": sorted(own_id_keys - used),
-            "keysUndefined": sorted(k for k in used if k not in values and k not in runtime_all),
-            "keysAtRuntime": sorted(runtime_all),
-            "resources": [inventory[k] for k in sorted(inventory)],
-            "untypedIdKeys": untyped,
-            "malformedTags": {f["rel"]: f["malformedTags"] for f in feats if f["malformedTags"]},
-            "modules": {
-                module: {
-                    "features": sum(1 for f in feats if f["module"] == module),
-                    "casesExecuted": sum(f["casesExecuted"] for f in feats if f["module"] == module),
-                    "casesAssertive": sum(f["casesAssertive"] for f in feats if f["module"] == module),
-                }
-                for module in sorted({f["module"] for f in feats})
-            },
+    def analyse(self) -> dict:
+        features_root, tag_expr, basekeys = (
+            self.features_root, self.tag_expr, self.basekeys)
+        features = load_features(features_root)
+
+        preds = {lvl: parse_tag_expression(expr) for lvl, expr in tag_expr.items()}
+        testdata = {lvl: self.staged_contract(lvl) for lvl in tag_expr}
+
+        # --- Does the corpus reference a namespace nothing loads? ------------------
+        # KEY matches a namespace by shape, so an unexpected one yields keys rather
+        # than unrecognised text. That is the safe failure mode, but it must not pass
+        # silently: a namespace no configuration loads cannot resolve, and every key
+        # in it would reach the system under test as the literal string
+        # "${namespace.key}" - a request that fails for a reason which has nothing to
+        # do with conformance.
+        if basekeys is not None:
+            declared = set(basekeys.values())
+            seen: dict[str, set[str]] = collections.defaultdict(set)
+            for f in features:
+                for key in data_keys_in(f.text):
+                    ns = key.split(".", 1)[0]
+                    if ns not in declared:
+                        seen[ns].add(f.rel)
+            if seen:
+                detail = "\n".join(
+                    f"    ${{{ns}.*}} in {len(files)} feature file(s), e.g. {sorted(files)[0]}"
+                    for ns, files in sorted(seen.items())
+                )
+                sys.exit(
+                    "the feature corpus references test-data namespaces that no Tiger "
+                    "configuration loads:\n" + detail + "\n"
+                    f"  configured namespaces: {', '.join(sorted(declared))}\n"
+                    "  Every key in an unloaded namespace reaches the system under test "
+                    "as a literal\n  placeholder. Add the module's file and baseKey to the "
+                    "configuration template."
+                )
+
+        out: dict = {
+            "featuresRoot": str(features_root),
+            "tagExpressions": tag_expr,
+            "features": [],
+            "levels": {},
         }
 
-    return out
+        # --- Resource types are resolved per LEVEL, not per feature ---------------
+        # A key denotes one resource within its level: patient-read-id is the same
+        # Patient whether Patient-Read reads it directly or Coverage-Search asserts a
+        # reference to it. So evidence from any feature at that level applies to all
+        # of them. Doing this per feature instead would leave 34 of Stufe 3's 65
+        # ID-shaped keys untyped, purely because the feature that happens to state the
+        # type is not the feature being rendered - Patient-Search only ever writes
+        # `?_id=${data.patient-read-id}`, which this deliberately does not read as a
+        # type declaration.
+        #
+        # Merging across features is only safe because it is checked: a key that
+        # collects two different types would mean the merge is invalid for that key,
+        # and rather than silently picking one, it is refused. There are no such keys
+        # in 2.7.0 - both levels come out clean - so this is a guard against a future
+        # release, not a workaround for the present one.
+        #
+        # The evidence corpus is the feature text *plus* the bodies of the fixtures it
+        # sends - see read_fixtures for why omitting the latter loses two in-scope
+        # resources outright.
+        level_types: dict[str, dict[str, set[str]]] = {}
+        type_evidence: dict[tuple[str, str], dict[str, list[str]]] = {}
+
+        # Per feature: the fixture bodies it sends, the keys those bodies use, and the
+        # keys naming a fixture's own ID. Computed once here because both the type walk
+        # below and the per-feature record further down need them.
+        fixture_info: dict[str, tuple[str, set[str], set[str]]] = {}
+        for f in features:
+            rels = sorted({p for p in RE_FIXTURE.findall(f.text) if "<" not in p})
+            body, own = read_fixtures(features_root, rels)
+            fixture_info[f.rel] = (body, data_keys_in(body), own)
+
+        for f in features:
+            acc = level_types.setdefault(f.level, collections.defaultdict(set))
+            for rule, rx in TYPE_RULES:
+                for rtype, key in rx.findall(f.text):
+                    if rtype in NOT_A_TYPE or not rtype[:1].isupper():
+                        continue
+                    acc[key].add(rtype)
+                    where = type_evidence.setdefault((f.level, key), collections.defaultdict(list))
+                    where[rtype].append(f"{rule} in {f.rel}")
+            body, _keys, own = fixture_info[f.rel]
+            for key, types in infer_fixture_types(body, own).items():
+                acc[key].update(types)
+                where = type_evidence.setdefault((f.level, key), collections.defaultdict(list))
+                for rtype in types:
+                    where[rtype].append(f"fixture-reference in {f.rel}")
+
+        conflicts = {
+            f"{level}:{key}": {t: sorted(set(v))[:3] for t, v in type_evidence[(level, key)].items()}
+            for level, keys in level_types.items()
+            for key, types in keys.items()
+            if len(types) > 1
+        }
+        if conflicts:
+            raise SystemExit(
+                "these ${data.*} keys are used with more than one FHIR resource type, so "
+                "one key does not denote one resource and this extractor's level-wide "
+                "type merge is invalid for them. Resolve by hand before trusting the "
+                "inventory:\n" + json.dumps(conflicts, indent=2)
+            )
+
+        # Feature tag -> rel path, so a prerequisite named in prose can be resolved to
+        # the file that defines it. Built per level: Stufe 3 and Stufe 5 both have a
+        # @Patient-Read, and they are different features.
+        by_tag: dict[tuple[str, str], str] = {}
+        for f in features:
+            for t in f.tags:
+                if t.lower() not in {"@stufe3", "@stufe5", "@mandatory", "@optional", "@disabled"} \
+                   and t.lstrip("@") not in {f.module, "Basis", "Basismodul"}:
+                    by_tag.setdefault((f.level, t.lower()), f.rel)
+
+        for f in features:
+            pred = preds.get(f.level)
+            if pred is None:
+                raise SystemExit(f"no tag expression configured for level {f.level!r} ({f.rel})")
+
+            values, origin = testdata[f.level]
+            types = level_types[f.level]
+            runtime = runtime_keys_in(f.text)
+
+            # In scope = at least one non-precondition case survives the tag filter.
+            # Computed per case rather than per file, because a mandatory feature can
+            # hold @Optional scenarios and vice versa.
+            assertive = count_asserting_cases(f, pred)
+            executed = count_executed_cases(f, pred)
+
+            profiles: dict[str, set[str]] = collections.defaultdict(set)
+            for module, canonical in RE_PROFILE_FULL.findall(f.text):
+                profiles[canonical].add(module)
+            short = set(RE_PROFILE_SHORT.findall(f.text))
+
+            prereqs: set[str] = set()
+            prose_blocks = []
+            prose_keys: set[str] = set()
+            for scenario in f.precondition_scenarios:
+                # Steps in source order, so the requirement sentence
+                # ("Testbeschreibung: ..." / "the Test Description: ...") precedes the
+                # data prose exactly as the feature file states it. Order matters here
+                # because both are quoted into the requirement tables and the gap
+                # report, where the sentence is the heading the prose explains.
+                for step in scenario.steps:
+                    if "Test Description" in step.text or "Testbeschreibung" in step.text:
+                        # The argument is the whole quoted string. Matched greedily to
+                        # the final quote: several of these sentences contain quoted
+                        # words themselves ("... the status 'entered-in-error' ...").
+                        m = re.search(r"[\"'](.*)[\"']\s*$", step.text)
+                        if m:
+                            prose_blocks.append({
+                                "scenario": scenario.name,
+                                "line": step.line,
+                                "description": m.group(1),
+                            })
+                    if not step.docstring:
+                        continue
+                    prose_blocks.append({
+                        "scenario": scenario.name,
+                        "line": step.docstring_line,
+                        "text": step.docstring,
+                    })
+                    for m in RE_PREREQ_EN.finditer(step.docstring):
+                        prereqs.update(split_prereqs(m.group(1)))
+                    for m in RE_PREREQ_DE.finditer(step.docstring):
+                        prereqs.update(split_prereqs(m.group(1) or m.group(2) or ""))
+                    prose_keys.update(RE_PROSE_KEY.findall(step.docstring))
+
+            # Tags that only match because feature_parser normalises them. Surfaced so
+            # the four "@Precondition:" spellings appear in the documentation as an
+            # upstream defect instead of being silently absorbed. See
+            # Scenario.is_precondition for why normalising is nevertheless correct.
+            tag_defects = sorted({
+                t for s in f.scenarios for t in s.tags
+                if t != t.rstrip(":") and t.lower().rstrip(":") in ("@precondition", "@vorbedingung")
+            })
+
+            attributed = attribute_profiles(f)
+            asserted = attribute_assertions(f, values)
+            fixture_body, fixture_keys, fixture_own = fixture_info[f.rel]
+
+            # Keys a fixture body uses that the feature text never mentions. They are
+            # real uses - Tiger resolves them when it renders the payload - so leaving
+            # them out reports them as "defined but never used" and, worse, leaves the
+            # resources they name out of the inventory. The fixtures' own IDs are
+            # excluded: those are resources the suite creates, not ones we seed.
+            keys = {}
+            for key in sorted(data_keys_in(f.text) | (fixture_keys - fixture_own)):
+                keys[key] = {
+                    "assertions": asserted.get(key, []),
+                    "resourceTypes": sorted(types.get(key, ())),
+                    "value": values.get(key),
+                    "definedIn": origin.get(key),
+                    "definedButEmpty": key in values and values[key] == "",
+                    "setAtRuntime": key in runtime,
+                    "namedInPrecondition": key in prose_keys,
+                    "usedOnlyInFixtureBody": key not in data_keys_in(f.text),
+                    "mustConformTo": sorted(attributed[key]["canonical"]) if key in attributed else [],
+                    "mustConformToByName": sorted(attributed[key]["byName"]) if key in attributed else [],
+                    "readAtInstanceLevel": bool(attributed[key]["fetched"]) if key in attributed else False,
+                }
+
+            # Outline placeholders (`fixtures/<inputFile>`) are resolved per Examples
+            # row, so the literal is not a path. Excluded rather than reported missing.
+            fixtures = sorted({p for p in RE_FIXTURE.findall(f.text) if "<" not in p})
+
+            # The URL of every write step, so the inventory can tell which resources a
+            # feature overwrites with a fixture body rather than reading as seeded.
+            write_targets = [
+                m.group(1)
+                for s in f.scenarios for st in s.steps
+                for m in [re.search(r'(?:PUT|POST) request to "(http://fhirserver/[^"]+)"', st.full)]
+                if m
+            ]
+
+            out["features"].append({
+                "rel": f.rel,
+                "level": f.level,
+                "module": f.module,
+                "name": f.name,
+                "tags": f.tags,
+                "language": f.language or "de (English keywords, German prose)",
+                "casesExecuted": executed,
+                "casesAssertive": assertive,
+                "inScope": assertive > 0,
+                "disabled": any(t.lower() == "@disabled" for t in f.tags),
+                "scenarioCount": len(f.test_scenarios),
+                "preconditionBlocks": prose_blocks,
+                "malformedTags": tag_defects,
+                "prerequisites": sorted(prereqs),
+                "prerequisiteFiles": sorted(
+                    {by_tag[(f.level, "@" + p.lower())] for p in prereqs
+                     if (f.level, "@" + p.lower()) in by_tag}
+                ),
+                "dataKeys": keys,
+                "profiles": {c: sorted(m) for c, m in sorted(profiles.items())},
+                "profilesByName": sorted(short),
+                "fixtures": fixtures,
+                "fixtureOwnIdKeys": sorted(fixture_own),
+                "writeTargets": write_targets,
+            })
+
+        # --- Per-level rollup -----------------------------------------------------
+        for level in sorted({f["level"] for f in out["features"]}):
+            feats = [f for f in out["features"] if f["level"] == level]
+            values, origin = testdata[level]
+
+            # The fabrication work list: one entry per resource that must exist.
+            # Grouped by (type, id) rather than by key, because several keys point at
+            # one resource - patient-read-id and medication-patient-id are both
+            # Patient-Read-Example in the Stufe 5 contract, and fabricating it twice
+            # would be a second, conflicting definition of the same instance.
+            inventory: dict[tuple[str, str], dict] = {}
+            untyped: dict[str, dict] = {}
+            for f in feats:
+                for key, info in f["dataKeys"].items():
+                    value = info["value"]
+                    if info["setAtRuntime"] or value in (None, ""):
+                        continue
+                    if not info["resourceTypes"]:
+                        # Recorded, not dropped: an untyped key with an ID-shaped
+                        # value still needs a resource, the type just has to come
+                        # from the prose. Making the author supply it beats guessing.
+                        if key.endswith(("-id", "-Id")):
+                            entry = untyped.setdefault(key, {"value": value, "usedBy": [], "inScope": False})
+                            entry["usedBy"].append(f["rel"])
+                            entry["inScope"] |= f["inScope"]
+                        continue
+                    for rtype in info["resourceTypes"]:
+                        entry = inventory.setdefault((rtype, str(value)), {
+                            "resourceType": rtype,
+                            "id": str(value),
+                            "keys": [],
+                            "usedBy": [],
+                            "profiles": [],
+                            "profileNames": [],
+                            "inScope": False,
+                            "overwrittenByFixture": False,
+                            "readAtInstanceLevel": False,
+                            "assertions": [],
+                        })
+                        entry["readAtInstanceLevel"] |= info["readAtInstanceLevel"]
+                        # Deduplicated on the assertion itself, not on (feature, line):
+                        # the same FHIRPath is asserted about Patient-Read-Example in
+                        # several features, and the author needs the requirement once.
+                        # The first occurrence keeps its citation, so every requirement
+                        # still points at one real line in one real feature file.
+                        seen_asserts = {_assert_sig(e) for e in entry["assertions"]}
+                        for a in info["assertions"]:
+                            if _assert_sig(a) in seen_asserts:
+                                continue
+                            seen_asserts.add(_assert_sig(a))
+                            entry["assertions"].append({**a, "feature": f["rel"]})
+                        # A feature that PUTs one of the suite's own fixture bodies to
+                        # this resource's URL replaces its content. Only the ID and the
+                        # type are then requirements on our seed data - which is worth
+                        # flagging, because these rows have no profile attributed and
+                        # would otherwise read as an extraction gap.
+                        if f["fixtures"] and any(
+                            f'/{rtype}/${{data.{key}}}' in step
+                            for step in (f["writeTargets"] or [])
+                        ):
+                            entry["overwrittenByFixture"] = True
+                        if key not in entry["keys"]:
+                            entry["keys"].append(key)
+                        if f["rel"] not in entry["usedBy"]:
+                            entry["usedBy"].append(f["rel"])
+                        entry["inScope"] |= f["inScope"]
+                        # Profiles attributed to THIS key by attribute_profiles, not
+                        # every profile the feature happens to mention: a feature that
+                        # reads a Patient also asserts the core Bundle profile on its
+                        # search results, and listing that against the Patient would
+                        # send the author fabricating to the wrong specification.
+                        for canonical in info["mustConformTo"]:
+                            if canonical not in entry["profiles"]:
+                                entry["profiles"].append(canonical)
+                        for name in info["mustConformToByName"]:
+                            if name not in entry["profileNames"]:
+                                entry["profileNames"].append(name)
+
+            used = set()
+            for f in feats:
+                used.update(f["dataKeys"])
+            runtime_all = set()
+            for f in feats:
+                runtime_all.update(k for k, v in f["dataKeys"].items() if v["setAtRuntime"])
+
+            # Keys that name a fixture's *own* ID. They are excluded from `dataKeys`
+            # (see the per-feature `keys` construction) and so fall out of `used`,
+            # which would otherwise report them as "defined but never referenced" -
+            # a claim that is false in the first clause and right in the second. They
+            # ARE referenced, by the fixture body the suite sends; what makes them
+            # need no seed resource is that the suite creates them, not that nothing
+            # mentions them. Reported separately so the distinction survives into the
+            # documentation: seeding one of these would pre-empt the Create under test.
+            own_id_keys = set()
+            for f in feats:
+                own_id_keys.update(f["fixtureOwnIdKeys"])
+            own_id_keys &= set(values)
+
+            # Why a row can legitimately carry no profile. Computed once here so that
+            # the inventory explains every such row instead of leaving the reader to
+            # decide whether it is an extraction gap. The three causes are distinct
+            # and each has a different consequence for the author:
+            #   fixture-body  the suite PUTs its own payload over this resource, so
+            #                 only its ID and type are requirements on our seed data
+            #   never-read    the resource is only a reference target or a search hit;
+            #                 no `conforms to profile` step can ever apply to it, so
+            #                 its content requirement lives solely in the prose
+            #   not-asserted  it IS read at instance level, yet no profile assertion
+            #                 follows. In 2.7.0 this is the three commented-out
+            #                 assertions (RiskAssessment-Read / -Search) plus reads
+            #                 that only check individual elements. Author to the
+            #                 profile the prose names.
+            for r in inventory.values():
+                if r["profiles"] or r["profileNames"]:
+                    r["noProfileReason"] = None
+                elif r["overwrittenByFixture"]:
+                    r["noProfileReason"] = "fixture-body"
+                elif not r["readAtInstanceLevel"]:
+                    r["noProfileReason"] = "never-read"
+                else:
+                    r["noProfileReason"] = "not-asserted"
+
+            out["levels"][level] = {
+                "features": len(feats),
+                "featuresInScope": sum(1 for f in feats if f["inScope"]),
+                "casesExecuted": sum(f["casesExecuted"] for f in feats),
+                "casesAssertive": sum(f["casesAssertive"] for f in feats),
+                "keysDefined": len(values),
+                "keysUsed": len(used),
+                "keysUnused": sorted(set(values) - used - own_id_keys),
+                "keysCreatedByFixture": sorted(own_id_keys - used),
+                "keysUndefined": sorted(k for k in used if k not in values and k not in runtime_all),
+                "keysAtRuntime": sorted(runtime_all),
+                "resources": [inventory[k] for k in sorted(inventory)],
+                "untypedIdKeys": untyped,
+                "malformedTags": {f["rel"]: f["malformedTags"] for f in feats if f["malformedTags"]},
+                "modules": {
+                    module: {
+                        "features": sum(1 for f in feats if f["module"] == module),
+                        "casesExecuted": sum(f["casesExecuted"] for f in feats if f["module"] == module),
+                        "casesAssertive": sum(f["casesAssertive"] for f in feats if f["module"] == module),
+                    }
+                    for module in sorted({f["module"] for f in feats})
+                },
+            }
+
+        return out
 
 
 # -----------------------------------------------------------------------------
@@ -1391,12 +1410,13 @@ def main() -> int:
         if lvl not in all_tags:
             sys.exit(f"--levels names {lvl!r}, which is not an ISiK level this rig knows")
 
-    data = analyse(
-        args.features_root,
-        args.testdata_root,
-        {lvl: all_tags[lvl] for lvl in levels},
-        load_basekeys(args.tiger_templates) if args.tiger_templates else None,
+    extraction = Extraction(
+        features_root=args.features_root,
+        testdata_root=args.testdata_root,
+        tag_expr={lvl: all_tags[lvl] for lvl in levels},
+        basekeys=load_basekeys(args.tiger_templates) if args.tiger_templates else None,
     )
+    data = extraction.analyse()
     data["source"] = args.source_label or str(args.features_root)
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
