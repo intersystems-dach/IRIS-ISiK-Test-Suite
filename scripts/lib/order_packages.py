@@ -40,7 +40,8 @@ import time, so a declaration that names a semver range, an unpublished version,
 or a package this project excludes aborts the whole import. Those declarations are
 rewritten in the unpacked ``package.json`` files and every change is recorded in
 the plan under ``dependencyRewrites`` - see
-:func:`rewrite_unresolvable_dependencies`, which documents each case and its owner.
+:meth:`UnpackedPackages.make_dependencies_resolvable`, which documents each
+case and its owner.
 
 Cycles
 ------
@@ -72,6 +73,7 @@ are part of what the validator uses and thus part of the provenance record.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import os
 import sys
@@ -135,134 +137,150 @@ def read_package_json(pkg_dir: str) -> dict:
         fail(f"{path}: not valid JSON ({exc})")
 
 
-def rewrite_unresolvable_dependencies(
-    plan: dict, packages_dir: str, meta: dict[str, dict]
-) -> list[dict]:
-    """Make every declared dependency resolvable by IRIS, and record each change.
+@dataclasses.dataclass(frozen=True)
+class UnpackedPackages:
+    """The unpacked package tree, the plan that names it, and what it declares.
 
-    Why this is necessary
-    ---------------------
-    ``HS.FHIRMeta.Load.NpmLoader.coreVersion()`` walks the ``dependencies`` of
-    every package being imported and resolves each entry with an exact-id
-    ``HS.FHIRMeta.Storage.Package.GetById(name @ version)``. There is no semver
-    resolution and no tolerance for an absent entry: the first unresolvable
-    declaration aborts the entire import with ``ERROR #5809: Object to Load not
-    found``, after the namespace has already been created. Established by dumping
-    ``coreVersion()`` from irishealth 2026.2 and reproducing each abort.
-
-    Four declarations in the ISiK closure are unresolvable that way, and they do
-    not all have the same cause. The distinction matters because it decides who
-    owns the finding, so it is carried through into the plan as ``kind``:
-
-    ``wildcard``
-        ``de.gematik.isik-{medikation,terminplanung,vitalparameter,
-        dokumentenaustausch}#3.1.1`` declare ``de.gematik.isik-basismodul: 3.1.x``.
-        A wildcard patch range is **valid** under the FHIR NPM package spec, so
-        the packages are correct and the limitation is IRIS's: it does no semver
-        resolution. Rewritten to the matching version actually loaded (3.1.1).
-
-    ``absent-version``
-        ``hl7.fhir.uv.subscriptions-backport.r4#1.1.0`` declares
-        ``hl7.fhir.r4.core: 4.0.0``, a version HL7 never published (the registry
-        returns 404; R4 is 4.0.1). An upstream defect in that IG. Rewritten to the
-        loaded 4.0.1.
-
-    ``excluded-from-sut``
-        ``hl7.fhir.uv.sdc#3.0.0`` declares ``hl7.fhir.r4.examples#4.0.1``, which
-        this project deliberately does not load into the SUT (see
-        EXCLUDED_PACKAGE_TYPES). The edge is removed rather than repointed:
-        substituting a different package here would be a fabrication.
-
-    A dependency naming a *name* that is not loaded at all and is not excluded is
-    left alone and reported, not guessed at - it would mean the plan is missing a
-    package, which is a condition for a human to look at rather than for this
-    function to paper over.
-
-    What is rewritten
-    -----------------
-    The unpacked ``vendor/packages/<id>/package.json`` files, in place. Those are
-    what IRIS reads at import time; the ``.tgz`` payloads in ``vendor/tgz/`` are
-    **not** touched, so every SHA256 in ``MANIFEST.txt`` stays valid and continues
-    to attest the bytes as published. Every change is recorded in
-    ``dependencyRewrites`` in the plan, which is archived as evidence, so the
-    modified state of the tree is a declared property of the round.
+    The rewrite below needs all three, which is why they are one record rather
+    than three arguments: the plan states which packages each endpoint imports
+    and in which order, the directory is where each ``package.json`` is read and
+    written, and ``meta`` is that metadata as it now stands on disk - kept in
+    step by the rewrite, so a later step reads the tree as it is and not as it
+    was found.
     """
-    rewrites: list[dict] = []
 
-    for level, bucket in plan["endpoints"].items():
-        order = list(bucket["loadOrder"])
-        loaded = set(order)
-        by_name: dict[str, list[str]] = {}
-        for pkg_id in order:
-            by_name.setdefault(pkg_id.split("#", 1)[0], []).append(pkg_id)
+    plan: dict
+    directory: str
+    meta: dict[str, dict]
 
-        excluded_names = {e["id"].split("#", 1)[0] for e in plan.get("excludedPackages", [])}
+    def make_dependencies_resolvable(self) -> list[dict]:
+        """Make every declared dependency resolvable by IRIS, and record each change.
 
-        for pkg_id in order:
-            path = os.path.join(packages_dir, pkg_id, "package.json")
-            with open(path, encoding="utf-8") as fh:
-                doc = json.load(fh)
-            deps = doc.get("dependencies") or {}
-            changed = False
+        Why this is necessary
+        ---------------------
+        ``HS.FHIRMeta.Load.NpmLoader.coreVersion()`` walks the ``dependencies`` of
+        every package being imported and resolves each entry with an exact-id
+        ``HS.FHIRMeta.Storage.Package.GetById(name @ version)``. There is no semver
+        resolution and no tolerance for an absent entry: the first unresolvable
+        declaration aborts the entire import with ``ERROR #5809: Object to Load not
+        found``, after the namespace has already been created. Established by dumping
+        ``coreVersion()`` from irishealth 2026.2 and reproducing each abort.
 
-            for dep_name, dep_version in list(deps.items()):
-                if f"{dep_name}#{dep_version}" in loaded:
-                    continue
+        Four declarations in the ISiK closure are unresolvable that way, and they do
+        not all have the same cause. The distinction matters because it decides who
+        owns the finding, so it is carried through into the plan as ``kind``:
 
-                if dep_name in excluded_names:
-                    del deps[dep_name]
-                    kind, target = "excluded-from-sut", None
-                else:
-                    candidates = by_name.get(dep_name, [])
-                    if not candidates:
-                        # Not resolvable and not deliberately excluded: report and
-                        # leave it, so the import failure names the real problem
-                        # instead of this function having hidden it.
-                        print(
-                            f"  WARNING {level}: {pkg_id} depends on "
-                            f"{dep_name}#{dep_version}, which is neither loaded nor "
-                            "excluded - the IRIS import will fail on it",
-                            file=sys.stderr,
-                        )
+        ``wildcard``
+            ``de.gematik.isik-{medikation,terminplanung,vitalparameter,
+            dokumentenaustausch}#3.1.1`` declare ``de.gematik.isik-basismodul: 3.1.x``.
+            A wildcard patch range is **valid** under the FHIR NPM package spec, so
+            the packages are correct and the limitation is IRIS's: it does no semver
+            resolution. Rewritten to the matching version actually loaded (3.1.1).
+
+        ``absent-version``
+            ``hl7.fhir.uv.subscriptions-backport.r4#1.1.0`` declares
+            ``hl7.fhir.r4.core: 4.0.0``, a version HL7 never published (the registry
+            returns 404; R4 is 4.0.1). An upstream defect in that IG. Rewritten to the
+            loaded 4.0.1.
+
+        ``excluded-from-sut``
+            ``hl7.fhir.uv.sdc#3.0.0`` declares ``hl7.fhir.r4.examples#4.0.1``, which
+            this project deliberately does not load into the SUT (see
+            EXCLUDED_PACKAGE_TYPES). The edge is removed rather than repointed:
+            substituting a different package here would be a fabrication.
+
+        A dependency naming a *name* that is not loaded at all and is not excluded is
+        left alone and reported, not guessed at - it would mean the plan is missing a
+        package, which is a condition for a human to look at rather than for this
+        function to paper over.
+
+        What is rewritten
+        -----------------
+        The unpacked ``vendor/packages/<id>/package.json`` files, in place. Those are
+        what IRIS reads at import time; the ``.tgz`` payloads in ``vendor/tgz/`` are
+        **not** touched, so every SHA256 in ``MANIFEST.txt`` stays valid and continues
+        to attest the bytes as published. Every change is recorded in
+        ``dependencyRewrites`` in the plan, which is archived as evidence, so the
+        modified state of the tree is a declared property of the round.
+        """
+        rewrites: list[dict] = []
+
+        for level, bucket in self.plan["endpoints"].items():
+            order = list(bucket["loadOrder"])
+            loaded = set(order)
+            by_name: dict[str, list[str]] = {}
+            for pkg_id in order:
+                by_name.setdefault(pkg_id.split("#", 1)[0], []).append(pkg_id)
+
+            excluded_names = {e["id"].split("#", 1)[0]
+                              for e in self.plan.get("excludedPackages", [])}
+
+            for pkg_id in order:
+                path = os.path.join(self.directory, pkg_id, "package.json")
+                with open(path, encoding="utf-8") as fh:
+                    doc = json.load(fh)
+                deps = doc.get("dependencies") or {}
+                changed = False
+
+                for dep_name, dep_version in list(deps.items()):
+                    if f"{dep_name}#{dep_version}" in loaded:
                         continue
-                    # A wildcard range keeps the loaded version only if it matches
-                    # the fixed part; with one candidate per name in practice, the
-                    # highest is the match. `max` also covers the collision case,
-                    # where several versions of a name are loaded.
-                    target = max(
-                        candidates, key=lambda c: version_key(c.split("#", 1)[1])
-                    ).split("#", 1)[1]
-                    # A version whose components are not all numeric is a range
-                    # (`3.1.x`); one that is numeric throughout but absent from the
-                    # registry is an upstream mistake. Different owners, so the
-                    # distinction is recorded rather than flattened.
-                    is_range = not all(p.isdigit() for p in dep_version.split("."))
-                    kind = "wildcard" if is_range else "absent-version"
-                    deps[dep_name] = target
 
-                changed = True
-                rewrites.append(
-                    {
-                        "level": level,
-                        "package": pkg_id,
-                        "dependency": dep_name,
-                        "from": f"{dep_name}#{dep_version}",
-                        "to": f"{dep_name}#{target}" if target else None,
-                        "kind": kind,
-                        "reason": REWRITE_REASONS[kind],
-                    }
-                )
+                    if dep_name in excluded_names:
+                        del deps[dep_name]
+                        kind, target = "excluded-from-sut", None
+                    else:
+                        candidates = by_name.get(dep_name, [])
+                        if not candidates:
+                            # Not resolvable and not deliberately excluded: report and
+                            # leave it, so the import failure names the real problem
+                            # instead of this function having hidden it.
+                            print(
+                                f"  WARNING {level}: {pkg_id} depends on "
+                                f"{dep_name}#{dep_version}, which is neither "
+                                "loaded nor excluded - the IRIS import will "
+                                "fail on it",
+                                file=sys.stderr,
+                            )
+                            continue
+                        # A wildcard range keeps the loaded version only if it matches
+                        # the fixed part; with one candidate per name in practice, the
+                        # highest is the match. `max` also covers the collision case,
+                        # where several versions of a name are loaded.
+                        target = max(
+                            candidates, key=lambda c: version_key(c.split("#", 1)[1])
+                        ).split("#", 1)[1]
+                        # A version whose components are not all numeric is a range
+                        # (`3.1.x`); one that is numeric throughout but absent from the
+                        # registry is an upstream mistake. Different owners, so the
+                        # distinction is recorded rather than flattened.
+                        is_range = not all(p.isdigit() for p in dep_version.split("."))
+                        kind = "wildcard" if is_range else "absent-version"
+                        deps[dep_name] = target
 
-            if changed:
-                doc["dependencies"] = deps
-                tmp = path + ".tmp"
-                with open(tmp, "w", encoding="utf-8") as fh:
-                    json.dump(doc, fh, indent=2)
-                    fh.write("\n")
-                os.replace(tmp, path)
-                meta[pkg_id] = doc
+                    changed = True
+                    rewrites.append(
+                        {
+                            "level": level,
+                            "package": pkg_id,
+                            "dependency": dep_name,
+                            "from": f"{dep_name}#{dep_version}",
+                            "to": f"{dep_name}#{target}" if target else None,
+                            "kind": kind,
+                            "reason": REWRITE_REASONS[kind],
+                        }
+                    )
 
-    return rewrites
+                if changed:
+                    doc["dependencies"] = deps
+                    tmp = path + ".tmp"
+                    with open(tmp, "w", encoding="utf-8") as fh:
+                        json.dump(doc, fh, indent=2)
+                        fh.write("\n")
+                    os.replace(tmp, path)
+                    self.meta[pkg_id] = doc
+
+        return rewrites
 
 
 def main() -> int:
@@ -384,7 +402,9 @@ def main() -> int:
               f"(first: {ordered[0]}, roots: {len(roots)})")
 
     # --- 2b. Make declared dependencies resolvable by IRIS -------------------
-    rewrites = rewrite_unresolvable_dependencies(plan, args.packages_dir, meta)
+    # The load order is settled above, which is what this step reads.
+    tree = UnpackedPackages(plan, args.packages_dir, meta)
+    rewrites = tree.make_dependencies_resolvable()
     plan["dependencyRewrites"] = rewrites
     for r in rewrites:
         note = f"{r['from']} -> {r['to']}" if r["to"] else f"{r['from']} -> removed"

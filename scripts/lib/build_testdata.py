@@ -388,8 +388,9 @@ def pattern_resolver(packages_dir: Path, pins: tuple[str, ...]):
 OVERLAY_GLOB = "zz-upstream-key-defects"
 
 
-def load_overlay(level: str, config_dir: Path, staged: Path) -> dict[str, str]:
-    """Qualified `<ns>.<key>` -> value, from this project's own overlay files.
+@dataclass(frozen=True)
+class Overlay:
+    """This project's own test-data overlay files, as the suite will read them.
 
     testdata_contract() reads the contract out of `requirements.json`, i.e. out
     of the keys the suite's *feature files* reference. That is the right source
@@ -422,34 +423,52 @@ def load_overlay(level: str, config_dir: Path, staged: Path) -> dict[str, str]:
     documents still comes from `requirements.json`, which the caller enforces by
     merging this result *under* the contract.
 
-    Returns an empty mapping when the configuration has not been rendered yet, so
-    that `--check-only` on a clean tree still works; a placeholder that needed an
-    overlay key then reports unresolved, exactly as before.
+    The two directories are where those two statements live: the rendered
+    configuration, and the staged tree the suite is given. Both are settings of
+    the run, so they are held here, and the level is what varies.
     """
-    cfg_path = config_dir / f"tiger-isik-{level.lower()}.yaml"
-    if not cfg_path.is_file():
-        return {}
-    try:
-        import yaml
-    except ImportError:                                  # pragma: no cover
-        return {}
-    cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
-    out: dict[str, str] = {}
-    for entry in cfg.get("additionalConfigurationFiles") or []:
-        name = entry.get("filename") or ""
-        base = entry.get("baseKey")
-        if not base or OVERLAY_GLOB not in Path(name).name:
-            continue
-        # The configuration names the file as the container sees it
-        # (`testdata/<Level>/<file>`); on the host the staged copy is the same
-        # path under run/testdata/, which is the copy the suite is given.
-        src = staged / Path(name).relative_to("testdata")
-        if not src.is_file():
-            continue
-        for key, value in (yaml.safe_load(src.read_text(encoding="utf-8")) or {}).items():
-            if value not in (None, ""):
-                out[f"{base}.{key}"] = str(value)
-    return out
+
+    config_dir: Path
+    staged: Path
+
+    @staticmethod
+    def of(args) -> "Overlay":
+        """The overlay as the command line locates it."""
+        return Overlay(args.suite_config, args.staged_testdata)
+
+    def at_level(self, level: str) -> dict[str, str]:
+        """Qualified `<ns>.<key>` -> value, for one level.
+
+        An empty mapping when the configuration has not been rendered yet, so
+        that `--check-only` on a clean tree still works; a placeholder that
+        needed an overlay key then reports unresolved, exactly as before.
+        """
+        cfg_path = self.config_dir / f"tiger-isik-{level.lower()}.yaml"
+        if not cfg_path.is_file():
+            return {}
+        try:
+            import yaml
+        except ImportError:                              # pragma: no cover
+            return {}
+        cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+        out: dict[str, str] = {}
+        for entry in cfg.get("additionalConfigurationFiles") or []:
+            name = entry.get("filename") or ""
+            base = entry.get("baseKey")
+            if not base or OVERLAY_GLOB not in Path(name).name:
+                continue
+            # The configuration names the file as the container sees it
+            # (`testdata/<Level>/<file>`); on the host the staged copy is the
+            # same path under run/testdata/, which is the copy the suite is
+            # given.
+            src = self.staged / Path(name).relative_to("testdata")
+            if not src.is_file():
+                continue
+            rows = yaml.safe_load(src.read_text(encoding="utf-8")) or {}
+            for key, value in rows.items():
+                if value not in (None, ""):
+                    out[f"{base}.{key}"] = str(value)
+        return out
 
 
 LEGACY_NS = "data"
@@ -675,13 +694,15 @@ def main() -> int:
     # for the resulting precedence.
     roots = args.src or [REPO / "testdata" / "fhir"]
 
+    overlay_files = Overlay.of(args)
+
     rc = 0
     for level in levels:
         contract = testdata_contract(level, req)
         # Merged *under* the contract, so requirements.json wins every key it
         # documents and the overlay can only add - the same precedence the Tiger
         # configuration gives these files by listing them last.
-        overlay = load_overlay(level, args.suite_config, args.staged_testdata)
+        overlay = overlay_files.at_level(level)
         added = {k: v for k, v in overlay.items() if k not in contract}
         if added:
             contract = {**added, **contract}

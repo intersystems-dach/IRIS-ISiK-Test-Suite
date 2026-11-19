@@ -709,7 +709,7 @@ entry is also a statement about R4 that no artefact in this repository verifies.
 The same facts are published, per element path, in the `StructureDefinition`
 snapshots of `hl7.fhir.r4.core#4.0.1`, which is already pinned, already unpacked
 into `vendor/packages/` and already loaded into every endpoint. `choice_type_check.py`
-already reads them: its `load_r4_elements` builds 7790 element paths with their
+already reads them: its `Spec.read` builds 7790 element paths with their
 types and cardinalities from those base definitions, following a child path into
 the definition of its parent's type. Replacing the five tables with that index
 would make each of these two defects unrepresentable rather than fixed.
@@ -1203,7 +1203,7 @@ not start. The overlay entry's own stated purpose is that without it the shared
 body has to carry a literal and the two levels silently drift — so the renderer's
 inability to read it was a hole in that mechanism rather than a missing feature.
 
-`load_overlay()` now reads the overlays as the *rendered configuration for this
+`Overlay.at_level()` now reads the overlays as the *rendered configuration for this
 round* names them, rather than from a list kept in the renderer: the
 configuration is the authoritative statement of what the suite will load and
 under which `baseKey`, and reading it is what makes the two contracts the same

@@ -60,8 +60,8 @@ was found, 2 the R4 core package could not be read.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
-import re
 import sys
 from pathlib import Path
 
@@ -80,57 +80,84 @@ SKIP_KEYS = {"resourceType", "id", "extension", "modifierExtension", "fhir_comme
 INLINE_TYPES = {"BackboneElement", "Element"}
 
 
-def load_r4_elements(packages_dir: Path) -> tuple[dict, dict]:
-    """(element path -> (type codes, contentReference), type name -> kind).
+@dataclasses.dataclass(frozen=True)
+class Spec:
+    """What R4 says, as this check needs to ask it.
 
-    Only base definitions are read: `derivation == "constraint"` marks a profile,
-    whose snapshot restates the same paths with narrowed types, and a profile's view
-    of an element is not what makes a spelling valid R4.
+    Two tables: every element path the specification defines, with that
+    element's type codes and contentReference, and the kind of every type it
+    names. Both are read from one package in one pass, and every question below
+    is answered from them alone - nothing here looks at a file again.
     """
-    roots = sorted(packages_dir.glob("hl7.fhir.r4.core*")) if packages_dir.is_dir() else []
-    if not roots:
-        return {}, {}
-    root = roots[0]
-    root = root / "package" if (root / "package").is_dir() else root
 
-    elements: dict[str, tuple[list[str], str | None]] = {}
-    kinds: dict[str, str] = {}
-    for path in sorted(root.glob("StructureDefinition-*.json")):
-        try:
-            sd = json.loads(path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            continue
-        if sd.get("resourceType") != "StructureDefinition":
-            continue
-        if sd.get("derivation") == "constraint":
-            continue
-        if sd.get("type"):
-            kinds[sd["type"]] = sd.get("kind", "")
-        for el in (sd.get("snapshot") or {}).get("element", []):
-            p = el.get("path")
-            if not p:
+    elements: dict[str, tuple[list[str], str | None]]
+    kinds: dict[str, str]
+
+    @staticmethod
+    def read(packages_dir: Path) -> "Spec":
+        """The base definitions of the R4 core package under `packages_dir`.
+
+        Only base definitions are read: `derivation == "constraint"` marks a profile,
+        whose snapshot restates the same paths with narrowed types, and a profile's view
+        of an element is not what makes a spelling valid R4.
+
+        An absent package yields an empty specification rather than an error, so
+        that the caller reports the missing prerequisite in its own words.
+        """
+        roots = (sorted(packages_dir.glob("hl7.fhir.r4.core*"))
+                 if packages_dir.is_dir() else [])
+        if not roots:
+            return Spec({}, {})
+        root = roots[0]
+        root = root / "package" if (root / "package").is_dir() else root
+
+        elements: dict[str, tuple[list[str], str | None]] = {}
+        kinds: dict[str, str] = {}
+        for path in sorted(root.glob("StructureDefinition-*.json")):
+            try:
+                sd = json.loads(path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, UnicodeDecodeError):
                 continue
-            types = [t["code"] for t in el.get("type", []) if t.get("code")]
-            elements.setdefault(p, (types, el.get("contentReference")))
-    return elements, kinds
+            if sd.get("resourceType") != "StructureDefinition":
+                continue
+            if sd.get("derivation") == "constraint":
+                continue
+            if sd.get("type"):
+                kinds[sd["type"]] = sd.get("kind", "")
+            for el in (sd.get("snapshot") or {}).get("element", []):
+                p = el.get("path")
+                if not p:
+                    continue
+                types = [t["code"] for t in el.get("type", []) if t.get("code")]
+                elements.setdefault(p, (types, el.get("contentReference")))
+        return Spec(elements, kinds)
 
+    @property
+    def is_empty(self) -> bool:
+        """Whether the R4 core package could be read at all."""
+        return not self.elements
 
-def spellings(bare: str, types: list[str]) -> list[str]:
-    """The valid names for a `[x]` element, from its own declared types.
+    @property
+    def element_count(self) -> int:
+        """How many element paths the scan measures against, for the summary."""
+        return len(self.elements)
 
-    R4 forms them as the bare name plus the type code with an upper-case initial:
-    `author` + `Reference` -> `authorReference`.
-    """
-    return [f"{bare}{t[0].upper()}{t[1:]}" for t in types]
+    def names_resource(self, resource_type: str) -> bool:
+        """Whether the specification defines a resource of that type."""
+        return bool(resource_type) and resource_type in self.kinds
 
+    def defines(self, path: str) -> bool:
+        """Whether an element of exactly that path exists."""
+        return path in self.elements
 
-class Scanner:
-    def __init__(self, elements: dict, kinds: dict):
-        self.elements = elements
-        self.kinds = kinds
+    def defines_only_choice(self, path: str) -> bool:
+        """Whether `<path>[x]` exists where `<path>` does not - the condition
+        that makes the bare spelling invalid."""
+        return not self.defines(path) and f"{path}[x]" in self.elements
 
-    def _child_prefix(self, path: str, types: list[str], cref: str | None) -> str:
-        """Which path children of this element are defined under."""
+    def child_prefix(self, path: str) -> str:
+        """Which path the children of the element at `path` are defined under."""
+        types, cref = self.elements[path]
         if cref:
             # e.g. "#Questionnaire.item" - the element reuses another element's children.
             return cref.lstrip("#")
@@ -141,10 +168,40 @@ class Scanner:
             return types[0]
         return path
 
-    def scan(self, node, path: str, found: list[tuple[str, list[str]]]) -> None:
+    def spellings_at(self, path: str) -> list[str]:
+        """The valid names for the choice element `<path>[x]`, from its own
+        declared types.
+
+        R4 forms them as the bare name plus the type code with an upper-case
+        initial: `author` + `Reference` -> `authorReference`. The remedy is
+        therefore read out of the specification rather than guessed.
+        """
+        types = self.elements[f"{path}[x]"][0]
+        bare = path.rsplit(".", 1)[-1]
+        return [f"{bare}{t[0].upper()}{t[1:]}" for t in types]
+
+
+class Scan:
+    """The bare choice elements one authored document writes.
+
+    The findings travel with the scan rather than down the walk: the walk
+    recurses once per node, while the list it fills belongs to the document.
+    """
+
+    def __init__(self, spec: Spec):
+        self.spec = spec
+        self.found: list[tuple[str, list[str]]] = []
+
+    def walk(self, node, path: str) -> None:
+        """Record every bare choice element at or below one node of the document.
+
+        `path` is where that node sits in the specification, which is not the
+        node's own position in the JSON: a named complex type and a
+        contentReference both move it (see Spec.child_prefix).
+        """
         if isinstance(node, list):
             for item in node:
-                self.scan(item, path, found)
+                self.walk(item, path)
             return
         if not isinstance(node, dict):
             return
@@ -152,11 +209,10 @@ class Scanner:
             if key in SKIP_KEYS or key.startswith("_"):
                 continue
             candidate = f"{path}.{key}"
-            if candidate in self.elements:
-                types, cref = self.elements[candidate]
-                self.scan(value, self._child_prefix(candidate, types, cref), found)
-            elif f"{candidate}[x]" in self.elements:
-                found.append((candidate, spellings(key, self.elements[f"{candidate}[x]"][0])))
+            if self.spec.defines(candidate):
+                self.walk(value, self.spec.child_prefix(candidate))
+            elif self.spec.defines_only_choice(candidate):
+                self.found.append((candidate, self.spec.spellings_at(candidate)))
             # else: unresolvable - see the module docstring, deliberately ignored.
 
 
@@ -168,13 +224,12 @@ def main() -> int:
                     help="unpacked FHIR packages, for the R4 base definitions")
     args = ap.parse_args()
 
-    elements, kinds = load_r4_elements(args.packages)
-    if not elements:
+    spec = Spec.read(args.packages)
+    if spec.is_empty:
         print(f"no hl7.fhir.r4.core package under {args.packages} - "
               f"run: make packages", file=sys.stderr)
         return 2
 
-    scanner = Scanner(elements, kinds)
     files = sorted(p for p in args.src.rglob("*.json"))
     findings = 0
     for f in files:
@@ -185,11 +240,11 @@ def main() -> int:
             findings += 1
             continue
         rt = doc.get("resourceType")
-        if not rt or rt not in kinds:
+        if not spec.names_resource(rt):
             continue
-        found: list[tuple[str, list[str]]] = []
-        scanner.scan(doc, rt, found)
-        for elem_path, valid in found:
+        scan = Scan(spec)
+        scan.walk(doc, rt)
+        for elem_path, valid in scan.found:
             # Repo-relative where that is meaningful, absolute otherwise: --src
             # legitimately points outside the repo (a scratch render, /tmp fixture),
             # and relative_to() raises rather than falling back on such a path.
@@ -202,7 +257,7 @@ def main() -> int:
             findings += 1
 
     print(f"{len(files)} resource(s) scanned against "
-          f"{len(elements)} R4 element paths, {findings} bare choice element(s)")
+          f"{spec.element_count} R4 element paths, {findings} bare choice element(s)")
     return 1 if findings else 0
 
 
