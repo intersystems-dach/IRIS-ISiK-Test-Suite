@@ -32,7 +32,7 @@ So a resource is authored once in `common/`, and this script renders it per leve
                     2.7.0, one namespace per module from 3.0.0 (`basis`,
                     `medikation`, `icuextended`, ...). Bodies authored for a 2.x
                     round therefore write `{{data.<key>}}`, and the legacy rule in
-                    `substitute()` keeps them resolvable under a 3.x contract
+                    `BodySubstitution` keeps them resolvable under a 3.x contract
                     without rewriting 70 files - see there for the exact rule and
                     for why an ambiguous key is a hard error rather than a
                     first-match.
@@ -146,7 +146,9 @@ import argparse
 import json
 import re
 import sys
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 # Invoked as a standalone script, so sys.path[0] is already this directory; the
 # insert is for the case where a sibling imports this module instead.
@@ -456,11 +458,11 @@ LEGACY_NS = "data"
 def legacy_index(contract: dict[str, str]) -> dict[str, set[str]]:
     """Bare key -> the set of distinct values the contract assigns it.
 
-    One of the two indices behind the legacy rule in substitute(); this is the
-    unscoped one, consulted when the resource's own namespaces define the key
-    nowhere. A set rather than a single value, because the set's size is exactly
-    the decision: one value means every namespace that defines the key agrees and
-    the bare name is unambiguous; more than one means it is not.
+    One of the two indices behind the legacy rule in BodySubstitution.apply();
+    this is the unscoped one, consulted when the resource's own namespaces define
+    the key nowhere. A set rather than a single value, because the set's size is
+    exactly the decision: one value means every namespace that defines the key
+    agrees and the bare name is unambiguous; more than one means it is not.
     """
     out: dict[str, set[str]] = {}
     for qualified, value in contract.items():
@@ -484,102 +486,135 @@ def row_namespaces(row: dict) -> set[str]:
     `vitalparameter.observation-read-body-weight-id` and
     `medikation.riskassessment-observation-id`. Those namespaces are the scope in
     which a legacy `{{data.<key>}}` inside that body is resolved; see
-    substitute().
+    BodySubstitution.
     """
     return {k.partition(".")[0] for k in row.get("keys") or [] if "." in k}
 
 
-def substitute(node, contract: dict[str, str], profiles: dict[str, str],
-               unresolved: set[str], legacy: dict[str, set[str]] | None = None,
-               ambiguous: set[str] | None = None,
-               ns_scope: set[str] | None = None,
-               patterns=None):
-    """Replace every {{<ns>.<key>}} / {{profile.Name}} / {{pattern.Name.element}},
-    recording what did not resolve.
+@dataclass(frozen=True)
+class PlaceholderSources:
+    """Everywhere a placeholder can take its value from, for one level.
 
-    Qualified lookup first: the placeholder names a namespace and a key, and under
-    the generation the body was authored for that is an exact contract key.
+    All four are built once per level and are the same for every body of it.
+    They were carried through the recursive substitution as four of its eight
+    parameters, re-passed at each level of every JSON tree.
 
-    Legacy rule, for `{{data.<key>}}` only. Every body in `common/` was authored
-    against a 2.x contract, where the suite loaded all of its test-data files
-    under the single baseKey `data`. Under a 3.x contract there is no `data`
-    namespace at all, so those placeholders would all be unresolvable and 70
-    bodies would have to be rewritten per generation - which is the duplication
-    this build step exists to avoid. The key is resolved by its bare name
-    instead, in two steps:
-
-      1. within `ns_scope`, the namespaces that name *this* resource. A body
-         reached through `vitalparameter.*` resolves `data.observation-patient-id`
-         to `vitalparameter.observation-patient-id`, which is the reference the
-         scenario reading it through that module expects.
-      2. failing that, across every namespace, which covers a key the resource's
-         own modules do not define - `basis.loinc-version` referenced from an ICU
-         body, for instance.
-
-    Either step resolves only if the candidate namespaces agree on one value.
-
-    An ambiguous bare name is a hard error, never a first match. In 3.0.9, 45 of
-    the 262 key names are defined in more than one module and three of them -
-    observation-encounter-id, observation-patient-id, observation-practitioner-id
-    - carry *different* ids per module (see suite_namespaces() in lib.sh). Picking
-    one would seed a body referencing another module's resource, and the scenario
-    that then failed would read as an IRIS defect. Measured on the 3.0.9
-    inventory: step 1 is what decides 33 such occurrences across 11 Observation
-    bodies, and with step 1 removed every one of them is reported ambiguous.
-    A body whose ambiguity survives both steps must name its namespace
-    explicitly.
+    `patterns` is the one that may be absent: it is None when no package tree
+    was indexed, which is a legitimate state (`--check-only` without
+    `make packages`) that the substitution reports per placeholder rather than
+    refusing outright.
     """
-    if isinstance(node, dict):
-        return {k: substitute(v, contract, profiles, unresolved, legacy,
-                              ambiguous, ns_scope, patterns)
-                for k, v in node.items()}
-    if isinstance(node, list):
-        return [substitute(v, contract, profiles, unresolved, legacy,
-                           ambiguous, ns_scope, patterns)
-                for v in node]
-    if isinstance(node, str):
-        def data_repl(m):
-            key = m.group(1)
-            if key in contract:
-                return contract[key]
-            ns, _, bare = key.partition(".")
-            if ns == LEGACY_NS and legacy is not None:
-                for values in (
-                    {contract[q] for q in (f"{n}.{bare}" for n in ns_scope or ())
-                     if q in contract},
-                    legacy.get(bare) or set(),
-                ):
-                    if len(values) == 1:
-                        return next(iter(values))
-                    if len(values) > 1:
-                        if ambiguous is not None:
-                            ambiguous.add(bare)
-                        return m.group(0)
-            unresolved.add(key)
-            return m.group(0)
 
-        def profile_repl(m):
-            name = m.group(1)
-            if name not in profiles:
-                unresolved.add(f"profile.{name}")
-                return m.group(0)
-            return profiles[name]
+    contract: dict[str, str]
+    profiles: dict[str, str]
+    legacy: dict[str, set[str]]
+    patterns: Any | None
 
-        def pattern_repl(m):
-            name, tail = m.group(1), m.group(2)
-            if patterns is None:
-                unresolved.add(f"pattern.{name}.{tail} (no packages indexed)")
-                return m.group(0)
-            value, why = patterns(name, tail)
-            if value is None:
-                unresolved.add(f"pattern.{name}.{tail} ({why})")
-                return m.group(0)
-            return value
 
-        return RE_PATTERN.sub(
-            pattern_repl,
-            RE_PROFILE.sub(profile_repl, RE_PLACEHOLDER.sub(data_repl, node)))
-    return node
+class BodySubstitution:
+    """One authored body's substitution, and what it could not resolve.
+
+    `unresolved` and `ambiguous` were out-parameters that the caller created,
+    passed down the recursion and read afterwards. They are findings about one
+    body, so they belong to one substitution of one body: a second body gets a
+    second instance rather than a second pair of empty sets.
+
+    `ns_scope` is the namespaces that name this resource, which is per body as
+    well - the legacy rule resolves a bare key within them first. Empty is the
+    honest default: a body no inventory row names (`extra/`) has no module
+    scope, and the rule then falls straight through to its second step.
+    """
+
+    def __init__(self, sources: PlaceholderSources,
+                 ns_scope: set[str] = frozenset()):
+        self.sources = sources
+        self.ns_scope = ns_scope
+        self.unresolved: set[str] = set()
+        self.ambiguous: set[str] = set()
+
+    def apply(self, node):
+        """Replace every {{<ns>.<key>}} / {{profile.Name}} / {{pattern.Name.element}},
+        recording what did not resolve.
+
+        Qualified lookup first: the placeholder names a namespace and a key, and under
+        the generation the body was authored for that is an exact contract key.
+
+        Legacy rule, for `{{data.<key>}}` only. Every body in `common/` was authored
+        against a 2.x contract, where the suite loaded all of its test-data files
+        under the single baseKey `data`. Under a 3.x contract there is no `data`
+        namespace at all, so those placeholders would all be unresolvable and 70
+        bodies would have to be rewritten per generation - which is the duplication
+        this build step exists to avoid. The key is resolved by its bare name
+        instead, in two steps:
+
+          1. within `self.ns_scope`, the namespaces that name *this* resource. A body
+             reached through `vitalparameter.*` resolves `data.observation-patient-id`
+             to `vitalparameter.observation-patient-id`, which is the reference the
+             scenario reading it through that module expects.
+          2. failing that, across every namespace, which covers a key the resource's
+             own modules do not define - `basis.loinc-version` referenced from an ICU
+             body, for instance.
+
+        Either step resolves only if the candidate namespaces agree on one value.
+
+        An self.ambiguous bare name is a hard error, never a first match. In 3.0.9, 45 of
+        the 262 key names are defined in more than one module and three of them -
+        observation-encounter-id, observation-patient-id, observation-practitioner-id
+        - carry *different* ids per module (see suite_namespaces() in lib.sh). Picking
+        one would seed a body referencing another module's resource, and the scenario
+        that then failed would read as an IRIS defect. Measured on the 3.0.9
+        inventory: step 1 is what decides 33 such occurrences across 11 Observation
+        bodies, and with step 1 removed every one of them is reported self.ambiguous.
+        A body whose ambiguity survives both steps must name its namespace
+        explicitly.
+        """
+        if isinstance(node, dict):
+            return {k: self.apply(v) for k, v in node.items()}
+        if isinstance(node, list):
+            return [self.apply(v) for v in node]
+        if isinstance(node, str):
+            def data_repl(m):
+                key = m.group(1)
+                if key in self.sources.contract:
+                    return self.sources.contract[key]
+                ns, _, bare = key.partition(".")
+                if ns == LEGACY_NS:
+                    for values in (
+                        {self.sources.contract[q]
+                         for q in (f"{n}.{bare}" for n in self.ns_scope)
+                         if q in self.sources.contract},
+                        self.sources.legacy.get(bare) or set(),
+                    ):
+                        if len(values) == 1:
+                            return next(iter(values))
+                        if len(values) > 1:
+                            self.ambiguous.add(bare)
+                            return m.group(0)
+                self.unresolved.add(key)
+                return m.group(0)
+
+            def profile_repl(m):
+                name = m.group(1)
+                if name not in self.sources.profiles:
+                    self.unresolved.add(f"profile.{name}")
+                    return m.group(0)
+                return self.sources.profiles[name]
+
+            def pattern_repl(m):
+                name, tail = m.group(1), m.group(2)
+                if self.sources.patterns is None:
+                    self.unresolved.add(f"pattern.{name}.{tail} (no packages indexed)")
+                    return m.group(0)
+                value, why = self.sources.patterns(name, tail)
+                if value is None:
+                    self.unresolved.add(f"pattern.{name}.{tail} ({why})")
+                    return m.group(0)
+                return value
+
+            return RE_PATTERN.sub(
+                pattern_repl,
+                RE_PROFILE.sub(profile_repl, RE_PLACEHOLDER.sub(data_repl, node)))
+        return node
 
 
 def main() -> int:
@@ -681,6 +716,11 @@ def main() -> int:
                       f"{args.packages} for {level}'s packages "
                       f"({', '.join(pkgs)}) - {{{{profile.*}}}} cannot be "
                       f"resolved (run `make packages` first)")
+        # The four places a placeholder's value can come from, for this level
+        # and every body of it; see PlaceholderSources.
+        sources = PlaceholderSources(contract=contract, profiles=profiles,
+                                     legacy=legacy, patterns=patterns)
+
         rows = req["levels"][level]["resources"]
         out_dir = args.out / level
         built = missing = 0
@@ -723,22 +763,20 @@ def main() -> int:
             # from the YAML the suite actually sends.
             doc["id"] = r["id"]
 
-            unresolved: set[str] = set()
-            ambiguous: set[str] = set()
-            doc = substitute(doc, contract, profiles, unresolved, legacy,
-                             ambiguous, row_namespaces(r), patterns)
-            if ambiguous:
+            body = BodySubstitution(sources, row_namespaces(r))
+            doc = body.apply(doc)
+            if body.ambiguous:
                 problems.append(
                     f"  {src.name}: ambiguous legacy key(s) "
                     + ", ".join(f"data.{k} (defined with "
                                 f"{len(legacy[k])} different values)"
-                                for k in sorted(ambiguous))
+                                for k in sorted(body.ambiguous))
                     + " - name the namespace explicitly")
                 rc = 1
                 continue
-            if unresolved:
+            if body.unresolved:
                 problems.append(f"  {src.name}: unresolved placeholder(s) "
-                                + ", ".join(sorted(unresolved)))
+                                + ", ".join(sorted(body.unresolved)))
                 rc = 1
                 continue
 
@@ -782,20 +820,20 @@ def main() -> int:
                                 f"which no inventory row justifies")
                 rc = 1
                 continue
-            unresolved = set()
-            ambiguous = set()
-            doc = substitute(doc, contract, profiles, unresolved, legacy, ambiguous,
-                             None, patterns)
-            if ambiguous:
+            # No inventory row names this body, so there is no module scope to
+            # resolve a legacy key within; see BodySubstitution.
+            body = BodySubstitution(sources)
+            doc = body.apply(doc)
+            if body.ambiguous:
                 problems.append(
                     f"  {src.name}: ambiguous legacy key(s) "
-                    + ", ".join(f"data.{k}" for k in sorted(ambiguous))
+                    + ", ".join(f"data.{k}" for k in sorted(body.ambiguous))
                     + " - name the namespace explicitly")
                 rc = 1
                 continue
-            if unresolved:
+            if body.unresolved:
                 problems.append(f"  {src.name}: unresolved placeholder(s) "
-                                + ", ".join(sorted(unresolved)))
+                                + ", ".join(sorted(body.unresolved)))
                 rc = 1
                 continue
             if f"{doc.get('resourceType')}-{doc.get('id')}.json" != src.name:

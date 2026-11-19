@@ -104,6 +104,7 @@ import re
 import sys
 import zipfile
 import zlib
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -630,111 +631,194 @@ def sort_key(case: dict) -> tuple:
             case.get("scenario") or "")
 
 
-def build(results: dict, gap_doc: dict | None, bundle: Bundle) -> dict:
-    gaps = gap_lookup(gap_doc)
-    entries: list[dict] = []
-    for level, L in (results.get("levels") or {}).items():
-        level_dir = L.get("directory") or level.lower()
-        run = L.get("run") or {}
-        # The run record of each archive that measured this level, so that a case
-        # superseded by a module variant is described by the invocation that
-        # actually produced it - its endpoint, and whether it ran with bearer
-        # tokens - and not by the complete run's.
-        runs = {m.get("directory"): (m.get("run") or {})
-                for m in (L.get("measurements") or []) if m.get("directory")}
+@dataclass(frozen=True)
+class Round:
+    """The round this annex documents, and everything read beside it.
+
+    The four inputs are fixed for the whole document - the results analysis that
+    says which cases failed, the gap analysis that says what each failure was
+    attributed to, the archives the exchange is read out of, and the case-key
+    lookup derived from the gap analysis - and no clause below is about anything
+    else.
+
+    `body_limit` travels with them rather than being passed to each renderer
+    because the Markdown document and the JSON beside it must cut a quoted body
+    at the same character count: one record of the round carries the one limit
+    both of them read, so the two cannot disagree about what was omitted.
+    """
+    results: dict
+    gap_doc: dict | None
+    bundle: Bundle
+    gaps: dict
+    generated_at: str
+    body_limit: int
+
+    def capped(self, entry: dict) -> dict:
+        """The same body quoting limit, applied to the machine-readable form.
+
+        Without this the JSON carries one 900 KB CapabilityStatement per case
+        that asserted over it - some six megabytes of the same resource in a
+        round. The cap costs nothing a diff needs: `bodySha256` is of the
+        complete body, so two rounds whose bodies differ still differ in the
+        JSON, and the complete message is recoverable from the archive by the
+        path in `citations.trafficLog`.
+        """
+        limit = self.body_limit
+        out = json.loads(json.dumps(entry))             # never mutate the source
+        for msg in (out["input"].get("request"),
+                    out["received"].get("response")):
+            if not isinstance(msg, dict):
+                continue
+            body = msg.get("body") or ""
+            msg["bodySha256"] = hashlib.sha256(body.encode("utf-8")).hexdigest()
+            msg["bodyCharacters"] = len(body)
+            msg["bodyTruncated"] = len(body) > limit
+            if msg["bodyTruncated"]:
+                msg["body"] = body[:limit]
+        return out
+
+
+@dataclass(frozen=True)
+class MeasuredLevel:
+    """One ISiK level of the round, and the archives its verdicts came from.
+
+    A level is not always measured by one invocation of the test suite: a module
+    variant (Connect) is a second invocation with its own archive, and its cases
+    supersede the complete run's. `runs` therefore holds the run record of every
+    archive that measured this level, keyed by that archive's directory, so each
+    case can be described by the invocation that actually produced it - its
+    endpoint, and whether it ran with bearer tokens - and not by the level's.
+    """
+    round: Round
+    name: str
+    directory: str
+    run: dict
+    runs: dict
+
+    @staticmethod
+    def of(round_: Round, name: str) -> "MeasuredLevel":
+        """One level of a round, as the results analysis records it."""
+        L = (round_.results.get("levels") or {}).get(name) or {}
+        return MeasuredLevel(
+            round=round_, name=name,
+            directory=L.get("directory") or name.lower(),
+            run=L.get("run") or {},
+            runs={m.get("directory"): (m.get("run") or {})
+                  for m in (L.get("measurements") or []) if m.get("directory")})
+
+    def failing_cases(self) -> list["DocumentedCase"]:
+        """Every case of this level the run did not record as passing, in order."""
+        L = (self.round.results.get("levels") or {}).get(self.name) or {}
         failing = [c for c in (L.get("cases") or [])
                    if c.get("result") not in ("SUCCESS", None)]
-        for case in sorted(failing, key=sort_key):
-            # The archive to read this case's artefacts out of is the one its
-            # verdict was measured in, which is not always the level's own: a
-            # module variant (Connect) is a second invocation with its own
-            # archive, and its cases supersede the complete run's, so they carry
-            # `measuredIn` naming that archive. Reading them from the level's
-            # directory finds the complete run's traffic log, or - because the
-            # two invocations number their logs independently - none at all.
-            archive_dir = case.get("measuredIn") or level_dir
-            entries.append(entry_for(case, level, archive_dir,
-                                     runs.get(archive_dir) or run, gaps, bundle))
-    return {"entries": entries}
+        return [DocumentedCase(self, case)
+                for case in sorted(failing, key=sort_key)]
 
 
-def entry_for(case: dict, level: str, archive_dir: str, run: dict,
-              gaps: dict, bundle: Bundle) -> dict:
-    report = case.get("report") or {}
-    doc = bundle.outcome(report.get("outcomeJson") or "")
-    steps = read_steps(example_subtree(doc, case.get("example"))) if doc else \
-        {"executed": [], "request": {"resolved": "", "curl": ""},
-         "evaluations": [], "rbel": None, "failing": None}
+class DocumentedCase:
+    """One failing case, read out of the archive its own verdict was measured in.
 
-    request = response = None
-    traffic_path = ""
-    traffic_note = ""
-    if steps["rbel"]:
-        got = bundle.traffic(archive_dir, steps["rbel"])
-        if got:
-            msgs = messages(got[0])
-            traffic_path = got[1]
-            request, response = last_exchange(msgs)
-            request, response = mask_message(request), mask_message(response)
-            if not msgs:
-                traffic_note = NOTE_LOG_EMPTY
+    That archive is not always the level's own: a case a module variant
+    superseded carries `measuredIn` naming the variant's archive, and reading it
+    from the level's directory finds the complete run's traffic log, or -
+    because the two invocations number their logs independently - none at all.
+    """
+
+    def __init__(self, level: MeasuredLevel, case: dict):
+        self.level = level
+        self.case = case
+        self.archive_dir = case.get("measuredIn") or level.directory
+        self.run = level.runs.get(self.archive_dir) or level.run
+
+    def entry(self) -> dict:
+        """This case, as one entry of the annex and of the JSON beside it."""
+        case, bundle = self.case, self.level.round.bundle
+        level, archive_dir, run = self.level.name, self.archive_dir, self.run
+        gaps = self.level.round.gaps
+        report = case.get("report") or {}
+        doc = bundle.outcome(report.get("outcomeJson") or "")
+        steps = read_steps(example_subtree(doc, case.get("example"))) if doc else \
+            {"executed": [], "request": {"resolved": "", "curl": ""},
+             "evaluations": [], "rbel": None, "failing": None}
+
+        request = response = None
+        traffic_path = ""
+        traffic_note = ""
+        if steps["rbel"]:
+            got = bundle.traffic(archive_dir, steps["rbel"])
+            if got:
+                msgs = messages(got[0])
+                traffic_path = got[1]
+                request, response = last_exchange(msgs)
+                request, response = mask_message(request), mask_message(response)
+                if not msgs:
+                    traffic_note = NOTE_LOG_EMPTY
+            else:
+                traffic_note = NOTE_LOG_ABSENT
         else:
-            traffic_note = NOTE_LOG_ABSENT
-    else:
-        traffic_note = NOTE_NO_LOG
+            traffic_note = NOTE_NO_LOG
 
-    failure = case.get("failure") or {}
-    ex = case.get("example") or {}
-    gap = gaps.get(case_key(case)) or {}
-    verdict = expected_received(failure, steps["failing"], response)
+        failure = case.get("failure") or {}
+        ex = case.get("example") or {}
+        gap = gaps.get(case_key(case)) or {}
+        verdict = expected_received(failure, steps["failing"], response)
 
-    return {
-        "level": level,
-        # The archive this case was read from, which for a case a module variant
-        # superseded is the variant's and not the level's.
-        "archiveDir": archive_dir,
-        "baseUrl": (run.get("sut") or {}).get("baseUrlFromHost") or "",
-        "module": case.get("module"),
-        "feature": case.get("feature"),
-        "featureLine": case.get("featureLine"),
-        "scenario": case.get("scenario"),
-        "example": {"index": ex.get("index"), "line": ex.get("line"),
-                    "data": ex.get("data"), "label": ex.get("label")} if ex else None,
-        "result": case.get("result"),
-        "gap": gap,
-        "attributedTo": ("not the system under test"
-                         if gap.get("category") in NOT_SUT_CATEGORIES
-                         else "the system under test") if gap else "not attributed",
-        "citations": {
-            "outcomeJson": report.get("outcomeJson"),
-            "outcomeHtml": report.get("outcomeHtml"),
-            "trafficLog": traffic_path,
-        },
-        "input": {
-            "exampleData": ex.get("data"),
-            "fixture": fixture_of(steps["request"].get("resolved", "")),
-            "requestStep": steps["request"].get("resolved", ""),
-            "suiteCurl": steps["request"].get("curl", ""),
-            "stepsExecuted": steps["executed"],
-            "request": request,
-        },
-        "expected": {
-            "assertion": (steps["failing"] or {}).get("resolved")
-                         or failure.get("step") or "",
-            "inFhirTerms": gap.get("expected") or "",
-            "statement": verdict["expected"],
-        },
-        "received": {
-            "response": response,
-            "statement": verdict["received"],
-            "errorType": failure.get("errorType"),
-            "message": failure.get("message"),
-            "evaluations": steps["evaluations"],
-            "note": traffic_note,
-        },
-        "outcomeLine": verdict["line"],
-        "reproduce": curl_for(request, run, archive_dir),
-    }
+        return {
+            "level": level,
+            # The archive this case was read from, which for a case a module variant
+            # superseded is the variant's and not the level's.
+            "archiveDir": archive_dir,
+            "baseUrl": (run.get("sut") or {}).get("baseUrlFromHost") or "",
+            "module": case.get("module"),
+            "feature": case.get("feature"),
+            "featureLine": case.get("featureLine"),
+            "scenario": case.get("scenario"),
+            "example": {"index": ex.get("index"), "line": ex.get("line"),
+                        "data": ex.get("data"),
+                        "label": ex.get("label")} if ex else None,
+            "result": case.get("result"),
+            "gap": gap,
+            "attributedTo": ("not the system under test"
+                             if gap.get("category") in NOT_SUT_CATEGORIES
+                             else "the system under test") if gap else "not attributed",
+            "citations": {
+                "outcomeJson": report.get("outcomeJson"),
+                "outcomeHtml": report.get("outcomeHtml"),
+                "trafficLog": traffic_path,
+            },
+            "input": {
+                "exampleData": ex.get("data"),
+                "fixture": fixture_of(steps["request"].get("resolved", "")),
+                "requestStep": steps["request"].get("resolved", ""),
+                "suiteCurl": steps["request"].get("curl", ""),
+                "stepsExecuted": steps["executed"],
+                "request": request,
+            },
+            "expected": {
+                "assertion": (steps["failing"] or {}).get("resolved")
+                             or failure.get("step") or "",
+                "inFhirTerms": gap.get("expected") or "",
+                "statement": verdict["expected"],
+            },
+            "received": {
+                "response": response,
+                "statement": verdict["received"],
+                "errorType": failure.get("errorType"),
+                "message": failure.get("message"),
+                "evaluations": steps["evaluations"],
+                "note": traffic_note,
+            },
+            "outcomeLine": verdict["line"],
+            "reproduce": curl_for(request, run, archive_dir),
+        }
+
+
+def build(round_: Round) -> dict:
+    """Every failing case of the round, documented, in document order."""
+    return {"entries": [case.entry()
+                        for level in (round_.results.get("levels") or {})
+                        for case in MeasuredLevel.of(round_, level)
+                                                 .failing_cases()]}
 
 
 # =============================================================================
@@ -759,39 +843,10 @@ def fence(text: str, lang: str = "") -> list[str]:
     return [f"{bar}{lang}", text or "", bar, ""]
 
 
-def body_block(body: str, nbytes: int, lang: str, what: str,
-               archive_dir: str, traffic: str, limit: int) -> list[str]:
-    """One body, quoted in full or cut with a statement of what was cut.
-
-    A cut quote names the sha256 of the complete body and the command that reads
-    it back out of the archive, so the entry stays verifiable without carrying a
-    megabyte of one resource.
-    """
-    out: list[str] = []
-    digest = hashlib.sha256((body or "").encode("utf-8")).hexdigest()
-    if len(body or "") <= limit:
-        out.append(f"{what} ({len(body or '')} characters, "
-                   f"{nbytes} bytes on the wire, sha256 `{digest}`):")
-        out.append("")
-        out += fence(body, lang)
-        return out
-    omitted = len(body) - limit
-    out.append(f"{what} ({len(body)} characters, {nbytes} bytes on the wire, "
-               f"sha256 `{digest}`) — the first {limit} characters:")
-    out.append("")
-    out += fence(body[:limit], lang)
-    out.append(f"The remaining {omitted} character(s) are not quoted. The "
-               f"complete message is in this round's own archive, in the test "
-               f"suite's traffic view for this case — the sha256 above is of the "
-               f"whole message, so a recovered copy can be checked against it:")
-    out.append("")
-    rel = traffic.split("official/extracted/debug-report/")[-1] if traffic else ""
-    out += fence(f"unzip -p {archive_dir}/official/debug-report.zip \\\n"
-                 f"  '{rel}' > /tmp/exchange.html", "sh")
-    return out
-
-
-def front_matter(results: dict, gap_doc: dict | None, generated: str) -> list[str]:
+def front_matter(round_: Round) -> list[str]:
+    """The identification table: the run, its two systems and this document."""
+    results, gap_doc = round_.results, round_.gap_doc
+    generated = round_.generated_at
     rows = [("Run", f"`{results.get('runId')}`"),
             ("Generated", generated),
             ("Generated by", f"`{GENERATOR}`"),
@@ -821,8 +876,9 @@ def front_matter(results: dict, gap_doc: dict | None, generated: str) -> list[st
     return out
 
 
-def render(results: dict, gap_doc: dict | None, analysis: dict, generated: str,
-           limit: int) -> str:
+def render(round_: Round, analysis: dict) -> str:
+    """The Markdown annex, from the round it documents and the cases it found."""
+    results, gap_doc = round_.results, round_.gap_doc
     entries = analysis["entries"]
     w: list[str] = []
 
@@ -833,7 +889,7 @@ def render(results: dict, gap_doc: dict | None, analysis: dict, generated: str,
     w.append("")
     w.append(ISIK_EXPLAINER)
     w.append("")
-    w += front_matter(results, gap_doc, generated)
+    w += front_matter(round_)
     w.append("Every claim below is a join over three files and nothing else: this "
              "run's `analysis/results.json` (which cases failed), this run's "
              "`gap-analysis.json` (what each failure was attributed to) and the "
@@ -928,7 +984,7 @@ def render(results: dict, gap_doc: dict | None, analysis: dict, generated: str,
     w.append("")
     for e in entries:
         if e["received"]["response"]:
-            w += render_entry(e, limit)
+            w += EntryClause(round_, e).lines()
 
     # ---- 5 Cases without an exchange ---------------------------------------
     rest = [e for e in entries if not e["received"]["response"]]
@@ -969,10 +1025,10 @@ def render(results: dict, gap_doc: dict | None, analysis: dict, generated: str,
                 w.append(f"* **{n} case(s)** — {prose}.")
         w.append("")
         for e in rest:
-            w += render_entry(e, limit)
+            w += EntryClause(round_, e).lines()
 
     # ---- 6 Reconciliation ---------------------------------------------------
-    w += reconciliation_clause(results, gap_doc, entries)
+    w += reconciliation_clause(round_, entries)
     return "\n".join(w).rstrip() + "\n"
 
 
@@ -1157,8 +1213,8 @@ def derivation_clause() -> list[str]:
     return w
 
 
-def reconciliation_clause(results: dict, gap_doc: dict | None,
-                          entries: list[dict]) -> list[str]:
+def reconciliation_clause(round_: Round, entries: list[dict]) -> list[str]:
+    results, gap_doc = round_.results, round_.gap_doc
     w: list[str] = []
     w.append("## 6 Reconciliation")
     w.append("")
@@ -1246,170 +1302,232 @@ def token_note(e: dict, req: dict | None) -> list[str]:
     return w + [""]
 
 
-def render_entry(e: dict, limit: int) -> list[str]:
-    w: list[str] = []
-    w.append(f"### {heading_of(e)}")
-    w.append("")
+@dataclass(frozen=True)
+class QuotedBody:
+    """One HTTP message body of one case, with the caption the quote carries.
 
-    gap = e["gap"]
-    gap_cell = (f"{gap['id']} · {CAT_TITLE.get(gap.get('category'), gap.get('category'))}"
-                if gap else "not attributed by `gap-analysis.json`")
-    rows = [("Level, module", f"{e['level']} / {e['module']}"),
-            ("Gap", gap_cell),
-            ("Attributed to", e["attributedTo"]),
-            ("Verdict", f"`{e['result']}`"),
-            ("Outcome", e["outcomeLine"]),
-            ("Official report", f"`{e['citations']['outcomeJson']}`")]
-    if e["citations"].get("outcomeHtml"):
-        rows.append(("Browsable", f"`{e['citations']['outcomeHtml']}`"))
-    if e["citations"].get("trafficLog"):
-        rows.append(("Traffic log", f"`{e['citations']['trafficLog']}`"))
-    w.append("| | |")
-    w.append("|---|---|")
-    w += [f"| {k} | {md_escape(v)} |" for k, v in rows]
-    w.append("")
+    `what` names which half of the exchange this is, and `nbytes` the length the
+    message had on the wire, which differs from the length of the text where the
+    body arrived compressed or chunked.
+    """
+    what: str
+    text: str
+    nbytes: int
 
-    # ---- input --------------------------------------------------------------
-    w.append("**Input data used**")
-    w.append("")
-    data = (e["example"] or {}).get("data") if e["example"] else None
-    if data:
-        w.append("Scenario Outline row: " + ", ".join(
-            f"`{k}` = `{v}`" for k, v in data.items()) + ".")
-        w.append("")
-    if e["input"]["fixture"]:
-        w.append(f"Fixture the step read, from inside the test suite image: "
-                 f"`{e['input']['fixture']}`.")
-        w.append("")
-    if e["input"]["stepsExecuted"]:
-        w.append("Steps executed, as the test suite resolved them:")
-        w.append("")
-        for n, st in enumerate(e["input"]["stepsExecuted"], start=1):
-            step = (st["step"] or "").strip().replace("\n", "\n   ")
-            w.append(f"{n}. `{st['result']}` — {step}")
-        w.append("")
-    req = e["input"]["request"]
-    if req:
-        w.append("Request as the system under test received it:")
-        w.append("")
-        w += fence(redact(req["head"]), "http")
-        if req.get("body"):
-            w += body_block(req["body"], req.get("bodyBytes") or 0, "json",
-                            "Request body", e["archiveDir"],
-                            e["citations"].get("trafficLog") or "", limit)
-    elif e["input"]["suiteCurl"]:
-        w.append("The traffic log records no request for this case. The request "
-                 "step the suite logged was:")
-        w.append("")
-        w += fence(redact(e["input"]["suiteCurl"]), "sh")
-    else:
-        w.append("No request of this case's own: see the note under *Output "
-                 "received*.")
+
+class EntryClause:
+    """One documented case, as a subclause of section 4 or of section 5.
+
+    The round is held because the body quoting limit is the document's and not
+    the case's: every clause cuts at the same character count, and the JSON
+    beside the document cuts at that same one.
+    """
+
+    def __init__(self, round_: Round, entry: dict):
+        self.round = round_
+        self.entry = entry
+
+    def lines(self) -> list[str]:
+        """The subclause: the case, its input, its expectation and what it got."""
+        e = self.entry
+        w: list[str] = []
+        w.append(f"### {heading_of(e)}")
         w.append("")
 
-    # ---- expected -----------------------------------------------------------
-    w.append("**Output expected**")
-    w.append("")
-    if e["expected"]["assertion"]:
-        w.append("The assertion that was made:")
-        w.append("")
-        w += fence(e["expected"]["assertion"].strip(), "gherkin")
-    # `GAP-ANALYSIS.md` records "see the quoted step" where the assertion is already
-    # its own statement of the expectation. Repeating that here would add a line
-    # that tells the reader nothing.
-    if e["expected"]["inFhirTerms"] and \
-            e["expected"]["inFhirTerms"].strip() != "see the quoted step":
-        w.append(f"In FHIR terms: {e['expected']['inFhirTerms']}")
-        w.append("")
-    if gap.get("reason"):
-        w.append(f"Attributed to {gap['id']} because {gap['reason']}.")
+        gap = e["gap"]
+        gap_cell = (f"{gap['id']} · "
+                    f"{CAT_TITLE.get(gap.get('category'), gap.get('category'))}"
+                    if gap else "not attributed by `gap-analysis.json`")
+        rows = [("Level, module", f"{e['level']} / {e['module']}"),
+                ("Gap", gap_cell),
+                ("Attributed to", e["attributedTo"]),
+                ("Verdict", f"`{e['result']}`"),
+                ("Outcome", e["outcomeLine"]),
+                ("Official report", f"`{e['citations']['outcomeJson']}`")]
+        if e["citations"].get("outcomeHtml"):
+            rows.append(("Browsable", f"`{e['citations']['outcomeHtml']}`"))
+        if e["citations"].get("trafficLog"):
+            rows.append(("Traffic log", f"`{e['citations']['trafficLog']}`"))
+        w.append("| | |")
+        w.append("|---|---|")
+        w += [f"| {k} | {md_escape(v)} |" for k, v in rows]
         w.append("")
 
-    # ---- received -----------------------------------------------------------
-    w.append("**Output received**")
-    w.append("")
-    rsp = e["received"]["response"]
-    if rsp:
-        w.append("Response as the system under test sent it"
-                 + (f", body {rsp['transferEncoding']}-encoded on the wire and "
-                    f"decoded here" if rsp.get("transferEncoding") else "") + ":")
+        # ---- input --------------------------------------------------------------
+        w.append("**Input data used**")
         w.append("")
-        w += fence(redact(rsp["head"]), "http")
-        if rsp.get("body"):
-            w += body_block(rsp["body"], rsp.get("bodyBytes") or 0, "json",
-                            "Response body", e["archiveDir"],
-                            e["citations"].get("trafficLog") or "", limit)
-    elif e["received"]["note"]:
-        note = e["received"]["note"]
-        w.append(note[:1].upper() + note[1:] + ".")
-        w.append("")
-    for ev in e["received"]["evaluations"]:
-        w.append("FHIRPath evaluation the test suite recorded:")
-        w.append("")
-        w += fence(f"{ev['title'].strip()}\n-> {ev['values'].strip()}")
-    if e["received"]["errorType"]:
-        w.append(f"The error the test suite raised, `{e['received']['errorType']}`:")
-        w.append("")
-        w += fence((e["received"]["message"] or "").strip())
-
-    # ---- reproduce ----------------------------------------------------------
-    w.append("**How to reproduce**")
-    w.append("")
-    if e["reproduce"]:
-        # Which credential the command needs is a property of the request that was
-        # replayed, so the sentence that introduces it has to follow the command
-        # rather than name the endpoint's user in every case.
-        if any(line.startswith("TOKEN=") for line in e["reproduce"]):
-            w.append("From the repository root, with the round's deployment up "
-                     "and a freshly minted token of this scenario's scope (clause "
-                     "3.1):")
+        data = (e["example"] or {}).get("data") if e["example"] else None
+        if data:
+            w.append("Scenario Outline row: " + ", ".join(
+                f"`{k}` = `{v}`" for k, v in data.items()) + ".")
+            w.append("")
+        if e["input"]["fixture"]:
+            w.append(f"Fixture the step read, from inside the test suite image: "
+                     f"`{e['input']['fixture']}`.")
+            w.append("")
+        if e["input"]["stepsExecuted"]:
+            w.append("Steps executed, as the test suite resolved them:")
+            w.append("")
+            for n, st in enumerate(e["input"]["stepsExecuted"], start=1):
+                step = (st["step"] or "").strip().replace("\n", "\n   ")
+                w.append(f"{n}. `{st['result']}` — {step}")
+            w.append("")
+        req = e["input"]["request"]
+        if req:
+            w.append("Request as the system under test received it:")
+            w.append("")
+            w += fence(redact(req["head"]), "http")
+            if req.get("body"):
+                w += self.body_block(QuotedBody(
+                    "Request body", req["body"], req.get("bodyBytes") or 0))
+        elif e["input"]["suiteCurl"]:
+            w.append("The traffic log records no request for this case. The request "
+                     "step the suite logged was:")
+            w.append("")
+            w += fence(redact(e["input"]["suiteCurl"]), "sh")
         else:
-            w.append("With the round's deployment up and the two variables of "
-                     "clause 3.1 exported:")
-        w.append("")
-        w += fence("\n".join(e["reproduce"]), "sh")
-        if (req or {}).get("body"):
-            w.append("`request-body.json` is the request body quoted above, saved "
-                     "unchanged.")
+            w.append("No request of this case's own: see the note under *Output "
+                     "received*.")
             w.append("")
-        w += token_note(e, req)
-        if e["outcomeLine"]:
-            w.append(f"In this round: {e['outcomeLine']}.")
+
+        # ---- expected -----------------------------------------------------------
+        w.append("**Output expected**")
+        w.append("")
+        if e["expected"]["assertion"]:
+            w.append("The assertion that was made:")
             w.append("")
-    elif gap.get("requestContext") == "capability" and \
-            e["received"]["evaluations"]:
-        # The assertion is over the CapabilityStatement, and the suite recorded
-        # both the FHIRPath it evaluated and the value it got. Fetching the
-        # statement and evaluating that same expression reproduces the finding
-        # exactly, without running the feature, which is what a developer wants.
-        base = e.get("baseUrl") or ""
-        w.append("This case asserts over the CapabilityStatement and makes no "
-                 "request of its own. Fetch the statement and evaluate the "
-                 "expression the test suite evaluated:")
+            w += fence(e["expected"]["assertion"].strip(), "gherkin")
+        # `GAP-ANALYSIS.md` records "see the quoted step" where the assertion is already
+        # its own statement of the expectation. Repeating that here would add a line
+        # that tells the reader nothing.
+        if e["expected"]["inFhirTerms"] and \
+                e["expected"]["inFhirTerms"].strip() != "see the quoted step":
+            w.append(f"In FHIR terms: {e['expected']['inFhirTerms']}")
+            w.append("")
+        if gap.get("reason"):
+            w.append(f"Attributed to {gap['id']} because {gap['reason']}.")
+            w.append("")
+
+        # ---- received -----------------------------------------------------------
+        w.append("**Output received**")
         w.append("")
-        paths = "\n".join(f"#   {ev['title'].split(' for: ', 1)[-1].strip()}"
-                          for ev in e["received"]["evaluations"])
-        w += fence(f'BASE={base}\n'
-                   f'curl -s -u "$SUT_USER:$SUT_PASSWORD" \\\n'
-                   f'     -H \'Accept: application/fhir+json\' \\\n'
-                   f'     "$BASE/metadata" > /tmp/capabilitystatement.json\n'
-                   f'# the expression(s) the suite evaluated, and what it got,\n'
-                   f'# are quoted under *Output received* above:\n'
-                   f'{paths}', "sh")
-        w.append("The full scenario, if the step sequence itself is in question:")
+        rsp = e["received"]["response"]
+        if rsp:
+            w.append("Response as the system under test sent it"
+                     + (f", body {rsp['transferEncoding']}-encoded on the wire and "
+                        f"decoded here" if rsp.get("transferEncoding") else "") + ":")
+            w.append("")
+            w += fence(redact(rsp["head"]), "http")
+            if rsp.get("body"):
+                w += self.body_block(QuotedBody(
+                    "Response body", rsp["body"], rsp.get("bodyBytes") or 0))
+        elif e["received"]["note"]:
+            note = e["received"]["note"]
+            w.append(note[:1].upper() + note[1:] + ".")
+            w.append("")
+        for ev in e["received"]["evaluations"]:
+            w.append("FHIRPath evaluation the test suite recorded:")
+            w.append("")
+            w += fence(f"{ev['title'].strip()}\n-> {ev['values'].strip()}")
+        if e["received"]["errorType"]:
+            w.append(f"The error the test suite raised, "
+                     f"`{e['received']['errorType']}`:")
+            w.append("")
+            w += fence((e["received"]["message"] or "").strip())
+
+        # ---- reproduce ----------------------------------------------------------
+        w.append("**How to reproduce**")
         w.append("")
-        w += fence(f"make test-{e['level'].lower()}   "
-                   f"# the whole level; the case is {e['feature']}:"
-                   f"{e['featureLine']}", "sh")
-    else:
-        w.append("This case makes no request of its own, so there is nothing to "
-                 "replay in isolation. Reproduce it by running the feature it "
-                 "belongs to:")
-        w.append("")
-        w += fence(f"make test-{e['level'].lower()}   "
-                   f"# the whole level; the case is {e['feature']}:"
-                   f"{e['featureLine']}", "sh")
-    return w
+        if e["reproduce"]:
+            # Which credential the command needs is a property of the request that was
+            # replayed, so the sentence that introduces it has to follow the command
+            # rather than name the endpoint's user in every case.
+            if any(line.startswith("TOKEN=") for line in e["reproduce"]):
+                w.append("From the repository root, with the round's deployment up "
+                         "and a freshly minted token of this scenario's scope (clause "
+                         "3.1):")
+            else:
+                w.append("With the round's deployment up and the two variables of "
+                         "clause 3.1 exported:")
+            w.append("")
+            w += fence("\n".join(e["reproduce"]), "sh")
+            if (req or {}).get("body"):
+                w.append("`request-body.json` is the request body quoted above, saved "
+                         "unchanged.")
+                w.append("")
+            w += token_note(e, req)
+            if e["outcomeLine"]:
+                w.append(f"In this round: {e['outcomeLine']}.")
+                w.append("")
+        elif gap.get("requestContext") == "capability" and \
+                e["received"]["evaluations"]:
+            # The assertion is over the CapabilityStatement, and the suite recorded
+            # both the FHIRPath it evaluated and the value it got. Fetching the
+            # statement and evaluating that same expression reproduces the finding
+            # exactly, without running the feature, which is what a developer wants.
+            base = e.get("baseUrl") or ""
+            w.append("This case asserts over the CapabilityStatement and makes no "
+                     "request of its own. Fetch the statement and evaluate the "
+                     "expression the test suite evaluated:")
+            w.append("")
+            paths = "\n".join(f"#   {ev['title'].split(' for: ', 1)[-1].strip()}"
+                              for ev in e["received"]["evaluations"])
+            w += fence(f'BASE={base}\n'
+                       f'curl -s -u "$SUT_USER:$SUT_PASSWORD" \\\n'
+                       f'     -H \'Accept: application/fhir+json\' \\\n'
+                       f'     "$BASE/metadata" > /tmp/capabilitystatement.json\n'
+                       f'# the expression(s) the suite evaluated, and what it got,\n'
+                       f'# are quoted under *Output received* above:\n'
+                       f'{paths}', "sh")
+            w.append("The full scenario, if the step sequence itself is in question:")
+            w.append("")
+            w += fence(f"make test-{e['level'].lower()}   "
+                       f"# the whole level; the case is {e['feature']}:"
+                       f"{e['featureLine']}", "sh")
+        else:
+            w.append("This case makes no request of its own, so there is nothing to "
+                     "replay in isolation. Reproduce it by running the feature it "
+                     "belongs to:")
+            w.append("")
+            w += fence(f"make test-{e['level'].lower()}   "
+                       f"# the whole level; the case is {e['feature']}:"
+                       f"{e['featureLine']}", "sh")
+        return w
+
+    def body_block(self, quote: QuotedBody) -> list[str]:
+        """One body, quoted in full or cut with a statement of what was cut.
+
+        A cut quote names the sha256 of the complete body and the command that
+        reads it back out of the archive, so the entry stays verifiable without
+        carrying a megabyte of one resource. The fence is always JSON: both
+        halves of a FHIR exchange carry a JSON body or no body at all.
+        """
+        body, nbytes, what = quote.text, quote.nbytes, quote.what
+        limit = self.round.body_limit
+        archive_dir = self.entry["archiveDir"]
+        traffic = self.entry["citations"].get("trafficLog") or ""
+        out: list[str] = []
+        digest = hashlib.sha256((body or "").encode("utf-8")).hexdigest()
+        if len(body or "") <= limit:
+            out.append(f"{what} ({len(body or '')} characters, "
+                       f"{nbytes} bytes on the wire, sha256 `{digest}`):")
+            out.append("")
+            out += fence(body, "json")
+            return out
+        omitted = len(body) - limit
+        out.append(f"{what} ({len(body)} characters, {nbytes} bytes on the wire, "
+                   f"sha256 `{digest}`) — the first {limit} characters:")
+        out.append("")
+        out += fence(body[:limit], "json")
+        out.append(f"The remaining {omitted} character(s) are not quoted. The "
+                   f"complete message is in this round's own archive, in the test "
+                   f"suite's traffic view for this case — the sha256 above is of the "
+                   f"whole message, so a recovered copy can be checked against it:")
+        out.append("")
+        rel = traffic.split("official/extracted/debug-report/")[-1] if traffic else ""
+        out += fence(f"unzip -p {archive_dir}/official/debug-report.zip \\\n"
+                     f"  '{rel}' > /tmp/exchange.html", "sh")
+        return out
 
 
 _AUTH = re.compile(r'(?im)^(\s*authorization\s*:\s*)(.*)$')
@@ -1495,29 +1613,6 @@ def mask_message(msg: dict | None) -> dict | None:
 # Entry point
 # =============================================================================
 
-def cap_bodies(entry: dict, limit: int) -> dict:
-    """The same body quoting limit, applied to the machine-readable form.
-
-    Without this the JSON carries one 900 KB CapabilityStatement per case that
-    asserted over it - some six megabytes of the same resource in a round. The
-    cap costs nothing a diff needs: `bodySha256` is of the complete body, so two
-    rounds whose bodies differ still differ in the JSON, and the complete message
-    is recoverable from the archive by the path in `citations.trafficLog`.
-    """
-    out = json.loads(json.dumps(entry))                 # never mutate the source
-    for msg in (out["input"].get("request"),
-                out["received"].get("response")):
-        if not isinstance(msg, dict):
-            continue
-        body = msg.get("body") or ""
-        msg["bodySha256"] = hashlib.sha256(body.encode("utf-8")).hexdigest()
-        msg["bodyCharacters"] = len(body)
-        msg["bodyTruncated"] = len(body) > limit
-        if msg["bodyTruncated"]:
-            msg["body"] = body[:limit]
-    return out
-
-
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--run-dir", type=Path, required=True,
@@ -1550,20 +1645,20 @@ def main() -> int:
     generated = args.generated_at or datetime.now(timezone.utc).strftime(
         "%Y-%m-%dT%H:%M:%SZ")
 
-    bundle = Bundle(run_dir)
-    analysis = build(results, gap_doc, bundle)
+    round_ = Round(results=results, gap_doc=gap_doc, bundle=Bundle(run_dir),
+                   gaps=gap_lookup(gap_doc), generated_at=generated,
+                   body_limit=args.max_body)
+    analysis = build(round_)
 
     out_md = args.out_md or (run_dir / "CASE-EVIDENCE.md")
     out_json = args.out_json or (run_dir / "case-evidence.json")
-    out_md.write_text(render(results, gap_doc, analysis, generated,
-                             args.max_body), encoding="utf-8")
+    out_md.write_text(render(round_, analysis), encoding="utf-8")
     out_json.write_text(json.dumps(
         {"runId": results.get("runId"), "generatedAt": generated,
          "generator": GENERATOR, "audience": "InterSystems IRIS for Health developers",
          "authoritativeSource": "<variant>/official/test-report.zip",
          "maxBodyCharacters": args.max_body,
-         "entries": [cap_bodies(e, args.max_body)
-                     for e in analysis["entries"]]},
+         "entries": [round_.capped(e) for e in analysis["entries"]]},
         indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
 
     entries = analysis["entries"]

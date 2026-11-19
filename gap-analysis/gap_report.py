@@ -99,6 +99,7 @@ import json
 import re
 import sys
 from collections.abc import Collection
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -125,6 +126,59 @@ MAX_SCENARIOS = 12      # affected scenarios listed before "... and N more"
 # its closing line charged the product with 21 findings where the report said 20.
 NOT_SUT_CATEGORIES = ("TEST_DATA_DEFECT", "ENVIRONMENT_PREREQUISITE",
                       "UPSTREAM_SUITE_CONFLICT")
+
+
+# =============================================================================
+# The inputs of one report
+# =============================================================================
+
+class ResolvedRequests:
+    """Every failing case's request, as the test suite resolved it.
+
+    Read in one pass before any case is classified, because one of the
+    prerequisite rules is about the round and not about a single case: whether
+    this round supplied the access tokens the Connect module asks for is decided
+    by all of its failures together (see prerequisite_verdict). Read once per
+    outcome document and kept, so that an outcome JSON several cases share is not
+    parsed once per case.
+    """
+
+    def __init__(self, run_dir: Path, results: dict):
+        self.by_outcome: dict[str, str] = {}
+        for L in (results.get("levels") or {}).values():
+            for case in L.get("cases") or []:
+                if not case.get("failure") or case.get("verdict") != "fail":
+                    continue
+                rel = (case.get("report") or {}).get("outcomeJson") or ""
+                if rel and rel not in self.by_outcome:
+                    self.by_outcome[rel] = request_as_resolved(run_dir, case)
+        self.all = list(self.by_outcome.values())
+
+    def of(self, case: dict) -> str:
+        """The resolved request of one case, or "" if the round recorded none."""
+        return self.by_outcome.get(
+            (case.get("report") or {}).get("outcomeJson") or "", "")
+
+
+@dataclass(frozen=True)
+class Round:
+    """The round this report is about, and everything read beside it.
+
+    Every field is fixed for one generation of the report, and all of them are
+    documents: the run's own `analysis/results.json`, the attribution index, the
+    seed and corpus records of `provenance/`, the requirements corpus, and the
+    timestamp the two generated documents carry. Nothing here is derived from a
+    single test case - that is what FailingCase is for - so this is what the
+    per-case judgements hold rather than receive argument by argument.
+    """
+    run_dir: Path
+    results: dict
+    index: dict
+    seed: dict
+    corpus: dict
+    reqs: dict | None
+    generated_at: str
+    requests: ResolvedRequests
 
 
 # =============================================================================
@@ -198,8 +252,22 @@ def resolve_steps(failure: dict) -> tuple[str, dict, str | None, dict | None]:
         (ancestor if leaf else None), None
 
 
-def index_step(index: dict, feature: str, line: int | None,
-               scenario: str | None = None, text: str | None = None) -> dict | None:
+@dataclass(frozen=True)
+class StepLocation:
+    """Where a failing step is, as the two records that mention it name it.
+
+    The feature file and the scenario come from the case record, the line from
+    the failure record, and the text from whichever of the two reported steps
+    resolve_steps() decided is the Gherkin one. They travel together because the
+    join below needs all four and means nothing with any of them alone.
+    """
+    feature: str | None
+    line: int | None
+    scenario: str | None
+    text: str | None
+
+
+def index_step(index: dict, step: StepLocation) -> dict | None:
     """The indexed step for a failure, by line and then by text.
 
     This is what supplies the request context: the index tracked it across the
@@ -229,29 +297,29 @@ def index_step(index: dict, feature: str, line: int | None,
     is tried last and only within the named scenario, because a bare step line is
     a weaker key than a full shape.
     """
-    feat = (index.get("features") or {}).get(feature)
+    feat = (index.get("features") or {}).get(step.feature)
     if not feat:
         return None
-    if line is not None:
+    if step.line is not None:
         for sc in feat["scenarios"]:
             for st in sc["steps"]:
-                if st["line"] == line:
+                if st["line"] == step.line:
                     return st
-    if not text:
+    if not step.text:
         return None
-    want = re.sub(r"\s+", " ", RE_KEYWORD.sub("", text.strip()))
+    want = re.sub(r"\s+", " ", RE_KEYWORD.sub("", step.text.strip()))
     want_shape = shape_of(want)
     for restrict in (True, False):
         for sc in feat["scenarios"]:
-            if restrict and scenario and sc["name"] != scenario:
+            if restrict and step.scenario and sc["name"] != step.scenario:
                 continue
             for st in sc["steps"]:
                 if st["shape"] == want_shape or st["shape"] == want:
                     return st
-    first = shape_of(RE_KEYWORD.sub("", text.strip()).splitlines()[0].strip())
-    if first and scenario:
+    first = shape_of(RE_KEYWORD.sub("", step.text.strip()).splitlines()[0].strip())
+    if first and step.scenario:
         for sc in feat["scenarios"]:
-            if sc["name"] != scenario:
+            if sc["name"] != step.scenario:
                 continue
             for st in sc["steps"]:
                 if st["shape"] == first:
@@ -262,8 +330,13 @@ def index_step(index: dict, feature: str, line: int | None,
 RE_KEYWORD = re.compile(r"^(?:Given|When|Then|And|But|\*)\s+")
 
 
-def category_from_status(http: dict | None, cls: dict, indexed: dict | None) -> str | None:
-    """The category the HTTP response implies. Mirrors index['statusRules']."""
+def category_from_status(http: dict | None) -> str | None:
+    """The category the HTTP response implies. Mirrors index['statusRules'].
+
+    The response alone decides this, which is why it is the only argument: the
+    step's own classification and the indexed step it joins to are weaker
+    evidence and are consulted by the caller after this returns nothing.
+    """
     if not http:
         return None
     status = http.get("statusCode")
@@ -333,7 +406,7 @@ def bearer_read(resolved: str) -> bool:
     return bool(token) and UNRESOLVED_TOKEN not in token.group(1)
 
 
-def response_code_verdict(failure: dict, cls: dict,
+def response_code_verdict(failure: dict,
                           resolved: str = "") -> tuple[str, str] | None:
     """(category, reason) for a `$.responseCode` assertion, from its own message.
 
@@ -397,69 +470,6 @@ def response_code_verdict(failure: dict, cls: dict,
     return None
 
 
-def categorise(failure: dict, cls: dict, sub: dict | None,
-               indexed: dict | None, resolved: str = "") -> tuple[str, str]:
-    """(category, one-line reason for the classification)."""
-    http = failure.get("http")
-
-    if failure.get("scope") == "outcome" and not failure.get("step"):
-        # No step is attributed: the scenario itself did not run to an assertion.
-        etype = failure.get("errorType") or ""
-        if "Connect" in etype or "Timeout" in etype or "Socket" in etype:
-            return "RESPONSE_FORMAT", ("the scenario never reached an assertion - "
-                                       "the SUT was unreachable, so this is an "
-                                       "environment or availability failure, not a "
-                                       "conformance finding")
-        # index['responseBodyRules']: the suite's own validator can fail a
-        # scenario outside any step, and when it does its message carries the
-        # finding in full. Matched on that message, not on the absence of a step.
-        m = RE_CAPS_SEARCHPARAM.search(failure.get("message") or "")
-        if m:
-            return "MISSING_SEARCH_PARAM", (
-                f"the suite's CapabilityStatement check reports search parameter "
-                f"`{m.group('param')}` of `{m.group('resource')}` as missing or "
-                "incorrect. The failure carries no step, so this is read from the "
-                "message the suite raised")
-        return "UNCLASSIFIED", ("the failure is attributed to the scenario rather "
-                                "than to a step, so no step shape is available")
-
-    if sub:
-        return sub["category"], f"the failing Serenity step is `{failure['step']}`"
-
-    status_cat = category_from_status(http, cls, indexed)
-    if status_cat:
-        return status_cat, (f"the SUT answered {http.get('statusCode')} to "
-                            f"{http.get('method')} {http.get('path')}")
-
-    # After the recorded exchange, which is stronger evidence, and before the
-    # shape defaults: a status-code assertion states the SUT's actual answer in
-    # its own message even when no exchange was recorded.
-    verdict = response_code_verdict(failure, cls, resolved)
-    if verdict:
-        return verdict
-
-    # index['responseBodyRules']: the parser failed, not the assertion.
-    if "HAPI-1857" in (failure.get("message") or ""):
-        return "RESPONSE_FORMAT", (
-            "the SUT returned no response body, so the FHIRPath had nothing to "
-            "evaluate over. IRIS withholds the created resource unless the "
-            "request sends `Prefer: return=representation`, which this step "
-            "does not")
-
-    if cls.get("category"):
-        return cls["category"], f"the step is a `{cls['kind']}` assertion"
-
-    if indexed and indexed.get("category"):
-        return indexed["category"], (f"a `{indexed['kind']}` assertion in a "
-                                     f"`{indexed['context']}` context")
-
-    if indexed:
-        return "UNCLASSIFIED", (f"a `{indexed['kind']}` assertion in a "
-                                f"`{indexed['context']}` context, which neither "
-                                "the step shape nor the response decides")
-    return "UNCLASSIFIED", "the step shape is not in the classification table"
-
-
 # =============================================================================
 # FHIR feature attribution
 # =============================================================================
@@ -504,442 +514,550 @@ def fmt_requirements(rows: list[dict], level: str | None) -> tuple[list[str], li
     return lines, pkgs
 
 
-def attribute(index: dict, category: str, cls: dict, sub: dict | None,
-              failure: dict, indexed: dict | None,
-              level: str) -> dict:
-    """The FHIR feature under test, and which package supplies it.
+# =============================================================================
+# One failing case
+# =============================================================================
+# Both judgements this report makes about a single case - which category of
+# defect it is, and which FHIR feature it is about - read the same four facts:
+# the failure record, how its Gherkin step and its Serenity sub-step classify,
+# the indexed step those join to, and the request the suite resolved. The facts
+# are derived once, in one place, and the judgements are methods on them.
 
-    Returns {feature, mechanism, requirements[], packages[], expected, notes[]}.
-    Every field is either derived from the index or absent; nothing is invented, so
-    an entry that cannot name a package says so instead of guessing.
+
+class FailingCase:
+    """One failing test case, and what the report reads out of it.
+
+    The round is held rather than threaded through each judgement: the
+    attribution index, the staged corpus and the seed records are fixed for the
+    whole report, and every judgement below is about this one case measured
+    against them.
+
+    `level` is read from the case record and not from the loop that found the
+    case: results_report.py writes the level into every case it emits, and a
+    case of one level never appears under another.
     """
-    args = dict(cls.get("args") or {})
-    if sub:
-        args.update(sub.get("args") or {})
-    if indexed and indexed.get("args"):
-        for k, v in indexed["args"].items():
-            args.setdefault(k, v)
-    target = (indexed or {}).get("target") or {}
-    http = failure.get("http") or {}
-    message = failure.get("message") or ""
-    out: dict = {"feature": None, "mechanism": None, "requirements": [],
-                 "packages": [], "expected": None, "notes": []}
 
-    # A scenario-scope CapabilityStatement finding has no step and therefore no
-    # step arguments, but its message names the parameter and the resource. Filling
-    # them in here lets the MISSING_SEARCH_PARAM branch below do its normal
-    # requirement lookup instead of reporting an unattributed finding.
-    caps = RE_CAPS_SEARCHPARAM.search(message)
-    if caps and category == "MISSING_SEARCH_PARAM":
-        args.setdefault("name", caps.group("param"))
-        args.setdefault("resourceType", caps.group("resource"))
-        # The message names no parameter *type*, and the type is part of the
-        # feature label and therefore of the grouping key - so without it the same
-        # parameter reported by a step and by the scenario-scope check would become
-        # two work items for one defect. Taken from the index only when the ISiK
-        # CapabilityStatements declare exactly one type for it, so nothing is
-        # invented: an ambiguous parameter keeps its type unstated.
-        if not args.get("type"):
-            prefix = f"{caps.group('resource')}|{caps.group('param')}|"
-            declared = {k.split("|")[2] for k in
-                        ((index.get("conformance") or {}).get("searchParams") or {})
-                        if k.startswith(prefix)}
-            if len(declared) == 1:
-                args["type"] = declared.pop()
-                out["notes"].append(
-                    "the parameter type is not in the message the suite raised; it "
-                    "is the one type the ISiK CapabilityStatements declare for this "
-                    "parameter")
+    def __init__(self, round_: Round, case: dict):
+        self.round = round_
+        self.index = round_.index
+        self.case = case
+        self.level = case["level"]
+        self.failure = case["failure"]
+        (self.gherkin, self.cls,
+         self.substep, self.sub) = resolve_steps(self.failure)
+        self.indexed = index_step(round_.index, StepLocation(
+            feature=case.get("feature"), line=self.failure.get("stepLine"),
+            scenario=case.get("scenario"), text=self.gherkin))
+        self.resolved = round_.requests.of(case)
 
-    # --- profile conformance -------------------------------------------------
-    if category == "PROFILE_NONCONFORMANCE":
-        module = args.get("validationModule")
-        canonical = args.get("profile")
-        if not canonical:
-            m = RE_FROM_PROFILE.search(message)
+    def categorise(self) -> tuple[str, str]:
+        """(category, one-line reason for the classification)."""
+        http = self.failure.get("http")
+
+        if self.failure.get("scope") == "outcome" and not self.failure.get("step"):
+            # No step is attributed: the scenario itself did not run to an assertion.
+            etype = self.failure.get("errorType") or ""
+            if "Connect" in etype or "Timeout" in etype or "Socket" in etype:
+                return "RESPONSE_FORMAT", ("the scenario never reached an assertion - "
+                                           "the SUT was unreachable, so this is an "
+                                           "environment or availability failure, not a "
+                                           "conformance finding")
+            # index['responseBodyRules']: the suite's own validator can fail a
+            # scenario outside any step, and when it does its message carries the
+            # finding in full. Matched on that message, not on the absence of a step.
+            m = RE_CAPS_SEARCHPARAM.search(self.failure.get("message") or "")
             if m:
-                canonical = m.group(1)
-                out["notes"].append("the profile canonical is taken from the "
-                                    "validator message; the step named only the "
-                                    "validation module")
-        out["mechanism"] = "StructureDefinition (profile) conformance"
-        hit = canonical_record(index, canonical) if canonical else None
-        if hit:
-            declared, (pkg, _rtype, name) = hit
-            out["feature"] = f"profile `{name}` ({declared})"
-            out["packages"].append(pkg)
-            elems = (index.get("profileElements") or {}).get(declared) or {}
-            # Which element the validator complained about, and whether the profile
-            # constrains it. This turns "the validator said no" into a citation.
-            pm = RE_ELEMENT_PATH.match(message)
-            if pm and elems:
-                path = RE_INDEX.sub("", pm.group(1))
-                where = elems.get("constraintSource") or "snapshot"
-                req = (elems.get("required") or {}).get(path)
-                if req:
-                    # The element ids name the slices that impose the minimum -
-                    # "the Abrechnungsnummer identifier needs a type", not "every
-                    # identifier needs a type".
-                    ids = [i for i in req.get("ids", []) if i != path]
-                    via = f" via {', '.join(f'`{i}`' for i in ids)}" if ids else ""
-                    out["requirements"].append(
-                        f"`{name}` constrains `{path}` to `min={req['min']}`"
-                        f"{via} in its {where} - the element is required, not "
-                        "optional")
-                elif path in (elems.get("mustSupport") or []):
-                    out["requirements"].append(
-                        f"`{name}` marks `{path}` `mustSupport` in its {where} - "
-                        "a server claiming this profile must be able to return it, "
-                        "though ISiK does not require the element to be populated "
-                        "in every instance")
-                else:
-                    parent = ".".join(path.split(".")[:-1])
-                    hint = ""
-                    if parent and parent in (elems.get("mustSupport") or []):
-                        hint = (f"; its parent `{parent}` is `mustSupport`")
-                    out["requirements"].append(
-                        f"`{path}` is not constrained in `{name}`'s {where}"
-                        f"{hint} - the constraint comes from "
-                        f"`{elems.get('baseDefinition') or 'a base profile'}` or "
-                        "from base FHIR")
-                if elems.get("note"):
-                    out["notes"].append(elems["note"])
-        elif canonical:
-            out["feature"] = f"profile {canonical}"
-            out["notes"].append(f"no unpacked FHIR package supplies {canonical}, "
-                                "so the supplying package cannot be named")
-        if module:
-            mod = (index.get("validationModules") or {}).get(module) or {}
-            for pkg in mod.get("measuredPackages") or []:
-                if pkg not in out["packages"]:
-                    out["packages"].append(pkg)
-            decl = mod.get("declared") or {}
-            deps = decl.get("dependencies") or []
-            out["requirements"].append(
-                f"asserted by the Gematik reference validator's `{module}` "
-                f"validation module" +
-                (f" (declared dependencies: {', '.join(deps)})" if deps else ""))
-        out["expected"] = (f"the response body validates cleanly against "
-                           f"{out['feature'] or 'the profile'}")
-        return out
+                return "MISSING_SEARCH_PARAM", (
+                    f"the suite's CapabilityStatement check reports search parameter "
+                    f"`{m.group('param')}` of `{m.group('resource')}` as missing or "
+                    "incorrect. The failure carries no step, so this is read from the "
+                    "message the suite raised")
+            return "UNCLASSIFIED", ("the failure is attributed to the scenario rather "
+                                    "than to a step, so no step shape is available")
 
-    # --- search parameters ---------------------------------------------------
-    if category == "MISSING_SEARCH_PARAM":
-        name = args.get("name")
-        ptype = args.get("type")
-        rtype = args.get("resourceType") or target.get("resourceType")
-        out["mechanism"] = "SearchParameter declaration in the CapabilityStatement"
-        if name and rtype:
-            out["feature"] = (f"search parameter `{name}`"
-                              + (f" of type `{ptype}`" if ptype else "")
-                              + f" on `{rtype}`")
-            rows = requirement_rows(index, "searchParams", f"{rtype}|{name}|{ptype}")
-            if not rows:
-                rows = [r for k, v in
-                        ((index.get("conformance") or {}).get("searchParams") or {}).items()
-                        if k.startswith(f"{rtype}|{name}|") for r in v]
-                if rows:
+        if self.sub:
+            return (self.sub["category"],
+                    f"the failing Serenity step is `{self.failure['step']}`")
+
+        status_cat = category_from_status(http)
+        if status_cat:
+            return status_cat, (f"the SUT answered {http.get('statusCode')} to "
+                                f"{http.get('method')} {http.get('path')}")
+
+        # After the recorded exchange, which is stronger evidence, and before the
+        # shape defaults: a status-code assertion states the SUT's actual answer in
+        # its own message even when no exchange was recorded.
+        verdict = response_code_verdict(self.failure, self.resolved)
+        if verdict:
+            return verdict
+
+        # index['responseBodyRules']: the parser failed, not the assertion.
+        if "HAPI-1857" in (self.failure.get("message") or ""):
+            return "RESPONSE_FORMAT", (
+                "the SUT returned no response body, so the FHIRPath had nothing to "
+                "evaluate over. IRIS withholds the created resource unless the "
+                "request sends `Prefer: return=representation`, which this step "
+                "does not")
+
+        if self.cls.get("category"):
+            return self.cls["category"], f"the step is a `{self.cls['kind']}` assertion"
+
+        if self.indexed and self.indexed.get("category"):
+            return (self.indexed["category"],
+                    f"a `{self.indexed['kind']}` assertion in a "
+                    f"`{self.indexed['context']}` context")
+
+        if self.indexed:
+            return "UNCLASSIFIED", (f"a `{self.indexed['kind']}` assertion in a "
+                                    f"`{self.indexed['context']}` context, which "
+                                    "neither the step shape nor the response decides")
+        return "UNCLASSIFIED", "the step shape is not in the classification table"
+
+    def attribution(self, category: str) -> dict:
+        """The FHIR feature under test, and which package supplies it.
+
+        Returns {feature, mechanism, requirements[], packages[], expected, notes[]}.
+        Every field is either derived from the index or absent; nothing is invented, so
+        an entry that cannot name a package says so instead of guessing.
+        """
+        args = dict(self.cls.get("args") or {})
+        if self.sub:
+            args.update(self.sub.get("args") or {})
+        if self.indexed and self.indexed.get("args"):
+            for k, v in self.indexed["args"].items():
+                args.setdefault(k, v)
+        target = (self.indexed or {}).get("target") or {}
+        http = self.failure.get("http") or {}
+        message = self.failure.get("message") or ""
+        out: dict = {"feature": None, "mechanism": None, "requirements": [],
+                     "packages": [], "expected": None, "notes": []}
+
+        # A scenario-scope CapabilityStatement finding has no step and therefore no
+        # step arguments, but its message names the parameter and the resource. Filling
+        # them in here lets the MISSING_SEARCH_PARAM branch below do its normal
+        # requirement lookup instead of reporting an unattributed finding.
+        caps = RE_CAPS_SEARCHPARAM.search(message)
+        if caps and category == "MISSING_SEARCH_PARAM":
+            args.setdefault("name", caps.group("param"))
+            args.setdefault("resourceType", caps.group("resource"))
+            # The message names no parameter *type*, and the type is part of the
+            # feature label and therefore of the grouping key - so without it the same
+            # parameter reported by a step and by the scenario-scope check would become
+            # two work items for one defect. Taken from the index only when the ISiK
+            # CapabilityStatements declare exactly one type for it, so nothing is
+            # invented: an ambiguous parameter keeps its type unstated.
+            if not args.get("type"):
+                prefix = f"{caps.group('resource')}|{caps.group('param')}|"
+                search_params = ((self.index.get("conformance") or {})
+                                 .get("searchParams") or {})
+                declared = {k.split("|")[2] for k in search_params
+                            if k.startswith(prefix)}
+                if len(declared) == 1:
+                    args["type"] = declared.pop()
                     out["notes"].append(
-                        f"no ISiK CapabilityStatement declares `{name}` on "
-                        f"`{rtype}` with type `{ptype}`; the rows below are the "
-                        "same parameter declared with another type")
-            lines, pkgs = fmt_requirements(rows, level)
-            out["requirements"].extend(lines)
-            out["packages"].extend(pkgs)
-            defs = {r.get("definition") for r in rows if r.get("definition")}
-            for d in sorted(defs):
-                hit = canonical_record(index, d)
-                if hit and hit[1][0] not in out["packages"]:
-                    out["packages"].append(hit[1][0])
-            out["expected"] = (f"`GET [base]/metadata` returns a CapabilityStatement "
-                               f"whose `rest.resource.where(type='{rtype}')"
-                               f".searchParam` includes `{name}`"
-                               + (f" with `type = '{ptype}'`" if ptype else ""))
-        return out
+                        "the parameter type is not in the message the suite "
+                        "raised; it is the one type the ISiK "
+                        "CapabilityStatements declare for this parameter")
 
-    # --- interactions and resource types ------------------------------------
-    if category == "CAPABILITY_STATEMENT_GAP":
-        code = args.get("code")
-        rtype = args.get("resourceType") or target.get("resourceType")
-        out["mechanism"] = "interaction declaration in the CapabilityStatement"
-        if code and rtype:
-            out["feature"] = f"the `{code}` interaction on `{rtype}`"
-            lines, pkgs = fmt_requirements(
-                requirement_rows(index, "interactions", f"{rtype}|{code}"), level)
-            out["requirements"].extend(lines)
-            out["packages"].extend(pkgs)
-            out["expected"] = (f"`GET [base]/metadata` returns a CapabilityStatement "
-                               f"whose `rest.resource.where(type='{rtype}')"
-                               f".interaction` includes `{code}`")
-        elif code:
-            out["feature"] = f"the system-level `{code}` interaction"
-            out["expected"] = (f"`GET [base]/metadata` declares `rest.interaction` "
-                               f"`{code}`")
-        elif http:
-            out["feature"] = (f"`{http.get('method')}` on "
-                              f"`{target.get('resourceType') or http.get('path')}`")
-            out["expected"] = "the endpoint accepts the interaction"
-        return out
-
-    # --- operations ----------------------------------------------------------
-    if category == "UNSUPPORTED_OPERATION":
-        code = args.get("code") or target.get("operation")
-        if not code and http.get("path"):
-            m = RE_OP_IN_PATH.search(http["path"])
-            code = m.group(1) if m else None
-        rtype = args.get("resourceType") or target.get("resourceType")
-        scope = target.get("scope")
-        out["mechanism"] = "FHIR operation ($-operation)"
-        if code:
-            out["feature"] = (f"operation `${code}`"
-                              + (f" on `{rtype}`" if rtype else "")
-                              + (f" ({scope}-level)" if scope else ""))
-            rows = requirement_rows(index, "operations", f"{rtype}|{code}") \
-                or requirement_rows(index, "operations", f"*|{code}")
-            lines, pkgs = fmt_requirements(rows, level)
-            out["requirements"].extend(lines)
-            out["packages"].extend(pkgs)
-            # The OperationDefinition itself: its declared scopes are what a
-            # developer implements against.
-            for url, od in ((index.get("conformance") or {})
-                            .get("operationDefinitions") or {}).items():
-                if od.get("code") != code:
-                    continue
-                if rtype and od.get("resource") and rtype not in od["resource"]:
-                    continue
+        # --- profile conformance -------------------------------------------------
+        if category == "PROFILE_NONCONFORMANCE":
+            module = args.get("validationModule")
+            canonical = args.get("profile")
+            if not canonical:
+                m = RE_FROM_PROFILE.search(message)
+                if m:
+                    canonical = m.group(1)
+                    out["notes"].append("the profile canonical is taken from the "
+                                        "validator message; the step named only the "
+                                        "validation module")
+            out["mechanism"] = "StructureDefinition (profile) conformance"
+            hit = canonical_record(self.index, canonical) if canonical else None
+            if hit:
+                declared, (pkg, _rtype, name) = hit
+                out["feature"] = f"profile `{name}` ({declared})"
+                out["packages"].append(pkg)
+                elems = (self.index.get("profileElements") or {}).get(declared) or {}
+                # Which element the validator complained about, and whether the profile
+                # constrains it. This turns "the validator said no" into a citation.
+                pm = RE_ELEMENT_PATH.match(message)
+                if pm and elems:
+                    path = RE_INDEX.sub("", pm.group(1))
+                    where = elems.get("constraintSource") or "snapshot"
+                    req = (elems.get("required") or {}).get(path)
+                    if req:
+                        # The element ids name the slices that impose the minimum -
+                        # "the Abrechnungsnummer identifier needs a type", not "every
+                        # identifier needs a type".
+                        ids = [i for i in req.get("ids", []) if i != path]
+                        via = f" via {', '.join(f'`{i}`' for i in ids)}" if ids else ""
+                        out["requirements"].append(
+                            f"`{name}` constrains `{path}` to `min={req['min']}`"
+                            f"{via} in its {where} - the element is required, not "
+                            "optional")
+                    elif path in (elems.get("mustSupport") or []):
+                        out["requirements"].append(
+                            f"`{name}` marks `{path}` `mustSupport` in its {where} - "
+                            "a server claiming this profile must be able to return it, "
+                            "though ISiK does not require the element to be populated "
+                            "in every instance")
+                    else:
+                        parent = ".".join(path.split(".")[:-1])
+                        hint = ""
+                        if parent and parent in (elems.get("mustSupport") or []):
+                            hint = (f"; its parent `{parent}` is `mustSupport`")
+                        out["requirements"].append(
+                            f"`{path}` is not constrained in `{name}`'s {where}"
+                            f"{hint} - the constraint comes from "
+                            f"`{elems.get('baseDefinition') or 'a base profile'}` or "
+                            "from base FHIR")
+                    if elems.get("note"):
+                        out["notes"].append(elems["note"])
+            elif canonical:
+                out["feature"] = f"profile {canonical}"
+                out["notes"].append(f"no unpacked FHIR package supplies {canonical}, "
+                                    "so the supplying package cannot be named")
+            if module:
+                mod = (self.index.get("validationModules") or {}).get(module) or {}
+                for pkg in mod.get("measuredPackages") or []:
+                    if pkg not in out["packages"]:
+                        out["packages"].append(pkg)
+                decl = mod.get("declared") or {}
+                deps = decl.get("dependencies") or []
                 out["requirements"].append(
-                    f"`OperationDefinition/{od.get('name')}` ({url}) - applies to "
-                    f"{', '.join(od.get('resource') or ['any resource'])} at "
-                    f"{', '.join(od.get('scopes') or ['unspecified'])} level, "
-                    f"shipped by `{od.get('package')}`")
-                if od.get("package") not in out["packages"]:
-                    out["packages"].append(od["package"])
-            out["expected"] = (f"the endpoint implements `${code}` and the "
-                              "invocation returns the operation's declared "
-                              "response")
-        return out
+                    f"asserted by the Gematik reference validator's `{module}` "
+                    f"validation module" +
+                    (f" (declared dependencies: {', '.join(deps)})" if deps else ""))
+            out["expected"] = (f"the response body validates cleanly against "
+                               f"{out['feature'] or 'the profile'}")
+            return out
 
-    # --- search semantics ----------------------------------------------------
-    if category == "SEARCH_SEMANTICS":
-        rtype = target.get("resourceType")
-        query = target.get("query")
-        out["mechanism"] = "FHIR search"
-        out["feature"] = (f"search on `{rtype}`" if rtype else "FHIR search") + \
-                         (f" with `{query}`" if query else "")
-        if rtype and query:
-            for part in query.split("&"):
-                pname = part.split("=", 1)[0].split(":", 1)[0]
-                if not pname or pname.startswith("_"):
-                    continue
-                rows = [r for k, v in ((index.get("conformance") or {})
-                                       .get("searchParams") or {}).items()
-                        if k.startswith(f"{rtype}|{pname}|") for r in v]
-                lines, pkgs = fmt_requirements(rows, level)
-                if lines:
-                    out["requirements"].append(f"parameter `{pname}`: " + lines[0])
-                out["packages"].extend(p for p in pkgs if p not in out["packages"])
-        expr = args.get("expr")
-        out["expected"] = (f"the search result Bundle satisfies `{expr}`" if expr
-                           else "the search returns exactly the expected result set")
-        # What identifies this finding is which parameters the SUT mishandled on
-        # which resource type - not the literal query. The suite sends the same
-        # search once per module with a different patient, and that is one
-        # defect; whereas two genuinely different searches must not share an
-        # entry just because the suite words both failures identically, which is
-        # what the message-based key did (measured: an `Observation` composite
-        # and a `DocumentReference` date search in one entry titled after the
-        # composite).
-        if rtype and query:
-            pnames = sorted({p.split("=", 1)[0].split(":", 1)[0]
-                             for p in query.split("&") if p})
-            kind = ("empty-result" if expr and RE_EMPTY_RESULT_ASSERT.search(expr)
-                    else "non-matching-result")
-            out["groupKey"] = f"{rtype}?{'&'.join(pnames)} [{kind}]"
-            # How to title the finding when its cases ran different queries of
-            # the same shape, which is what the key groups.
-            out["featureShape"] = (f"search on `{rtype}` with "
-                                   + ", ".join(f"`{p}`" for p in pnames))
-        return out
-
-    # --- reference integrity -------------------------------------------------
-    if category == "REFERENCE_INTEGRITY":
-        elem = args.get("element")
-        rid = args.get("id")
-        out["mechanism"] = "Reference.reference resolution"
-        out["feature"] = (f"reference element `{elem}`" if elem
-                          else "resource references")
-        out["expected"] = (f"`{elem}` resolves to `{rid}`" if elem and rid
-                           else "every reference resolves to the expected resource")
-        rtype = target.get("resourceType")
-        if rtype and elem:
-            # Which ISiK profile constrains this reference element. Several
-            # profiles can constrain the same resource type, so the candidates are
-            # ordered - the level under test first, then by canonical - rather than
-            # taking whichever the dict happened to yield first, so the citation is
-            # the same on every run.
-            base = elem.split(".")[0]
-            path = f"{rtype}.{base}"
-            cands = sorted(
-                ((c, v) for c, v in (index.get("profileElements") or {}).items()
-                 if v.get("type") == rtype
-                 and ((v.get("required") or {}).get(path)
-                      or path in (v.get("mustSupport") or []))),
-                key=lambda cv: (cv[1].get("isikLevel") != level, cv[0]))
-            for _canonical, elems in cands[:2]:
-                req = (elems.get("required") or {}).get(path)
-                out["requirements"].append(
-                    f"`{elems.get('name')}` constrains `{path}` "
-                    f"({f'''min={req['min']}''' if req else 'mustSupport'}), "
-                    f"shipped by `{elems.get('package')}`")
-                if elems.get("package") not in out["packages"]:
-                    out["packages"].append(elems["package"])
-            if len(cands) > 2:
-                out["notes"].append(f"{len(cands) - 2} further ISiK profile(s) "
-                                    f"constrain `{path}`; the two most relevant to "
-                                    f"{level} are cited")
-        return out
-
-    # --- write-path validation ----------------------------------------------
-    if category == "WRITE_VALIDATION_GAP":
-        out["mechanism"] = "validation performed on create/update"
-        # Deliberately not named after a resource type. The group is keyed on the
-        # status pair, so it spans whatever writes hit the same gap - measured: one
-        # group covers Appointment and Composition posts across both levels - and a
-        # title naming the first occurrence's type would misdescribe the rest. The
-        # per-occurrence table below names each one.
-        out["feature"] = "write validation (create/update)"
-        m = RE_ASSERTJ_VALUES.match(message)
-        if m:
-            actual, expected = m.group("actual").strip(), m.group("expected").strip()
-            out["expected"] = (f"the SUT answers `{expected}` to this write; it "
-                               f"answered `{actual}`")
-            out["requirements"].append(
-                "the status is the assertion: the scenario posts a body that is "
-                "deliberately conformant or deliberately not, and the status code "
-                "is how ISiK requires the SUT to say which it took it for")
-        # No `restQuery` is recorded for a TGR step, so say where the status came
-        # from rather than leaving the reader to assume an exchange was captured.
-        out["notes"].append(
-            "the status codes are read from the assertion message: Tiger issues "
-            "this request through its own proxy, so the Serenity report carries "
-            "no `restQuery` for the exchange")
-        return out
-
-    # --- SMART-on-FHIR authorization ----------------------------------------
-    if category == "AUTHORIZATION_REFUSAL_FORM":
-        out["mechanism"] = "SMART-on-FHIR scope enforcement - the HTTP form of a refusal"
-        # Not named after the resource type either, and for the same reason as the
-        # write group above: what the entry is about is the status an out-of-scope
-        # read is refused with, which is one behaviour whatever type it is asked
-        # for. The per-occurrence table names each scope context.
-        out["feature"] = "status code of an out-of-scope read"
-        m = RE_ASSERTJ_VALUES.match(message)
-        if m:
-            actual, expected = m.group("actual").strip(), m.group("expected").strip()
-            out["expected"] = (f"the SUT answers `{expected}` to a read the "
-                               f"token's scope does not cover; it answered "
-                               f"`{actual}`")
-        out["requirements"].append(
-            "the suite requires this of two scope contexts and not of a third: "
-            "the same scenario name under one of the module's other scopes "
-            "asserts `FHIR search response is forbidden or contains no "
-            "resources`, which an empty result set satisfies. A `4xx` satisfies "
-            "both forms, so the two are not in conflict - this is a requirement "
-            "the SUT does not meet, not a suite defect")
-        out["notes"].append(
-            "the status code is read from the assertion message: Tiger issues "
-            "this request through its own proxy, so the Serenity report carries "
-            "no `restQuery` for the exchange. What the SUT returned in place of "
-            "the refusal is not stated by this entry, and is not lost either: "
-            "each occurrence cites a traffic log in the round's debug archive, "
-            "and `CASE-EVIDENCE.md` quotes that exchange - status, headers and "
-            "body with the body's sha256 - case by case. Over a bundle that "
-            "carries no debug archive, run the scope probe in "
-            "docs/en/07-reports.md against the round's endpoint instead")
-        return out
-
-    # --- response format ----------------------------------------------------
-    if category == "RESPONSE_FORMAT":
-        attr = args.get("attribute")
-        out["mechanism"] = "FHIR RESTful API - response envelope"
-        if "HAPI-1857" in message:
+        # --- search parameters ---------------------------------------------------
+        if category == "MISSING_SEARCH_PARAM":
+            name = args.get("name")
+            ptype = args.get("type")
             rtype = args.get("resourceType") or target.get("resourceType")
-            out["feature"] = ("response body of a create"
-                              + (f" on `{rtype}`" if rtype else ""))
-            out["expected"] = ("the create returns the stored resource, or a "
-                               "`Parameters` wrapping it, so the following "
-                               "FHIRPath assertions have something to read")
-            out["requirements"].append(
-                "the scenario asserts `($this is <Type>) or ($this is Parameters)` "
-                "on the create response and sends no `Prefer` header, so it "
-                "requires the body unconditionally")
+            out["mechanism"] = "SearchParameter declaration in the CapabilityStatement"
+            if name and rtype:
+                out["feature"] = (f"search parameter `{name}`"
+                                  + (f" of type `{ptype}`" if ptype else "")
+                                  + f" on `{rtype}`")
+                rows = requirement_rows(self.index, "searchParams",
+                                        f"{rtype}|{name}|{ptype}")
+                if not rows:
+                    declared = ((self.index.get("conformance") or {})
+                                .get("searchParams") or {})
+                    rows = [r for k, v in declared.items()
+                            if k.startswith(f"{rtype}|{name}|") for r in v]
+                    if rows:
+                        out["notes"].append(
+                            f"no ISiK CapabilityStatement declares `{name}` on "
+                            f"`{rtype}` with type `{ptype}`; the rows below are the "
+                            "same parameter declared with another type")
+                lines, pkgs = fmt_requirements(rows, self.level)
+                out["requirements"].extend(lines)
+                out["packages"].extend(pkgs)
+                defs = {r.get("definition") for r in rows if r.get("definition")}
+                for d in sorted(defs):
+                    hit = canonical_record(self.index, d)
+                    if hit and hit[1][0] not in out["packages"]:
+                        out["packages"].append(hit[1][0])
+                out["expected"] = (f"`GET [base]/metadata` returns a "
+                                   f"CapabilityStatement whose "
+                                   f"`rest.resource.where(type='{rtype}')"
+                                   f".searchParam` includes `{name}`"
+                                   + (f" with `type = '{ptype}'`" if ptype else ""))
+            return out
+
+        # --- interactions and resource types ------------------------------------
+        if category == "CAPABILITY_STATEMENT_GAP":
+            code = args.get("code")
+            rtype = args.get("resourceType") or target.get("resourceType")
+            out["mechanism"] = "interaction declaration in the CapabilityStatement"
+            if code and rtype:
+                out["feature"] = f"the `{code}` interaction on `{rtype}`"
+                lines, pkgs = fmt_requirements(
+                    requirement_rows(self.index, "interactions", f"{rtype}|{code}"),
+                    self.level)
+                out["requirements"].extend(lines)
+                out["packages"].extend(pkgs)
+                out["expected"] = (f"`GET [base]/metadata` returns a "
+                                   f"CapabilityStatement whose "
+                                   f"`rest.resource.where(type='{rtype}')"
+                                   f".interaction` includes `{code}`")
+            elif code:
+                out["feature"] = f"the system-level `{code}` interaction"
+                out["expected"] = (f"`GET [base]/metadata` declares `rest.interaction` "
+                                   f"`{code}`")
+            elif http:
+                out["feature"] = (f"`{http.get('method')}` on "
+                                  f"`{target.get('resourceType') or http.get('path')}`")
+                out["expected"] = "the endpoint accepts the interaction"
+            return out
+
+        # --- operations ----------------------------------------------------------
+        if category == "UNSUPPORTED_OPERATION":
+            code = args.get("code") or target.get("operation")
+            if not code and http.get("path"):
+                m = RE_OP_IN_PATH.search(http["path"])
+                code = m.group(1) if m else None
+            rtype = args.get("resourceType") or target.get("resourceType")
+            scope = target.get("scope")
+            out["mechanism"] = "FHIR operation ($-operation)"
+            if code:
+                out["feature"] = (f"operation `${code}`"
+                                  + (f" on `{rtype}`" if rtype else "")
+                                  + (f" ({scope}-level)" if scope else ""))
+                rows = requirement_rows(self.index, "operations", f"{rtype}|{code}") \
+                    or requirement_rows(self.index, "operations", f"*|{code}")
+                lines, pkgs = fmt_requirements(rows, self.level)
+                out["requirements"].extend(lines)
+                out["packages"].extend(pkgs)
+                # The OperationDefinition itself: its declared scopes are what a
+                # developer implements against.
+                for url, od in ((self.index.get("conformance") or {})
+                                .get("operationDefinitions") or {}).items():
+                    if od.get("code") != code:
+                        continue
+                    if rtype and od.get("resource") and rtype not in od["resource"]:
+                        continue
+                    out["requirements"].append(
+                        f"`OperationDefinition/{od.get('name')}` ({url}) - applies to "
+                        f"{', '.join(od.get('resource') or ['any resource'])} at "
+                        f"{', '.join(od.get('scopes') or ['unspecified'])} level, "
+                        f"shipped by `{od.get('package')}`")
+                    if od.get("package") not in out["packages"]:
+                        out["packages"].append(od["package"])
+                out["expected"] = (f"the endpoint implements `${code}` and the "
+                                  "invocation returns the operation's declared "
+                                  "response")
+            return out
+
+        # --- search semantics ----------------------------------------------------
+        if category == "SEARCH_SEMANTICS":
+            rtype = target.get("resourceType")
+            query = target.get("query")
+            out["mechanism"] = "FHIR search"
+            out["feature"] = (f"search on `{rtype}`" if rtype else "FHIR search") + \
+                             (f" with `{query}`" if query else "")
+            if rtype and query:
+                for part in query.split("&"):
+                    pname = part.split("=", 1)[0].split(":", 1)[0]
+                    if not pname or pname.startswith("_"):
+                        continue
+                    rows = [r for k, v in ((self.index.get("conformance") or {})
+                                           .get("searchParams") or {}).items()
+                            if k.startswith(f"{rtype}|{pname}|") for r in v]
+                    lines, pkgs = fmt_requirements(rows, self.level)
+                    if lines:
+                        out["requirements"].append(f"parameter `{pname}`: " + lines[0])
+                    out["packages"].extend(p for p in pkgs if p not in out["packages"])
+            expr = args.get("expr")
+            out["expected"] = (
+                f"the search result Bundle satisfies `{expr}`" if expr
+                else "the search returns exactly the expected result set")
+            # What identifies this finding is which parameters the SUT mishandled on
+            # which resource type - not the literal query. The suite sends the same
+            # search once per module with a different patient, and that is one
+            # defect; whereas two genuinely different searches must not share an
+            # entry just because the suite words both failures identically, which is
+            # what the message-based key did (measured: an `Observation` composite
+            # and a `DocumentReference` date search in one entry titled after the
+            # composite).
+            if rtype and query:
+                pnames = sorted({p.split("=", 1)[0].split(":", 1)[0]
+                                 for p in query.split("&") if p})
+                kind = ("empty-result" if expr and RE_EMPTY_RESULT_ASSERT.search(expr)
+                        else "non-matching-result")
+                out["groupKey"] = f"{rtype}?{'&'.join(pnames)} [{kind}]"
+                # How to title the finding when its cases ran different queries of
+                # the same shape, which is what the key groups.
+                out["featureShape"] = (f"search on `{rtype}` with "
+                                       + ", ".join(f"`{p}`" for p in pnames))
+            return out
+
+        # --- reference integrity -------------------------------------------------
+        if category == "REFERENCE_INTEGRITY":
+            elem = args.get("element")
+            rid = args.get("id")
+            out["mechanism"] = "Reference.reference resolution"
+            out["feature"] = (f"reference element `{elem}`" if elem
+                              else "resource references")
+            out["expected"] = (f"`{elem}` resolves to `{rid}`" if elem and rid
+                               else "every reference resolves to the expected resource")
+            rtype = target.get("resourceType")
+            if rtype and elem:
+                # Which ISiK profile constrains this reference element. Several
+                # profiles can constrain the same resource type, so the candidates are
+                # ordered - the level under test first, then by canonical - rather than
+                # taking whichever the dict happened to yield first, so the citation is
+                # the same on every run.
+                base = elem.split(".")[0]
+                path = f"{rtype}.{base}"
+                profiles = (self.index.get("profileElements") or {}).items()
+                cands = sorted(
+                    ((c, v) for c, v in profiles
+                     if v.get("type") == rtype
+                     and ((v.get("required") or {}).get(path)
+                          or path in (v.get("mustSupport") or []))),
+                    key=lambda cv: (cv[1].get("isikLevel") != self.level, cv[0]))
+                for _canonical, elems in cands[:2]:
+                    req = (elems.get("required") or {}).get(path)
+                    out["requirements"].append(
+                        f"`{elems.get('name')}` constrains `{path}` "
+                        f"({f'''min={req['min']}''' if req else 'mustSupport'}), "
+                        f"shipped by `{elems.get('package')}`")
+                    if elems.get("package") not in out["packages"]:
+                        out["packages"].append(elems["package"])
+                if len(cands) > 2:
+                    out["notes"].append(f"{len(cands) - 2} further ISiK profile(s) "
+                                        f"constrain `{path}`; the two most relevant to "
+                                        f"{self.level} are cited")
+            return out
+
+        # --- write-path validation ----------------------------------------------
+        if category == "WRITE_VALIDATION_GAP":
+            out["mechanism"] = "validation performed on create/update"
+            # Deliberately not named after a resource type. The group is keyed on the
+            # status pair, so it spans whatever writes hit the same gap - measured: one
+            # group covers Appointment and Composition posts across both levels - and a
+            # title naming the first occurrence's type would misdescribe the rest. The
+            # per-occurrence table below names each one.
+            out["feature"] = "write validation (create/update)"
+            m = RE_ASSERTJ_VALUES.match(message)
+            if m:
+                actual = m.group("actual").strip()
+                expected = m.group("expected").strip()
+                out["expected"] = (f"the SUT answers `{expected}` to this write; it "
+                                   f"answered `{actual}`")
+                out["requirements"].append(
+                    "the status is the assertion: the scenario posts a body that is "
+                    "deliberately conformant or deliberately not, and the status code "
+                    "is how ISiK requires the SUT to say which it took it for")
+            # No `restQuery` is recorded for a TGR step, so say where the status came
+            # from rather than leaving the reader to assume an exchange was captured.
             out["notes"].append(
-                "measured on this SUT: the same POST returns the resource when "
-                "`Prefer: return=representation` is sent and an empty body with "
-                "`Location` set when it is not")
+                "the status codes are read from the assertion message: Tiger issues "
+                "this request through its own proxy, so the Serenity report carries "
+                "no `restQuery` for the exchange")
             return out
-        if args.get("id"):
-            out["feature"] = "logical id echoed by a read"
-            out["expected"] = (f"a read of `{http.get('path') or 'the resource'}` "
-                               f"returns a resource with `id = "
-                               f"'{args['id']}'`")
-        elif attr:
-            out["feature"] = f"response attribute `{attr}`"
-            out["expected"] = (f"`{attr}` matches `{args.get('matches')}`"
-                               if args.get("matches") else f"`{attr}` is set")
-        elif failure.get("scope") == "outcome":
-            out["feature"] = "SUT reachability"
-            out["expected"] = "the SUT answers the request"
-            out["notes"].append("this is an environment failure, not a conformance "
-                                "finding: no assertion was reached. Fix the "
-                                "environment and re-run before reading any other "
-                                "entry in this report.")
-        else:
-            out["feature"] = "response format"
-            out["expected"] = "the declared content type and status code"
-        ctype = http.get("contentType")
-        if ctype:
+
+        # --- SMART-on-FHIR authorization ----------------------------------------
+        if category == "AUTHORIZATION_REFUSAL_FORM":
+            out["mechanism"] = ("SMART-on-FHIR scope enforcement - the HTTP "
+                                "form of a refusal")
+            # Not named after the resource type either, and for the same reason as the
+            # write group above: what the entry is about is the status an out-of-scope
+            # read is refused with, which is one behaviour whatever type it is asked
+            # for. The per-occurrence table names each scope context.
+            out["feature"] = "status code of an out-of-scope read"
+            m = RE_ASSERTJ_VALUES.match(message)
+            if m:
+                actual = m.group("actual").strip()
+                expected = m.group("expected").strip()
+                out["expected"] = (f"the SUT answers `{expected}` to a read the "
+                                   f"token's scope does not cover; it answered "
+                                   f"`{actual}`")
             out["requirements"].append(
-                "FHIR R4 requires the response `Content-Type` to match the "
-                f"requested format; the SUT returned `{ctype}`")
-        return out
-
-    # --- test data -----------------------------------------------------------
-    if category == "TEST_DATA_DEFECT":
-        out["mechanism"] = "this project's seeded test data"
-        out["feature"] = "test fixture, not a SUT feature"
-        out["expected"] = "the resource the scenario needs exists and is conformant"
-        return out
-
-    # --- suite self-contradiction, or a suite crash --------------------------
-    if category == "UPSTREAM_SUITE_CONFLICT":
-        # Two ways a case can fail on the suite rather than on the response, and
-        # they need different words: one scenario asks for incompatible things,
-        # the other asks for something reasonable and then crashes on the answer.
-        if suite_crash_verdict(failure):
-            out["mechanism"] = "the test suite's own step implementation"
-            out["feature"] = ("not determinable — the step raised an exception "
-                              "before it compared anything")
-            out["expected"] = ("a verdict on the response; the step produced an "
-                               "exception instead, so the case states neither a "
-                               "pass nor a failure of the SUT")
-            out["irisLocus"] = (
-                "none, and not determinable from this case: the step never "
-                "evaluated the response. The exchange itself may still be worth "
-                "reading — a response the suite crashed on is not thereby a "
-                "correct one — but nothing in this case localises a defect in "
-                "the product.")
+                "the suite requires this of two scope contexts and not of a third: "
+                "the same scenario name under one of the module's other scopes "
+                "asserts `FHIR search response is forbidden or contains no "
+                "resources`, which an empty result set satisfies. A `4xx` satisfies "
+                "both forms, so the two are not in conflict - this is a requirement "
+                "the SUT does not meet, not a suite defect")
+            out["notes"].append(
+                "the status code is read from the assertion message: Tiger issues "
+                "this request through its own proxy, so the Serenity report carries "
+                "no `restQuery` for the exchange. What the SUT returned in place of "
+                "the refusal is not stated by this entry, and is not lost either: "
+                "each occurrence cites a traffic log in the round's debug archive, "
+                "and `CASE-EVIDENCE.md` quotes that exchange - status, headers and "
+                "body with the body's sha256 - case by case. Over a bundle that "
+                "carries no debug archive, run the scope probe in "
+                "docs/en/07-reports.md against the round's endpoint instead")
             return out
-        out["mechanism"] = "the test suite's own requirements, which conflict"
-        out["feature"] = "not determinable — the scenario tests two "
-        out["feature"] += "incompatible requirements at once"
-        out["expected"] = ("no response satisfies both steps, so the scenario "
-                           "states nothing about the SUT")
-        return out
 
-    out["mechanism"] = "unclassified"
-    out["expected"] = "see the quoted step"
-    return out
+        # --- response format ----------------------------------------------------
+        if category == "RESPONSE_FORMAT":
+            attr = args.get("attribute")
+            out["mechanism"] = "FHIR RESTful API - response envelope"
+            if "HAPI-1857" in message:
+                rtype = args.get("resourceType") or target.get("resourceType")
+                out["feature"] = ("response body of a create"
+                                  + (f" on `{rtype}`" if rtype else ""))
+                out["expected"] = ("the create returns the stored resource, or a "
+                                   "`Parameters` wrapping it, so the following "
+                                   "FHIRPath assertions have something to read")
+                out["requirements"].append(
+                    "the scenario asserts `($this is <Type>) or ($this is Parameters)` "
+                    "on the create response and sends no `Prefer` header, so it "
+                    "requires the body unconditionally")
+                out["notes"].append(
+                    "measured on this SUT: the same POST returns the resource when "
+                    "`Prefer: return=representation` is sent and an empty body with "
+                    "`Location` set when it is not")
+                return out
+            if args.get("id"):
+                out["feature"] = "logical id echoed by a read"
+                out["expected"] = (f"a read of `{http.get('path') or 'the resource'}` "
+                                   f"returns a resource with `id = "
+                                   f"'{args['id']}'`")
+            elif attr:
+                out["feature"] = f"response attribute `{attr}`"
+                out["expected"] = (f"`{attr}` matches `{args.get('matches')}`"
+                                   if args.get("matches") else f"`{attr}` is set")
+            elif self.failure.get("scope") == "outcome":
+                out["feature"] = "SUT reachability"
+                out["expected"] = "the SUT answers the request"
+                out["notes"].append("this is an environment failure, not a conformance "
+                                    "finding: no assertion was reached. Fix the "
+                                    "environment and re-run before reading any other "
+                                    "entry in this report.")
+            else:
+                out["feature"] = "response format"
+                out["expected"] = "the declared content type and status code"
+            ctype = http.get("contentType")
+            if ctype:
+                out["requirements"].append(
+                    "FHIR R4 requires the response `Content-Type` to match the "
+                    f"requested format; the SUT returned `{ctype}`")
+            return out
+
+        # --- test data -----------------------------------------------------------
+        if category == "TEST_DATA_DEFECT":
+            out["mechanism"] = "this project's seeded test data"
+            out["feature"] = "test fixture, not a SUT feature"
+            out["expected"] = "the resource the scenario needs exists and is conformant"
+            return out
+
+        # --- suite self-contradiction, or a suite crash --------------------------
+        if category == "UPSTREAM_SUITE_CONFLICT":
+            # Two ways a case can fail on the suite rather than on the response, and
+            # they need different words: one scenario asks for incompatible things,
+            # the other asks for something reasonable and then crashes on the answer.
+            if suite_crash_verdict(self.failure):
+                out["mechanism"] = "the test suite's own step implementation"
+                out["feature"] = ("not determinable — the step raised an exception "
+                                  "before it compared anything")
+                out["expected"] = ("a verdict on the response; the step produced an "
+                                   "exception instead, so the case states neither a "
+                                   "pass nor a failure of the SUT")
+                out["irisLocus"] = (
+                    "none, and not determinable from this case: the step never "
+                    "evaluated the response. The exchange itself may still be worth "
+                    "reading — a response the suite crashed on is not thereby a "
+                    "correct one — but nothing in this case localises a defect in "
+                    "the product.")
+                return out
+            out["mechanism"] = "the test suite's own requirements, which conflict"
+            out["feature"] = "not determinable — the scenario tests two "
+            out["feature"] += "incompatible requirements at once"
+            out["expected"] = ("no response satisfies both steps, so the scenario "
+                               "states nothing about the SUT")
+            return out
+
+        out["mechanism"] = "unclassified"
+        out["expected"] = "see the quoted step"
+        return out
 
 
 # =============================================================================
@@ -1055,6 +1173,45 @@ def load_corpus(run_dir: Path) -> dict[str, dict]:
     return out
 
 
+@dataclass(frozen=True)
+class StagedCorpus:
+    """What this project staged for one level, and what the profiles constrain.
+
+    These are the two fixed inputs of every join below - the resources
+    `provenance/corpus/<Level>/` recorded for the level under test, and the
+    attribution index - and they are read together or not at all: a corpus
+    without the index cannot tell a location rooted in a resource type from one
+    rooted in a datatype (see absence_verdict), and the index without a corpus
+    says nothing about what was staged.
+
+    An empty `resources` is the ordinary state of a bundle archived before the
+    corpus was collected, and it means "no evidence" rather than "nothing was
+    staged".
+    """
+    level: str
+    resources: dict
+    index: dict
+
+    @staticmethod
+    def of(round_: Round, level: str) -> "StagedCorpus":
+        """The staged corpus of one level of a round."""
+        return StagedCorpus(level=level,
+                            resources=round_.corpus.get(level) or {},
+                            index=round_.index)
+
+
+@dataclass(frozen=True)
+class AbsentElement:
+    """One element a validator message reports as absent.
+
+    `loc` is the location the message names and `source` the profile it
+    attributes the minimum to; both come from the same match of
+    RE_ABSENT_ELEMENT, and the verdict needs the two together.
+    """
+    loc: str
+    source: str | None
+
+
 def element_values(body: dict, path: str) -> list:
     """Every value the dotted FHIR element path selects in one resource.
 
@@ -1137,8 +1294,8 @@ def coding_pairs(node, found: set[tuple[str, str]] | None = None
     return found
 
 
-def absence_verdict(staged: dict, loc: str, index: dict | None = None,
-                    source: str | None = None) -> tuple[str, str, list[str]]:
+def absence_verdict(corpus: StagedCorpus,
+                    absent: AbsentElement) -> tuple[str, str, list[str]]:
     """Who is answerable for an element the validator found absent.
 
     Three outcomes, and the distinction between them is the whole point:
@@ -1163,22 +1320,21 @@ def absence_verdict(staged: dict, loc: str, index: dict | None = None,
     the profile's discriminator, which this report does not load, so a present
     parent element is not evidence either way.
 
-    `source` is the profile the message attributes the rejection to, and `index`
-    the attribution index. They are used for one thing: a location rooted in a
-    FHIR datatype rather than a resource type - `Coding.version`, from a profile
-    whose `type` is `Coding` - cannot be joined against a corpus of resources at
-    all, and reporting that as "the level staged no Coding" is true but reads as
-    a statement about this corpus rather than about the shape of the message.
+    The profile the message attributes the rejection to, `absent.source`, is used
+    with the index for one thing: a location rooted in a FHIR datatype rather
+    than a resource type - `Coding.version`, from a profile whose `type` is
+    `Coding` - cannot be joined against a corpus of resources at all, and
+    reporting that as "the level staged no Coding" is true but reads as a
+    statement about this corpus rather than about the shape of the message.
     """
+    loc, source = absent.loc, absent.source
     rtype = loc.split(".")[0].split(":", 1)[0]
-    ours = [rec for rec in staged.values()
+    ours = [rec for rec in corpus.resources.values()
             if rec["body"].get("resourceType") == rtype]
     if not ours:
-        constrains = ((index or {}).get("profileElements", {})
-                      .get(source or "", {}).get("type"))
-        if constrains == rtype:
-            name = (index or {}).get("profileElements", {}) \
-                .get(source or "", {}).get("name", source)
+        profiles = corpus.index.get("profileElements", {})
+        if profiles.get(source or "", {}).get("type") == rtype:
+            name = profiles.get(source or "", {}).get("name", source)
             return "indeterminate", (
                 f"`{loc}` is rooted in `{rtype}`, the type `{name}` constrains, "
                 f"not in a resource type; this report joins a location to the "
@@ -1208,8 +1364,7 @@ def absence_verdict(staged: dict, loc: str, index: dict | None = None,
         f"so no response to this request could have satisfied the profile"), []
 
 
-def corpus_evidence(corpus: dict, level: str, message: str | None,
-                    index: dict | None = None) -> dict | None:
+def corpus_evidence(corpus: StagedCorpus, message: str | None) -> dict | None:
     """Positive evidence that the value the validator rejected is the value we staged.
 
     The question this answers is the only one that separates a product defect
@@ -1258,7 +1413,7 @@ def corpus_evidence(corpus: dict, level: str, message: str | None,
     """
     if not message:
         return None
-    staged = corpus.get(level) or {}
+    staged = corpus.resources
     if not staged:
         return None
     findings = []
@@ -1320,7 +1475,7 @@ def corpus_evidence(corpus: dict, level: str, message: str | None,
             continue
         absent_seen.add(loc)
         verdict, detail, carrying = absence_verdict(
-            staged, loc, index, m.group("from"))
+            corpus, AbsentElement(loc, m.group("from")))
         findings.append({
             "kind": "absent-element",
             "element": loc,
@@ -1391,11 +1546,11 @@ def corpus_evidence(corpus: dict, level: str, message: str | None,
         blockers.append("no finding is positively attributable to the staged corpus")
 
     return {
-        "level": level,
+        "level": corpus.level,
         "findings": findings,
         "blockers": blockers,
         "confirmed": not blockers,
-        "source": f"provenance/corpus/{level}/",
+        "source": f"provenance/corpus/{corpus.level}/",
     }
 
 
@@ -1749,81 +1904,102 @@ def truncate(text: str, limit: int = MAX_BODY) -> str:
 # Grouping
 # =============================================================================
 
-def root_cause_key(category: str, attribution: dict, failure: dict,
-                   cls: dict, sub: dict | None, prereq_rule: str | None = None
-                   ) -> tuple:
-    """The identity of a defect, independent of which scenario tripped over it.
+@dataclass(frozen=True)
+class Verdict:
+    """What the report concluded about one failing case, and why.
 
-    Levels are deliberately *not* part of the key: a search parameter missing on
-    `Account` is one IRIS defect whether ISiK 3 or ISiK 5 asked for it, and the
-    entry lists both levels. Splitting by level would double the work list and
-    misrepresent the amount of work.
+    `rule` names the rule that settled the case when one did - an unmet
+    precondition, or a self-contradiction of the test suite - and is None when
+    the category came from the case's own step, response and evidence. It
+    belongs to the verdict rather than travelling beside it: a case excused by
+    a rule is excused by that rule and by no other, and the grouping below
+    depends on exactly that.
     """
-    feature = attribution.get("feature") or ""
-    if prereq_rule:
-        # One entry per unmet precondition, not per scenario that tripped over
-        # it: the finding is the prerequisite, and the scenarios are its
-        # occurrence list. The step shapes differ across these cases, so the
-        # generic key below would split one environmental fact into four.
-        return (category, prereq_rule)
-    if category in ("MISSING_SEARCH_PARAM", "CAPABILITY_STATEMENT_GAP",
-                    "UNSUPPORTED_OPERATION"):
-        return (category, feature)
-    if category == "SEARCH_SEMANTICS" and attribution.get("groupKey"):
-        # The search shape and which assertion it failed - deliberately not the
-        # message, which carries the suite's wording and a stack frame and so
-        # splits one defect into several: measured, the same unhonoured
-        # `Observation` composite parameter produced two entries because one
-        # feature file spells the parameter into its error text and another
-        # does not.
-        return (category, attribution["groupKey"],
-                failure.get("errorType") or "-")
-    if category == "PROFILE_NONCONFORMANCE":
-        return (category, feature, normalise_message(failure.get("message") or ""))
-    if category == "WRITE_VALIDATION_GAP":
-        # Keyed on the actual/expected pair rather than on the message, so that
-        # every scenario where the SUT accepted a body ISiK forbids is one work
-        # item however many feature files it occurs in. The generic key below
-        # would split them by module, because the message quotes the status only.
-        m = RE_ASSERTJ_VALUES.match(failure.get("message") or "")
-        pair = f"{m.group('actual').strip()}->{m.group('expected').strip()}" \
-            if m else normalise_message(failure.get("message") or "")
-        return (category, pair)
-    if category == "TEST_DATA_DEFECT":
-        return (category, feature, normalise_message(failure.get("message") or ""))
-    return (category, cls.get("kind") or "-", failure.get("errorType") or "-",
-            normalise_message(failure.get("message") or ""))
+    category: str
+    reason: str
+    rule: str | None = None
+
+
+class Finding:
+    """One failing case as the report finally understands it.
+
+    Three parts, in the only order they can be derived: the case, the verdict
+    reached about it, and the FHIR feature that verdict attributes it to. What
+    identifies the defect is a property of the three together, which is why the
+    key below takes no arguments - a key that could be asked for with another
+    case's step or another verdict's category would be the key of a defect this
+    finding is not.
+    """
+
+    def __init__(self, failing: FailingCase, verdict: Verdict):
+        self.failing = failing
+        self.verdict = verdict
+        self.attribution = failing.attribution(verdict.category)
+
+    @property
+    def root_cause_key(self) -> tuple:
+        """The identity of a defect, independent of which scenario tripped over it.
+
+        Levels are deliberately *not* part of the key: a search parameter missing
+        on `Account` is one IRIS defect whether ISiK 3 or ISiK 5 asked for it, and
+        the entry lists both levels. Splitting by level would double the work list
+        and misrepresent the amount of work.
+        """
+        category, attribution = self.verdict.category, self.attribution
+        failure, cls = self.failing.failure, self.failing.cls
+        feature = attribution.get("feature") or ""
+        if self.verdict.rule:
+            # One entry per unmet precondition, not per scenario that tripped
+            # over it: the finding is the prerequisite, and the scenarios are
+            # its occurrence list. The step shapes differ across these cases, so
+            # the generic key below would split one environmental fact into four.
+            return (category, self.verdict.rule)
+        if category in ("MISSING_SEARCH_PARAM", "CAPABILITY_STATEMENT_GAP",
+                        "UNSUPPORTED_OPERATION"):
+            return (category, feature)
+        if category == "SEARCH_SEMANTICS" and attribution.get("groupKey"):
+            # The search shape and which assertion it failed - deliberately not
+            # the message, which carries the suite's wording and a stack frame
+            # and so splits one defect into several: measured, the same
+            # unhonoured `Observation` composite parameter produced two entries
+            # because one feature file spells the parameter into its error text
+            # and another does not.
+            return (category, attribution["groupKey"],
+                    failure.get("errorType") or "-")
+        if category == "PROFILE_NONCONFORMANCE":
+            return (category, feature,
+                    normalise_message(failure.get("message") or ""))
+        if category == "WRITE_VALIDATION_GAP":
+            # Keyed on the actual/expected pair rather than on the message, so
+            # that every scenario where the SUT accepted a body ISiK forbids is
+            # one work item however many feature files it occurs in. The generic
+            # key below would split them by module, because the message quotes
+            # the status only.
+            m = RE_ASSERTJ_VALUES.match(failure.get("message") or "")
+            pair = f"{m.group('actual').strip()}->{m.group('expected').strip()}" \
+                if m else normalise_message(failure.get("message") or "")
+            return (category, pair)
+        if category == "TEST_DATA_DEFECT":
+            return (category, feature,
+                    normalise_message(failure.get("message") or ""))
+        return (category, cls.get("kind") or "-", failure.get("errorType") or "-",
+                normalise_message(failure.get("message") or ""))
 
 
 # =============================================================================
 # Analysis
 # =============================================================================
 
-def analyse(results: dict, index: dict, seed: dict, corpus: dict, run_dir: Path,
-            reqs: dict | None) -> dict:
+def analyse(round_: Round) -> dict:
+    results, index = round_.results, round_.index
     groups: dict[tuple, dict] = {}
     per_level: dict[str, dict] = {}
     warnings: list[str] = []
     unjoined: list[str] = []
 
     feature_names = {}
-    for feat in (reqs or {}).get("features", []):
+    for feat in (round_.reqs or {}).get("features", []):
         feature_names[feat["rel"]] = feat.get("name")
-
-    # One pass for the requests, before any classification, because the second
-    # prerequisite rule is about the run and not about a single case: whether this
-    # round supplied the access tokens the Connect module asks for is decided by
-    # all of its failures together. Read once per case and kept, so the outcome
-    # JSONs are not parsed twice.
-    resolved_requests: dict[str, str] = {}
-    for level, L in (results.get("levels") or {}).items():
-        for case in L.get("cases") or []:
-            if not case.get("failure") or case.get("verdict") != "fail":
-                continue
-            rel = ((case.get("report") or {}).get("outcomeJson") or "")
-            if rel and rel not in resolved_requests:
-                resolved_requests[rel] = request_as_resolved(run_dir, case)
-    run_requests = list(resolved_requests.values())
 
     for level, L in (results.get("levels") or {}).items():
         totals = L.get("totals") or {}
@@ -1839,19 +2015,16 @@ def analyse(results: dict, index: dict, seed: dict, corpus: dict, run_dir: Path,
             "byModule": {},
         }
         for case in L.get("cases") or []:
-            failure = case.get("failure")
-            if not failure or case.get("verdict") != "fail":
+            if not case.get("failure") or case.get("verdict") != "fail":
                 continue
             per_level[level]["failuresSeen"] += 1
 
-            gherkin, cls, substep, sub = resolve_steps(failure)
-            indexed = index_step(index, case.get("feature"),
-                                 failure.get("stepLine"),
-                                 case.get("scenario"), gherkin)
+            failing = FailingCase(round_, case)
+            failure, indexed = failing.failure, failing.indexed
             # A scenario-scope failure names no step, so there is nothing to join and
             # nothing to warn about; only a step that exists and did not match the
             # corpus is a real symptom of index drift.
-            if indexed is None and gherkin:
+            if indexed is None and failing.gherkin:
                 # `stepLine` where Serenity gave one, and the scenario's own
                 # declaration line otherwise. Which of the two it is has to be
                 # said: the fallback used to be printed bare, as though it were a
@@ -1865,15 +2038,13 @@ def analyse(results: dict, index: dict, seed: dict, corpus: dict, run_dir: Path,
                 unjoined.append(f"{case.get('feature')} ({where}) "
                                 f"({case.get('scenario')})"
                                 + ("" if indexed_feature else " [feature not indexed]"))
-            resolved = resolved_requests.get(
-                (case.get("report") or {}).get("outcomeJson") or "", "")
-            category, reason = categorise(failure, cls, sub, indexed, resolved)
+            category, reason = failing.categorise()
 
             # Precondition override, on positive evidence only, and ahead of the
             # test-data override: a case whose own precondition was never met
             # states nothing about either the SUT or our seeded data, so neither
             # of them is the thing to look at.
-            prereq = prerequisite_verdict(resolved, run_requests)
+            prereq = prerequisite_verdict(failing.resolved, round_.requests.all)
             # Initialised per case, not left to carry over: both are recorded on
             # the group below, and a prerequisite-categorised case used to be
             # given whichever evidence the previous iteration happened to hold.
@@ -1895,9 +2066,10 @@ def analyse(results: dict, index: dict, seed: dict, corpus: dict, run_dir: Path,
             else:
                 prereq_rule = None
                 # Test-data override, on positive evidence only.
-                evidence = test_data_evidence(seed, level, failure.get("http"))
-                corpus_ev = corpus_evidence(corpus, level,
-                                            failure.get("message"), index)
+                evidence = test_data_evidence(round_.seed, level,
+                                              failure.get("http"))
+                corpus_ev = corpus_evidence(StagedCorpus.of(round_, level),
+                                            failure.get("message"))
                 if evidence and category != "RESPONSE_FORMAT":
                     category, reason = "TEST_DATA_DEFECT", (
                         f"the seed step already recorded a defect on "
@@ -1912,10 +2084,9 @@ def analyse(results: dict, index: dict, seed: dict, corpus: dict, run_dir: Path,
                         "re-attributed to the SUT")
                     category = "UNCLASSIFIED"
 
-            attribution = attribute(index, category, cls, sub, failure, indexed,
-                                    level)
-            key = root_cause_key(category, attribution, failure, cls, sub,
-                                 prereq_rule)
+            finding = Finding(failing, Verdict(category, reason, prereq_rule))
+            attribution = finding.attribution
+            key = finding.root_cause_key
 
             grp = groups.get(key)
             if grp is None:
@@ -1935,13 +2106,13 @@ def analyse(results: dict, index: dict, seed: dict, corpus: dict, run_dir: Path,
                     "irisLocus": (attribution.get("irisLocus")
                                   or (CATEGORIES.get(category) or {}
                                       ).get("irisLocus")),
-                    "gherkinStep": gherkin,
-                    "substep": substep,
+                    "gherkinStep": failing.gherkin,
+                    "substep": failing.substep,
                     # Every instance's attribution, merged once the group is
                     # closed. The fields above are the first instance's, and a
                     # key can legitimately cover instances that differ in them.
                     "_variants": [],
-                    "stepKind": cls.get("kind"),
+                    "stepKind": failing.cls.get("kind"),
                     "requestContext": (indexed or {}).get("context"),
                     "errorType": failure.get("errorType"),
                     "message": failure.get("message"),
@@ -1953,7 +2124,7 @@ def analyse(results: dict, index: dict, seed: dict, corpus: dict, run_dir: Path,
                     "occurrences": [],
                     "downstreamOf": (indexed or {}).get("inheritedFromScenario"),
                 }
-                bodies = load_bodies(run_dir, case)
+                bodies = load_bodies(round_.run_dir, case)
                 if bodies:
                     grp["exchange"] = bodies
             grp["_variants"].append(attribution)
@@ -2170,8 +2341,15 @@ LOADER_OWNERS = {
 }
 
 
-def render(results: dict, index: dict, analysis: dict, run_dir: Path,
-           generated_at: str) -> str:
+def render(round_: Round, analysis: dict) -> str:
+    """The Markdown document, from the round it is about and what it found.
+
+    The round carries the inputs the prose quotes - the results analysis, the
+    attribution index and the timestamp the pair of outputs share - so that the
+    document and the JSON beside it can only ever describe the same round.
+    """
+    results, index = round_.results, round_.index
+    generated_at = round_.generated_at
     L = analysis["levels"]
     recon = analysis["reconciliation"]
     entries = analysis["entries"]
@@ -2333,7 +2511,7 @@ def render(results: dict, index: dict, analysis: dict, run_dir: Path,
         w("No SUT-attributable failures in this run.")
         w("")
     for e in iris_entries:
-        render_entry(w, e, index)
+        render_entry(w, e)
 
     # --- not-the-product appendix --------------------------------------------
     w("## 5 Appendix — failures not attributable to the SUT")
@@ -2356,7 +2534,7 @@ def render(results: dict, index: dict, analysis: dict, run_dir: Path,
           "project's work, not the product's.")
         w("")
         for e in data_entries:
-            render_entry(w, e, index)
+            render_entry(w, e)
     w("### 5.2 Cases the test suite cannot pass")
     w("")
     if not conflict_entries:
@@ -2380,7 +2558,7 @@ def render(results: dict, index: dict, analysis: dict, run_dir: Path,
           "evaluate may still show behaviour worth reporting.")
         w("")
         for e in conflict_entries:
-            render_entry(w, e, index)
+            render_entry(w, e)
     w("### 5.3 Preconditions this deployment did not meet")
     w("")
     if not prereq_entries:
@@ -2397,7 +2575,7 @@ def render(results: dict, index: dict, analysis: dict, run_dir: Path,
           "`index.json`'s `prerequisiteRules`.")
         w("")
         for e in prereq_entries:
-            render_entry(w, e, index)
+            render_entry(w, e)
 
     # --- reconciliation ------------------------------------------------------
     w("## 6 Reconciliation")
@@ -2593,7 +2771,7 @@ def render_loader_appendix(w, results: dict) -> None:
     w("")
 
 
-def render_entry(w, e: dict, index: dict) -> None:
+def render_entry(w, e: dict) -> None:
     occ = e["occurrences"]
     first = occ[0]
     title = CAT_TITLE.get(e["category"], e["category"])
@@ -2800,7 +2978,10 @@ def main() -> int:
 
     generated_at = args.generated_at or \
         datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    analysis = analyse(results, index, seed, corpus, run_dir, reqs)
+    round_ = Round(run_dir=run_dir, results=results, index=index, seed=seed,
+                   corpus=corpus, reqs=reqs, generated_at=generated_at,
+                   requests=ResolvedRequests(run_dir, results))
+    analysis = analyse(round_)
 
     out_md = args.out_md or (run_dir / "GAP-ANALYSIS.md")
     # The two outputs stay together. `--out-md /tmp/...` on an archived bundle is
@@ -2811,8 +2992,7 @@ def main() -> int:
     out_json = args.out_json or (
         out_md.parent / "gap-analysis.json" if args.out_md
         else run_dir / "gap-analysis.json")
-    out_md.write_text(render(results, index, analysis, run_dir, generated_at),
-                      encoding="utf-8")
+    out_md.write_text(render(round_, analysis), encoding="utf-8")
     out_json.write_text(json.dumps({
         "runId": results.get("runId"),
         "generatedAt": generated_at,

@@ -50,6 +50,7 @@ import json
 import pathlib
 import re
 import sys
+from dataclasses import dataclass
 
 import yaml
 
@@ -104,79 +105,114 @@ def audiences(payload):
     return [str(a) for a in aud]
 
 
-def validate(entry, token, want_audience, want_issuer, min_remaining, want_patient, now):
-    """Returns (record, problems). record is None when the token is unusable."""
-    key = entry["key"]
-    problems = []
+@dataclass(frozen=True)
+class StagedToken:
+    """One of the module's tokens as it was found, and which entry it is for.
 
-    if not token:
-        return None, [f"{key}: no value - run 'make tokens'"]
-    if token == PLACEHOLDER:
-        return None, [
-            f"{key}: still carries the official file's placeholder {PLACEHOLDER!r}. "
-            "The suite would send it verbatim as a bearer token and every scenario "
-            "of the module would fail on authorization. Run 'make tokens'."
-        ]
+    `entry` names the key, the client and the single scope the token must carry;
+    `value` is the JWS as staged, which `cmd_install` reads from the minting
+    directory and `cmd_verify` reads back out of the contract file. Neither half
+    means anything without the other, so they are one value.
+    """
 
-    payload = claims(token)
-    if payload is None:
-        return None, [f"{key}: the value is not a decodable JWT"]
+    entry: dict
+    value: str
 
-    scope = payload.get("scope", "")
-    if scope.split() != [entry["scope"]]:
-        problems.append(
-            f"{key}: scope is {scope!r}, expected exactly {entry['scope']!r} "
-            f"(client {entry['client']})"
-        )
 
-    if want_audience not in audiences(payload):
-        problems.append(
-            f"{key}: aud is {audiences(payload)!r} and does not contain "
-            f"{want_audience!r}, which is the endpoint the suite addresses and the "
-            "audience IRIS is configured to accept"
-        )
+@dataclass(frozen=True)
+class TokenExpectations:
+    """What a token must say for a Connect round to be able to use it.
 
-    issuer = payload.get("iss", "")
-    if issuer != want_issuer:
-        problems.append(
-            f"{key}: iss is {issuer!r}, expected {want_issuer!r} - the issuer the "
-            "SUT discovered. Check KC_HOSTNAME on the authserver service."
-        )
+    All five are fixed for one invocation: the audience and issuer the SUT is
+    configured for, the life a run needs, the patient the suite's own test data
+    puts in context, and the clock reading every expiry is measured against.
+    One clock reading for the whole check, not one per token, so that two
+    tokens minted in the same second cannot be reported with different lives.
+    """
 
-    exp = payload.get("exp")
-    remaining = None
-    if not isinstance(exp, (int, float)):
-        problems.append(f"{key}: no usable exp claim")
-    else:
-        remaining = int(exp - now)
-        if remaining < min_remaining:
+    audience: str
+    issuer: str
+    min_remaining: int
+    patient: str
+    now: int
+
+    def check(self, staged: StagedToken):
+        """Returns (record, problems). record is None when the token is unusable."""
+        entry, token = staged.entry, staged.value
+        key = entry["key"]
+        problems = []
+
+        if not token:
+            return None, [f"{key}: no value - run 'make tokens'"]
+        if token == PLACEHOLDER:
+            return None, [
+                f"{key}: still carries the official file's placeholder "
+                f"{PLACEHOLDER!r}. The suite would send it verbatim as a bearer "
+                "token and every scenario "
+                "of the module would fail on authorization. Run 'make tokens'."
+            ]
+
+        payload = claims(token)
+        if payload is None:
+            return None, [f"{key}: the value is not a decodable JWT"]
+
+        scope = payload.get("scope", "")
+        if scope.split() != [entry["scope"]]:
             problems.append(
-                f"{key}: {remaining}s of life left, less than the {min_remaining}s a run "
-                "needs. Re-mint with 'make tokens' immediately before the run."
+                f"{key}: scope is {scope!r}, expected exactly {entry['scope']!r} "
+                f"(client {entry['client']})"
             )
 
-    patient = payload.get("patient")
-    if entry["scope"].startswith("patient/"):
-        if patient != want_patient:
+        if self.audience not in audiences(payload):
             problems.append(
-                f"{key}: patient launch-context claim is {patient!r}, expected "
-                f"{want_patient!r} - the value {PATIENT_IN_CONTEXT_KEY} carries in the "
-                "suite's own test data. The realm and the test data have drifted apart."
+                f"{key}: aud is {audiences(payload)!r} and does not contain "
+                f"{self.audience!r}, which is the endpoint the suite addresses "
+                "and the audience IRIS is configured to accept"
             )
 
-    record = {
-        "key": key,
-        "client": entry["client"],
-        "scope": entry["scope"],
-        "sha256": hashlib.sha256(token.encode("ascii", "strict")).hexdigest(),
-        "iat": payload.get("iat"),
-        "exp": exp,
-        "remaining": remaining,
-        "patient": patient,
-        "issuer": issuer,
-        "audiences": audiences(payload),
-    }
-    return record, problems
+        issuer = payload.get("iss", "")
+        if issuer != self.issuer:
+            problems.append(
+                f"{key}: iss is {issuer!r}, expected {self.issuer!r} - the issuer the "
+                "SUT discovered. Check KC_HOSTNAME on the authserver service."
+            )
+
+        exp = payload.get("exp")
+        remaining = None
+        if not isinstance(exp, (int, float)):
+            problems.append(f"{key}: no usable exp claim")
+        else:
+            remaining = int(exp - self.now)
+            if remaining < self.min_remaining:
+                problems.append(
+                    f"{key}: {remaining}s of life left, less than the "
+                    f"{self.min_remaining}s a run needs. Re-mint with "
+                    "'make tokens' immediately before the run."
+                )
+
+        patient = payload.get("patient")
+        if entry["scope"].startswith("patient/"):
+            if patient != self.patient:
+                problems.append(
+                    f"{key}: patient launch-context claim is {patient!r}, "
+                    f"expected {self.patient!r} - the value "
+                    f"{PATIENT_IN_CONTEXT_KEY} carries in the suite's own test "
+                    "data. The realm and the test data have drifted apart."
+                )
+
+        record = {
+            "key": key,
+            "client": entry["client"],
+            "scope": entry["scope"],
+            "sha256": hashlib.sha256(token.encode("ascii", "strict")).hexdigest(),
+            "iat": payload.get("iat"),
+            "exp": exp,
+            "remaining": remaining,
+            "patient": patient,
+            "issuer": issuer,
+            "audiences": audiences(payload),
+        }
+        return record, problems
 
 
 def load_yaml(path):
@@ -221,6 +257,10 @@ def cmd_install(args, entries, now):
             "tokens cannot be checked against the test data"
         )
 
+    expected = TokenExpectations(audience=args.audience, issuer=args.issuer,
+                                 min_remaining=args.min_remaining,
+                                 patient=want_patient, now=now)
+
     tokens = {}
     records = []
     problems = []
@@ -230,9 +270,7 @@ def cmd_install(args, entries, now):
             problems.append(f"{entry['key']}: no token was minted (missing {path})")
             continue
         token = path.read_text(encoding="utf-8").strip()
-        record, errs = validate(
-            entry, token, args.audience, args.issuer, args.min_remaining, want_patient, now
-        )
+        record, errs = expected.check(StagedToken(entry, token))
         problems.extend(errs)
         if record is not None:
             records.append(record)
@@ -452,18 +490,15 @@ def cmd_verify(args, entries, now):
     if not want_patient:
         fail(f"{yaml_path} defines no {PATIENT_IN_CONTEXT_KEY}")
 
+    expected = TokenExpectations(audience=args.audience, issuer=args.issuer,
+                                 min_remaining=args.min_remaining,
+                                 patient=want_patient, now=now)
+
     problems = []
     records = []
     for entry in entries:
-        record, errs = validate(
-            entry,
-            str(data.get(entry["key"], "") or "").strip(),
-            args.audience,
-            args.issuer,
-            args.min_remaining,
-            want_patient,
-            now,
-        )
+        staged = StagedToken(entry, str(data.get(entry["key"], "") or "").strip())
+        record, errs = expected.check(staged)
         problems.extend(errs)
         if record is not None:
             records.append(record)

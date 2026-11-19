@@ -121,6 +121,7 @@ import hashlib
 import json
 import re
 import sys
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Iterator
@@ -144,6 +145,53 @@ STUFE_DIR = {"Stufe3": "stufe3", "Stufe5": "stufe5"}
 # <variant>/run.json as `variant`, and the module name is the one
 # vendor/requirements.json uses - the join between the two is this table.
 MODULE_VARIANTS = {"Stufe5": (("connect", "Connect"),)}
+
+
+@dataclass(frozen=True)
+class Round:
+    """The round being read, and the two indexes every archive is read against.
+
+    One value for the whole document: the archives are all under one run
+    directory, and the feature index and the requirement index are built once
+    from the pinned suite and are the same for every level and every outcome.
+    Passing the three separately meant that every collector down the chain
+    carried them as parameters it did nothing with except hand on.
+    """
+
+    run_root: Path
+    index: "FeatureIndex"
+    reqs: dict
+
+
+@dataclass(frozen=True)
+class Archive:
+    """One archive of one level, and the scope it is to be measured against.
+
+    A round holds one archive per level it ran, plus one per module variant.
+    Which it is decides the specified case count the archive reconciles against
+    and whether a case from another module is an ordinary result or an anomaly,
+    so the two facts travel together rather than being re-derived.
+
+    `module` is None for a level's own complete run and names the single module
+    for a variant's. It is not a mode: it is which module this archive measured,
+    and the level's own archive measured all of them.
+    """
+
+    level: str
+    directory: str
+    module: str | None = None
+
+
+def complete_archive(level: str) -> Archive:
+    """The archive of `level`'s own full-scope run."""
+    return Archive(level=level, directory=STUFE_DIR[level])
+
+
+def variant_archives(level: str) -> list[Archive]:
+    """The module variants' archives of `level`, as 60-run-tests.sh names them."""
+    return [Archive(level=level, directory=directory, module=module)
+            for directory, module in MODULE_VARIANTS.get(level, ())]
+
 
 # net.thucydides.model.domain.TestResult, in the enum's own order. Grouped into
 # three verdicts because that is the granularity a conformance statement needs;
@@ -234,9 +282,23 @@ def is_outcome(doc: Any) -> bool:
     return isinstance(doc, dict) and "testSteps" in doc and "name" in doc
 
 
-def load_outcomes(report_dir: Path) -> tuple[list[tuple[str, dict]], list[str], list[str]]:
-    """(name, outcome) pairs, non-outcome filenames, unreadable filenames."""
-    outcomes: list[tuple[str, dict]] = []
+@dataclass(frozen=True)
+class OutcomeFile:
+    """One Serenity TestOutcome and the report file it was read from.
+
+    The two are inseparable in practice: every citation this generator writes -
+    the JSON path, the browsable HTML page, the `where` of an anomaly - is built
+    from the report's basename, while the verdicts come from its content. They
+    were handed down as two parameters that no caller ever had one of.
+    """
+
+    name: str
+    outcome: dict
+
+
+def load_outcomes(report_dir: Path) -> tuple[list[OutcomeFile], list[str], list[str]]:
+    """The outcome files, the non-outcome filenames, the unreadable filenames."""
+    outcomes: list[OutcomeFile] = []
     other: list[str] = []
     broken: list[str] = []
     for path in sorted(report_dir.glob("*.json")):
@@ -246,13 +308,13 @@ def load_outcomes(report_dir: Path) -> tuple[list[tuple[str, dict]], list[str], 
             broken.append(f"{path.name}: {exc}")
             continue
         if is_outcome(doc):
-            outcomes.append((path.stem, doc))
+            outcomes.append(OutcomeFile(path.stem, doc))
         elif isinstance(doc, list) and doc and all(is_outcome(d) for d in doc):
             # Not a shape Serenity 5.3.10 writes, accepted defensively: a future
             # release that batches outcomes into one file must not make this
             # generator report zero test cases.
             for i, d in enumerate(doc):
-                outcomes.append((f"{path.stem}[{i}]", d))
+                outcomes.append(OutcomeFile(f"{path.stem}[{i}]", d))
         else:
             other.append(path.name)
     return outcomes, other, broken
@@ -457,8 +519,68 @@ def parse_example_step(description: str | None) -> dict[str, str] | None:
     return out or None
 
 
-def excluded_example_rows(feature: "fp.Feature | None", scen: "fp.Scenario | None",
-                          rows: list[dict], selects) -> frozenset[int]:
+@dataclass(frozen=True)
+class ExampleTable:
+    """An outcome's ``dataTable``: the ``Examples:`` headers and rows Serenity gave it.
+
+    Headers and rows are read together, passed together and checked together -
+    an attribution needs both, and a table with one and not the other is not a
+    table. ``of()`` is the only constructor, because the value must tolerate an
+    outcome with no table at all and one whose ``dataTable`` is not an object,
+    which was two near-identical conditional expressions at the single call site.
+
+    Truthiness is "has rows to attribute steps to", which is what every caller
+    asked of the row list it used to be handed.
+    """
+
+    headers: list[str]
+    rows: list[dict]
+
+    @staticmethod
+    def of(outcome: dict) -> "ExampleTable":
+        table = outcome.get("dataTable")
+        if not isinstance(table, dict):
+            return ExampleTable([], [])
+        return ExampleTable(table.get("headers") or [], table.get("rows") or [])
+
+    def __bool__(self) -> bool:
+        return bool(self.rows)
+
+
+@dataclass(frozen=True)
+class Declaration:
+    """Where in the pinned suite's feature files an outcome's scenario is declared.
+
+    Either half may be absent, for two different reasons the caller reports
+    separately: no feature file at that path at all, or a file that declares no
+    scenario of that name. They are nevertheless one fact - the declaration the
+    outcome was produced from - and nothing needs one without the other, so the
+    "if this and that" guards every use of the pair required live here once.
+    """
+
+    feature: "fp.Feature | None"
+    scenario: "fp.Scenario | None"
+
+    @property
+    def line(self) -> int | None:
+        """The scenario's declaration line, for a citation into the feature file."""
+        return self.scenario.line if self.scenario else None
+
+    @property
+    def tags(self) -> list[str]:
+        """The scenario's tags together with the feature's, which Cucumber applies to it."""
+        if self.feature is None or self.scenario is None:
+            return []
+        return list(self.feature.tags) + list(self.scenario.tags)
+
+    @property
+    def is_precondition(self) -> bool:
+        """Whether this scenario establishes state rather than asserting conformance."""
+        return bool(self.scenario and self.scenario.is_precondition)
+
+
+def excluded_example_rows(declaration: Declaration, table: ExampleTable,
+                          selects) -> frozenset[int]:
     """Indices of ``dataTable`` rows the level's tag expression never selected.
 
     A ``Scenario Outline`` may carry several ``Examples:`` blocks, and ISiK tags
@@ -484,11 +606,17 @@ def excluded_example_rows(feature: "fp.Feature | None", scen: "fp.Scenario | Non
     scenario that is not an outline, or a row outside every block's span, all of
     which mean the table is not this scenario's - nothing is excluded, because
     guessing here would discard real cases.
+
+    ``selects`` is the compiled tag expression of the level this archive ran. It
+    is the one argument that is not about this outcome, and it stays an argument
+    rather than becoming reader state so that this algorithm remains a pure
+    function of the declaration, the table and what the run selected.
     """
-    if feature is None or scen is None or not scen.examples or not rows:
+    feature, scen = declaration.feature, declaration.scenario
+    if feature is None or scen is None or not scen.examples or not table:
         return frozenset()
     blocks = sorted(scen.examples, key=lambda ex: ex.line)
-    lines = [r.get("lineNumber") for r in rows]
+    lines = [r.get("lineNumber") for r in table.rows]
     if any(not isinstance(ln, int) or ln <= blocks[0].line for ln in lines):
         return frozenset()
     owner = []
@@ -506,8 +634,7 @@ def excluded_example_rows(feature: "fp.Feature | None", scen: "fp.Scenario | Non
                      if not selects(fp.effective_tags(feature, scen, ex)))
 
 
-def match_step_rows(steps: list[dict], headers: list[str],
-                    rows: list[dict],
+def match_step_rows(steps: list[dict], table: ExampleTable,
                     excluded: frozenset[int] = frozenset()) -> list[int | None] | None:
     """For each top-level step, the index of the Examples row it ran.
 
@@ -554,7 +681,7 @@ def match_step_rows(steps: list[dict], headers: list[str],
     parsed = [parse_example_step(s.get("description")) for s in steps]
     if all(p is None for p in parsed):
         return None
-    row_values = [[str(v) for v in (r.get("values") or [])] for r in rows]
+    row_values = [[str(v) for v in (r.get("values") or [])] for r in table.rows]
     out: list[int | None] = []
     for params in parsed:
         if params is None:
@@ -563,213 +690,283 @@ def match_step_rows(steps: list[dict], headers: list[str],
         hits = [i for i, values in enumerate(row_values)
                 if i not in excluded
                 and all(params.get(h) == values[j]
-                        for j, h in enumerate(headers) if j < len(values))]
+                        for j, h in enumerate(table.headers) if j < len(values))]
         out.append(hits[0] if len(hits) == 1 else None)
     return out
 
 
-def cases_from_outcome(name: str, outcome: dict, index: FeatureIndex,
-                       reqs_by_rel: dict[str, dict], reqs_all: dict[str, dict],
-                       html_dir: Path | None,
-                       level_dir: str, level_name: str,
-                       selects=None) -> tuple[list[dict], list[dict]]:
-    """One record per test case, plus any anomalies found while extracting them."""
-    anomalies: list[dict] = []
-    story = outcome.get("userStory") or {}
-    # Normalised, never used raw: Serenity omits the .feature suffix that `rel`
-    # carries, so the raw value joins against nothing.
-    rel = feature_rel(story.get("path") or "")
-    scenario_name = outcome.get("name") or outcome.get("title") or "(unnamed)"
+class OutcomeReader:
+    """Reads one archive's Serenity outcomes into per-case records.
 
-    req = reqs_by_rel.get(rel)
-    feature = index.by_rel.get(rel)
-    if req is None:
-        # Two very different causes, worth telling apart. A feature that exists at
-        # the *other* level means the container ran the wrong Maven profile - the
-        # profile selects features by folder, so a Stufe3 outcome cannot appear in
-        # a Stufe5 report unless MAVEN_PROFILE and TESTS_TO_RUN disagree. That is a
-        # configuration error which invalidates the whole level, not a version skew.
-        other = reqs_all.get(rel)
-        if other is not None:
-            anomalies.append({
-                "kind": "wrongLevel",
-                "detail": (f"the {level_name} report contains an outcome for {rel!r}, "
-                           f"which belongs to {other['level']}. The Maven profile "
-                           "selects features by folder, so this means the container "
-                           "ran a different profile than the tag expression implies. "
-                           "This level's figures are not a result for "
-                           f"{level_name}."),
-                "where": f"{level_dir}/run.json",
+    Constructed per archive, from the round and which archive of it this is.
+    Everything else it needs it derives once in the constructor, because
+    `cases_from()` runs about 1200 times for a full Stufe 5 round and the
+    answers - the feature index, the level's requirements, the compiled tag
+    expression, where the browsable reports are - are the same for every one of
+    them. Deriving them per outcome would be the same work 1200 times over;
+    passing them down as arguments was nine parameters of which two varied.
+
+    `anomalies` holds what the derivation itself found: the debug archive that
+    was never extracted, and a tag expression that did not parse. The caller
+    splices them into its own list at the point its narrative reaches them, so
+    that the order of anomalies in results.json stays the order in which a
+    reader of the document meets the facts.
+    """
+
+    def __init__(self, round_: Round, archive: Archive):
+        self.round = round_
+        self.archive = archive
+        self.index = round_.index
+        self.level = archive.level
+        self.directory = archive.directory
+        self.module = archive.module
+        self.anomalies: list[dict] = []
+
+        self.level_root = round_.run_root / archive.directory
+        extracted = self.level_root / "official" / "extracted"
+        self.unresolved = extracted / "test-report" / "unresolvedReports"
+        self.serenity = extracted / "debug-report" / "serenity"
+
+        # The browsable reports, probed rather than assumed: they live in
+        # debug-report.zip, which a run may not have produced.
+        self.html_dir = self.serenity if self.serenity.is_dir() else None
+        if self.html_dir is None:
+            self.anomalies.append({
+                "kind": "missingDebugReport",
+                "detail": ("debug-report.zip was not produced or not extracted, so no "
+                           "case can be cited to a browsable Serenity page and the gap "
+                           "analysis has no request/response bodies to quote"),
+                "where": f"{archive.directory}/official/",
             })
-        else:
-            anomalies.append({
-                "kind": "unknownFeature",
-                "detail": (f"the report contains an outcome for {rel!r}, which is not "
-                           "in vendor/requirements.json at any level - the feature "
-                           "files and the image that ran are probably different "
-                           "versions"),
-                "where": (f"{level_dir}/official/extracted/test-report/"
-                          f"unresolvedReports/{name}.json"),
-            })
-        req = other
-    if feature is None:
-        anomalies.append({
-            "kind": "missingFeatureFile",
-            "detail": (f"no feature file at vendor/upstream/features/{rel} - the line "
-                       "citations for its scenarios are unavailable"),
-            "where": f"{level_dir}/official/extracted/test-report/unresolvedReports/{name}.json",
-        })
-    module = (req or {}).get("module") or (rel.split("/")[1] if rel.count("/") >= 2 else "(unknown)")
-    level = (req or {}).get("level") or (rel.split("/")[0] if "/" in rel else "(unknown)")
 
-    scen = index.scenario(rel, scenario_name) if feature else None
-    if feature is not None and scen is None:
-        anomalies.append({
-            "kind": "unknownScenario",
-            "detail": (f"{rel} has no scenario named {scenario_name!r}; the line "
-                       "citation and the precondition flag are unavailable for it"),
-            "where": f"{level_dir}/official/extracted/test-report/unresolvedReports/{name}.json",
-        })
+        reqs = round_.reqs
+        self.features_at_level = {f["rel"]: f for f in reqs["features"]
+                                  if f["level"] == archive.level}
+        # Every level's features, so an outcome from the wrong level is diagnosed
+        # as such rather than as an unknown feature.
+        self.features_at_any_level = {f["rel"]: f for f in reqs["features"]}
 
-    # The browsable sibling. Probed, never assumed: it lives in debug-report.zip,
-    # which a run may not have produced, and a citation that does not resolve is
-    # worse than one that is absent.
-    html_rel = None
-    if html_dir is not None:
-        candidate = html_dir / f"{name}.html"
-        if candidate.is_file():
-            html_rel = f"{level_dir}/official/extracted/debug-report/serenity/{name}.html"
+        # The level's own tag expression, compiled, so that an Examples: block the
+        # run did not select is recognised as such instead of being matched against.
+        tag_expr = (reqs.get("tagExpressions") or {}).get(archive.level)
+        self.selects = None
+        if tag_expr:
+            try:
+                self.selects = fp.parse_tag_expression(tag_expr)
+            except fp.FeatureParseError as exc:
+                self.anomalies.append({
+                    "kind": "unreadableTagExpression",
+                    "detail": (f"the pinned suite's tag expression for {archive.level} "
+                               f"({tag_expr!r}) did not parse ({exc}); Examples: blocks "
+                               "the run excluded cannot be told from the ones it ran"),
+                    "where": "vendor/requirements.json",
+                })
 
-    base = {
-        "level": level,
-        "module": module,
-        # Which archive of the round this verdict was read from. For a level with
-        # a module variant, two archives measured the same case, and this is what
-        # a single case record says about which measurement it is. The citations
-        # below carry the same directory, but as part of a path rather than as a
-        # value anything can group or filter by.
-        "measuredIn": level_dir,
-        "feature": rel,
-        "featureLine": scen.line if scen else None,
-        "scenario": scenario_name,
-        "scenarioTags": (list(feature.tags) + list(scen.tags)) if (feature and scen) else [],
-        "isPrecondition": bool(scen and scen.is_precondition),
-        "inScope": bool((req or {}).get("inScope")),
-        "report": {
-            "outcomeJson": (f"{level_dir}/official/extracted/test-report/"
-                            f"unresolvedReports/{name}.json"),
-            "outcomeHtml": html_rel,
-            "scenarioId": outcome.get("scenarioId"),
-            "outcomeId": outcome.get("id"),
-        },
-    }
+    def cases_from(self, outcome_file: OutcomeFile) -> tuple[list[dict], list[dict]]:
+        """One record per test case of one outcome, plus any anomalies found.
 
-    steps = outcome.get("testSteps") or []
-    table = outcome.get("dataTable")
-    cases: list[dict] = []
+        The nine parameters this took are now the reader's own state and the
+        one argument that varies: the report file being read.
+        """
+        name, outcome = outcome_file.name, outcome_file.outcome
+        anomalies: list[dict] = []
+        story = outcome.get("userStory") or {}
+        # Normalised, never used raw: Serenity omits the .feature suffix that `rel`
+        # carries, so the raw value joins against nothing.
+        rel = feature_rel(story.get("path") or "")
+        scenario_name = outcome.get("name") or outcome.get("title") or "(unnamed)"
 
-    headers = table.get("headers") or [] if isinstance(table, dict) else []
-    rows = table.get("rows") or [] if isinstance(table, dict) else []
-    # Rows of an Examples: block this level's tag expression did not select. They
-    # are in the table but were never run, so they are not candidates.
-    excluded = (excluded_example_rows(feature, scen, rows, selects)
-                if rows and selects is not None else frozenset())
-    # Which row each step ran, from the step's own title. None means this outcome
-    # is not data-driven at all, however much of a dataTable it was given.
-    step_rows = match_step_rows(steps, headers, rows, excluded) if rows else None
-    # The same attribution ignoring the exclusion, used only to tell an unmatched
-    # step that matched nothing from one that matched an unselected row.
-    step_rows_lax = (match_step_rows(steps, headers, rows)
-                     if rows and excluded else None)
-
-    if step_rows is not None:
-        # Data-driven: Serenity creates one top-level step per Examples row
-        # (BaseStepListener.exampleStarted), and TestOutcome.getTestCount() is
-        # testSteps.size(). One case per step whose parameters name a row of
-        # *this* outcome's table; a step that names none belongs to another
-        # feature file of the same basename and is not this scenario's case at
-        # all. Both departures from plain index alignment are reported.
-        for i, (step, row_ix) in enumerate(zip(steps, step_rows)):
-            if row_ix is None:
-                lax = step_rows_lax[i] if step_rows_lax else None
-                if lax is not None and lax in excluded:
-                    where_only = (
-                        f"; the only row they match is row {lax + 1} of an "
-                        f"Examples: block that {level_name}'s tag expression does "
-                        "not select, so this scenario cannot have run them")
-                else:
-                    where_only = ""
+        req = self.features_at_level.get(rel)
+        feature = self.index.by_rel.get(rel)
+        if req is None:
+            # Two very different causes, worth telling apart. A feature that exists at
+            # the *other* level means the container ran the wrong Maven profile - the
+            # profile self.selects features by folder, so a Stufe3 outcome cannot appear in
+            # a Stufe5 report unless MAVEN_PROFILE and TESTS_TO_RUN disagree. That is a
+            # configuration error which invalidates the whole level, not a version skew.
+            other = self.features_at_any_level.get(rel)
+            if other is not None:
                 anomalies.append({
-                    "kind": "foreignExampleStep",
-                    "detail": (f"{rel} / {scenario_name}: top-level step {i + 1} ran "
-                               f"parameters that match no Examples row of this "
-                               f"scenario ({step.get('description')!r}){where_only}; it "
-                               "belongs to another feature file of the same basename and "
-                               "is NOT counted as a case of this one. Serenity defect, "
-                               "not the SUT"),
+                    "kind": "wrongLevel",
+                    "detail": (f"the {self.level} report contains an outcome for {rel!r}, "
+                               f"which belongs to {other['level']}. The Maven profile "
+                               "self.selects features by folder, so this means the container "
+                               "ran a different profile than the tag expression implies. "
+                               "This level's figures are not a result for "
+                               f"{self.level}."),
+                    "where": f"{self.directory}/run.json",
+                })
+            else:
+                anomalies.append({
+                    "kind": "unknownFeature",
+                    "detail": (f"the report contains an outcome for {rel!r}, which is not "
+                               "in vendor/requirements.json at any level - the feature "
+                               "files and the image that ran are probably different "
+                               "versions"),
+                    "where": (f"{self.directory}/official/extracted/test-report/"
+                              f"unresolvedReports/{name}.json"),
+                })
+            req = other
+        if feature is None:
+            anomalies.append({
+                "kind": "missingFeatureFile",
+                "detail": (f"no feature file at vendor/upstream/features/{rel} - the line "
+                           "citations for its scenarios are unavailable"),
+                "where": f"{self.directory}/official/extracted/test-report/unresolvedReports/{name}.json",
+            })
+        module = (req or {}).get("module") or (rel.split("/")[1] if rel.count("/") >= 2 else "(unknown)")
+        level = (req or {}).get("level") or (rel.split("/")[0] if "/" in rel else "(unknown)")
+
+        scen = self.index.scenario(rel, scenario_name) if feature else None
+        declaration = Declaration(feature, scen)
+        if feature is not None and scen is None:
+            anomalies.append({
+                "kind": "unknownScenario",
+                "detail": (f"{rel} has no scenario named {scenario_name!r}; the line "
+                           "citation and the precondition flag are unavailable for it"),
+                "where": f"{self.directory}/official/extracted/test-report/unresolvedReports/{name}.json",
+            })
+
+        # The browsable sibling of this one report. Probed, never assumed: a
+        # citation that does not resolve is worse than one that is absent, and
+        # the archive can be present with this outcome's page missing from it.
+        html_rel = None
+        if self.html_dir is not None:
+            candidate = self.html_dir / f"{name}.html"
+            if candidate.is_file():
+                html_rel = f"{self.directory}/official/extracted/debug-report/serenity/{name}.html"
+
+        base = {
+            "level": level,
+            "module": module,
+            # Which archive of the round this verdict was read from. For a level with
+            # a module variant, two archives measured the same case, and this is what
+            # a single case record says about which measurement it is. The citations
+            # below carry the same directory, but as part of a path rather than as a
+            # value anything can group or filter by.
+            "measuredIn": self.directory,
+            "feature": rel,
+            "featureLine": declaration.line,
+            "scenario": scenario_name,
+            "scenarioTags": declaration.tags,
+            "isPrecondition": declaration.is_precondition,
+            "inScope": bool((req or {}).get("inScope")),
+            "report": {
+                "outcomeJson": (f"{self.directory}/official/extracted/test-report/"
+                                f"unresolvedReports/{name}.json"),
+                "outcomeHtml": html_rel,
+                "scenarioId": outcome.get("scenarioId"),
+                "outcomeId": outcome.get("id"),
+            },
+        }
+
+        steps = outcome.get("testSteps") or []
+        table = ExampleTable.of(outcome)
+        cases: list[dict] = []
+
+        # Rows of an Examples: block this level's tag expression did not select. They
+        # are in the table but were never run, so they are not candidates.
+        excluded = (excluded_example_rows(declaration, table, self.selects)
+                    if table and self.selects is not None else frozenset())
+        # Which row each step ran, from the step's own title. None means this outcome
+        # is not data-driven at all, however much of a dataTable it was given.
+        step_rows = match_step_rows(steps, table, excluded) if table else None
+        # The same attribution ignoring the exclusion, used only to tell an unmatched
+        # step that matched nothing from one that matched an unselected row.
+        step_rows_lax = (match_step_rows(steps, table)
+                         if table and excluded else None)
+
+        if step_rows is not None:
+            # Data-driven: Serenity creates one top-level step per Examples row
+            # (BaseStepListener.exampleStarted), and TestOutcome.getTestCount() is
+            # testSteps.size(). One case per step whose parameters name a row of
+            # *this* outcome's table; a step that names none belongs to another
+            # feature file of the same basename and is not this scenario's case at
+            # all. Both departures from plain index alignment are reported.
+            for i, (step, row_ix) in enumerate(zip(steps, step_rows)):
+                if row_ix is None:
+                    lax = step_rows_lax[i] if step_rows_lax else None
+                    if lax is not None and lax in excluded:
+                        where_only = (
+                            f"; the only row they match is row {lax + 1} of an "
+                            f"Examples: block that {self.level}'s tag expression does "
+                            "not select, so this scenario cannot have run them")
+                    else:
+                        where_only = ""
+                    anomalies.append({
+                        "kind": "foreignExampleStep",
+                        "detail": (f"{rel} / {scenario_name}: top-level step {i + 1} ran "
+                                   f"parameters that match no Examples row of this "
+                                   f"scenario ({step.get('description')!r}){where_only}; it "
+                                   "belongs to another feature file of the same basename and "
+                                   "is NOT counted as a case of this one. Serenity defect, "
+                                   "not the SUT"),
+                        "where": base["report"]["outcomeJson"],
+                    })
+                    continue
+                row = table.rows[row_ix]
+                values = row.get("values") or []
+                result = (row.get("result") or step.get("result")
+                          or outcome.get("result") or "UNDEFINED")
+                case = dict(base)
+                case["example"] = {
+                    "index": row_ix + 1,
+                    "line": row.get("lineNumber") or None,
+                    "label": step.get("description"),
+                    "data": (dict(zip(table.headers, values))
+                             if table.headers else values),
+                }
+                case["result"] = str(result).upper()
+                case["verdict"] = verdict_of(case["result"])
+                case["durationMs"] = step.get("duration")
+                case["failure"] = (failure_record([step], outcome)
+                                   if case["verdict"] == "fail" else None)
+                cases.append(case)
+            # A table with more rows than were run is normal and not reported: an
+            # outline may carry several Examples: blocks, and a block tagged @Optional
+            # is filtered out by the level's tag expression while its rows stay in the
+            # dataTable. Measured across a full run, all 32 outcomes in this shape had
+            # attributed steps == executed steps == the count of non-@Optional rows, so
+            # reporting them said nothing except that ISiK uses @Optional.
+            #
+            # Fewer cases than steps is different, and is already reported per step as
+            # foreignExampleStep above.
+            if len(cases) != len(steps):
+                anomalies.append({
+                    "kind": "rowStepMismatch",
+                    "detail": (f"{rel} / {scenario_name}: {len(table.rows)} Examples "
+                               f"row(s), "
+                               f"{len(steps)} top-level step(s), only {len(cases)} of them "
+                               "attributed to a row; cases are counted from the attributed "
+                               "steps"),
                     "where": base["report"]["outcomeJson"],
                 })
-                continue
-            row = rows[row_ix]
-            values = row.get("values") or []
-            result = (row.get("result") or step.get("result")
-                      or outcome.get("result") or "UNDEFINED")
+        else:
+            if table:
+                # A single-step Scenario carrying some *other* scenario's Examples
+                # table. Reported because the verdict would otherwise be read off a
+                # row that has nothing to do with this case - measured as one false
+                # pass on a full Stufe 5 run.
+                anomalies.append({
+                    "kind": "foreignExampleTable",
+                    "detail": (f"{rel} / {scenario_name}: not data-driven ({len(steps)} "
+                               f"step(s), no Examples parameters) yet carries a "
+                               f"{len(table.rows)}-row dataTable belonging to another "
+                               "scenario; "
+                               "the table is ignored and the outcome's own result is used. "
+                               "Serenity defect, not the SUT"),
+                    "where": base["report"]["outcomeJson"],
+                })
             case = dict(base)
-            case["example"] = {
-                "index": row_ix + 1,
-                "line": row.get("lineNumber") or None,
-                "label": step.get("description"),
-                "data": dict(zip(headers, values)) if headers else values,
-            }
-            case["result"] = str(result).upper()
+            case["example"] = None
+            case["result"] = str(outcome.get("result") or "UNDEFINED").upper()
             case["verdict"] = verdict_of(case["result"])
-            case["durationMs"] = step.get("duration")
-            case["failure"] = (failure_record([step], outcome)
+            case["durationMs"] = outcome.get("duration")
+            case["failure"] = (failure_record(steps, outcome)
                                if case["verdict"] == "fail" else None)
             cases.append(case)
-        # A table with more rows than were run is normal and not reported: an
-        # outline may carry several Examples: blocks, and a block tagged @Optional
-        # is filtered out by the level's tag expression while its rows stay in the
-        # dataTable. Measured across a full run, all 32 outcomes in this shape had
-        # attributed steps == executed steps == the count of non-@Optional rows, so
-        # reporting them said nothing except that ISiK uses @Optional.
-        #
-        # Fewer cases than steps is different, and is already reported per step as
-        # foreignExampleStep above.
-        if len(cases) != len(steps):
-            anomalies.append({
-                "kind": "rowStepMismatch",
-                "detail": (f"{rel} / {scenario_name}: {len(rows)} Examples row(s), "
-                           f"{len(steps)} top-level step(s), only {len(cases)} of them "
-                           "attributed to a row; cases are counted from the attributed "
-                           "steps"),
-                "where": base["report"]["outcomeJson"],
-            })
-    else:
-        if rows:
-            # A single-step Scenario carrying some *other* scenario's Examples
-            # table. Reported because the verdict would otherwise be read off a
-            # row that has nothing to do with this case - measured as one false
-            # pass on a full Stufe 5 run.
-            anomalies.append({
-                "kind": "foreignExampleTable",
-                "detail": (f"{rel} / {scenario_name}: not data-driven ({len(steps)} "
-                           f"step(s), no Examples parameters) yet carries a "
-                           f"{len(rows)}-row dataTable belonging to another scenario; "
-                           "the table is ignored and the outcome's own result is used. "
-                           "Serenity defect, not the SUT"),
-                "where": base["report"]["outcomeJson"],
-            })
-        case = dict(base)
-        case["example"] = None
-        case["result"] = str(outcome.get("result") or "UNDEFINED").upper()
-        case["verdict"] = verdict_of(case["result"])
-        case["durationMs"] = outcome.get("duration")
-        case["failure"] = (failure_record(steps, outcome)
-                           if case["verdict"] == "fail" else None)
-        cases.append(case)
 
-    return cases, anomalies
+        return cases, anomalies
 
 
 # -----------------------------------------------------------------------------
@@ -840,27 +1037,23 @@ def case_key(case: dict) -> tuple:
     return (case["feature"], case["scenario"], ex.get("index"))
 
 
-def collect_measurement(level: str, run_root: Path, index: FeatureIndex,
-                        reqs: dict, directory: str | None = None,
-                        module: str | None = None) -> dict | None:
+def collect_measurement(round_: Round, archive: Archive) -> dict | None:
     """Everything known about one archive of one level, or None if absent.
 
-    `directory` is the archive directory under the round, which for a
-    specification level is the level's own and for a module variant is the
-    variant name 60-run-tests.sh ran (`connect`). `module` restricts what this
-    measurement is expected to contain: with it set, the reconciliation is
-    against that module's specified case count rather than the level's, and a
-    case from any other module is an anomaly rather than an ordinary result.
+    The archive says which directory of the round is read and which module it
+    measured; see `Archive`. A variant's archive is reconciled against its own
+    module's specified case count rather than the level's, and a case from any
+    other module in it is an anomaly rather than an ordinary result.
     """
-    stufe = directory or STUFE_DIR[level]
-    level_root = run_root / stufe
+    reader = OutcomeReader(round_, archive)
+    level, stufe, module = archive.level, archive.directory, archive.module
+    level_root, unresolved, serenity = (reader.level_root, reader.unresolved,
+                                        reader.serenity)
     if not level_root.is_dir():
         return None
 
     anomalies: list[dict] = []
-    extracted = level_root / "official" / "extracted"
-    unresolved = extracted / "test-report" / "unresolvedReports"
-    serenity = extracted / "debug-report" / "serenity"
+    reqs = round_.reqs
 
     run_meta = read_json(level_root / "run.json") or {}
     if not run_meta:
@@ -928,41 +1121,16 @@ def collect_measurement(level: str, run_root: Path, index: FeatureIndex,
             "where": f"{stufe}/official/extracted/test-report/unresolvedReports/",
         })
 
-    html_dir = serenity if serenity.is_dir() else None
-    if html_dir is None:
-        anomalies.append({
-            "kind": "missingDebugReport",
-            "detail": ("debug-report.zip was not produced or not extracted, so no case "
-                       "can be cited to a browsable Serenity page and the gap analysis "
-                       "has no request/response bodies to quote"),
-            "where": f"{stufe}/official/",
-        })
-
-    reqs_by_rel = {f["rel"]: f for f in reqs["features"] if f["level"] == level}
-    # Every level's features, so an outcome from the wrong level is diagnosed as
-    # such rather than as an unknown feature.
-    reqs_all = {f["rel"]: f for f in reqs["features"]}
-
-    # The level's own tag expression, compiled, so that an Examples: block the run
-    # did not select is recognised as such instead of being matched against.
-    tag_expr = (reqs.get("tagExpressions") or {}).get(level)
-    selects = None
-    if tag_expr:
-        try:
-            selects = fp.parse_tag_expression(tag_expr)
-        except fp.FeatureParseError as exc:
-            anomalies.append({
-                "kind": "unreadableTagExpression",
-                "detail": (f"the pinned suite's tag expression for {level} "
-                           f"({tag_expr!r}) did not parse ({exc}); Examples: blocks the "
-                           "run excluded cannot be told from the ones it ran"),
-                "where": "vendor/requirements.json",
-            })
+    # What reading this archive's outcomes needed to work out before reading any
+    # of them: the missing debug archive, and a tag expression that would not
+    # parse. Reported here, between the archive's own faults above and the
+    # per-case findings below, which is where a reader of the table meets them.
+    anomalies.extend(reader.anomalies)
+    html_dir = reader.html_dir
 
     cases: list[dict] = []
-    for name, outcome in outcomes:
-        got, found = cases_from_outcome(name, outcome, index, reqs_by_rel, reqs_all,
-                                        html_dir, stufe, level, selects)
+    for outcome_file in outcomes:
+        got, found = reader.cases_from(outcome_file)
         cases.extend(got)
         anomalies.extend(found)
 
@@ -1111,7 +1279,7 @@ def collect_measurement(level: str, run_root: Path, index: FeatureIndex,
     # anomaly this generator can find: a silently unexecuted feature reads as a
     # clean sheet rather than as missing evidence.
     seen_features = {c["feature"] for c in cases}
-    not_executed = sorted(rel for rel, f in reqs_by_rel.items()
+    not_executed = sorted(rel for rel, f in reader.features_at_level.items()
                           if f["inScope"] and rel not in seen_features
                           # A module variant is only expected to contain its own
                           # module. Measuring its 7 features against the level's
@@ -1247,15 +1415,20 @@ def measurement_summary(m: dict) -> dict:
                               "serenitySummaryCounts", "modules", "notExecuted")}
 
 
-def supersede(complete: dict, variant: dict, module: str) -> list[dict]:
+def supersede(complete: dict, variant: dict) -> list[dict]:
     """The effective case list: the variant's verdicts in place of the complete
     run's, for the cases the variant measured. Appends anomalies to `complete`.
+
+    Which module is superseded is the variant's own, read from it rather than
+    passed alongside it: a caller that could name a different one would be
+    asking for the wrong cases to be replaced.
 
     Never a sum. Both archives contain the module's cases - the complete-scope
     run is not narrowed, for the reasons in this file's header - so adding them
     would report 64 Connect cases for a 32-case module and halve the pass rate
     of a module that was measured twice.
     """
+    module = variant["module"]
     anomalies: list[dict] = []
 
     by_key: dict[tuple, dict] = {}
@@ -1339,8 +1512,7 @@ def supersede(complete: dict, variant: dict, module: str) -> list[dict]:
     return effective
 
 
-def collect_level(level: str, run_root: Path, index: FeatureIndex,
-                  reqs: dict) -> dict | None:
+def collect_level(round_: Round, level: str) -> dict | None:
     """Everything known about one specification level, across its archives.
 
     A level is measured by one archive of its own and, where the round ran one,
@@ -1348,13 +1520,9 @@ def collect_level(level: str, run_root: Path, index: FeatureIndex,
     complete archive's for the cases it measured; see this file's header for why
     they are not summed and why the complete run stays unnarrowed.
     """
-    complete = collect_measurement(level, run_root, index, reqs)
-    variants = [
-        (module, m)
-        for directory, module in MODULE_VARIANTS.get(level, ())
-        if (m := collect_measurement(level, run_root, index, reqs,
-                                     directory=directory, module=module)) is not None
-    ]
+    complete = collect_measurement(round_, complete_archive(level))
+    variants = [m for archive in variant_archives(level)
+                if (m := collect_measurement(round_, archive)) is not None]
 
     if complete is None:
         if not variants:
@@ -1363,7 +1531,8 @@ def collect_level(level: str, run_root: Path, index: FeatureIndex,
         # what `make test-connect` alone produces - but it is a measurement of one
         # module, not a verdict on the level, and this is the only place that can
         # say so before the figures are read.
-        module, m = variants[0]
+        m = variants[0]
+        module = m["module"]
         m["anomalies"] = dedupe_anomalies(m["anomalies"] + [{
             "kind": "moduleRoundOnly",
             "detail": (f"this round holds no complete-scope archive for {level}: the "
@@ -1376,15 +1545,16 @@ def collect_level(level: str, run_root: Path, index: FeatureIndex,
                        "the certificate is applied for."),
             "where": f"{m['directory']}/run.json",
         }])
-        m["measurements"] = [measurement_summary(v) for _, v in variants]
+        m["measurements"] = [measurement_summary(v) for v in variants]
         m["superseded"] = None
         return m
 
     complete["measurements"] = [measurement_summary(complete)]
     superseded: list[dict] = []
-    for module, m in variants:
+    for m in variants:
+        module = m["module"]
         before = tally_cases([c for c in complete["cases"] if c["module"] == module])
-        complete["cases"] = supersede(complete, m, module)
+        complete["cases"] = supersede(complete, m)
         complete["anomalies"] = dedupe_anomalies(complete["anomalies"] + m["anomalies"])
         complete["measurements"].append(measurement_summary(m))
         after = tally_cases([c for c in complete["cases"] if c["module"] == module])
@@ -1405,7 +1575,8 @@ def collect_level(level: str, run_root: Path, index: FeatureIndex,
     # sum over two measurements of the same case.
     if superseded:
         complete["totals"] = tally_cases(complete["cases"])
-        complete["modules"] = tally_modules(complete["cases"], reqs["levels"][level])
+        complete["modules"] = tally_modules(complete["cases"],
+                                            round_.reqs["levels"][level])
         complete["scopePartition"] = (
             f"{complete['scopePartition'] or 'complete'}+"
             + "+".join(f"{s['module'].lower()}-superseded" for s in superseded))
@@ -2309,8 +2480,9 @@ def main() -> int:
         "anomalies": [],
     }
 
+    round_ = Round(run_root=run_root, index=index, reqs=reqs)
     for level in suite_levels:
-        collected = collect_level(level, run_root, index, reqs)
+        collected = collect_level(round_, level)
         if collected:
             doc["levels"][level] = collected
 
