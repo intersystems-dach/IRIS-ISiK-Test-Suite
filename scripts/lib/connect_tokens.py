@@ -110,9 +110,9 @@ class StagedToken:
     """One of the module's tokens as it was found, and which entry it is for.
 
     `entry` names the key, the client and the single scope the token must carry;
-    `value` is the JWS as staged, which `cmd_install` reads from the minting
-    directory and `cmd_verify` reads back out of the contract file. Neither half
-    means anything without the other, so they are one value.
+    `value` is the JWS as staged, which `TokenStaging.install` reads from the
+    minting directory and `TokenStaging.verify` reads back out of the contract
+    file. Neither half means anything without the other, so they are one value.
     """
 
     entry: dict
@@ -245,82 +245,6 @@ def set_key(text, key, value):
     return pattern.sub(lambda m: m.group(1) + value, text, count=1)
 
 
-def cmd_install(args, entries, now):
-    token_dir = pathlib.Path(args.token_dir)
-    yaml_path = pathlib.Path(args.yaml)
-    data = load_yaml(yaml_path)
-
-    want_patient = data.get(PATIENT_IN_CONTEXT_KEY)
-    if not want_patient:
-        fail(
-            f"{yaml_path} defines no {PATIENT_IN_CONTEXT_KEY}; the patient-context "
-            "tokens cannot be checked against the test data"
-        )
-
-    expected = TokenExpectations(audience=args.audience, issuer=args.issuer,
-                                 min_remaining=args.min_remaining,
-                                 patient=want_patient, now=now)
-
-    tokens = {}
-    records = []
-    problems = []
-    for entry in entries:
-        path = token_dir / entry["key"]
-        if not path.is_file():
-            problems.append(f"{entry['key']}: no token was minted (missing {path})")
-            continue
-        token = path.read_text(encoding="utf-8").strip()
-        record, errs = expected.check(StagedToken(entry, token))
-        problems.extend(errs)
-        if record is not None:
-            records.append(record)
-            tokens[entry["key"]] = token
-
-    if problems:
-        fail("the minted tokens are not usable:\n  " + "\n  ".join(problems))
-
-    text = yaml_path.read_text(encoding="utf-8")
-    for key, token in tokens.items():
-        text = set_key(text, key, token)
-    yaml_path.write_text(text, encoding="utf-8")
-
-    # Re-read what was written: the suite reads this file, so the question is
-    # what is on disk, not what was intended.
-    written = load_yaml(yaml_path)
-    for key, token in tokens.items():
-        if written.get(key) != token:
-            fail(
-                f"{yaml_path}: {key} does not read back as the token that was written. "
-                "Do not run the Connect module against this file."
-            )
-
-    # 0644 and not 0600, and that is forced by the consumer: this file is
-    # bind-mounted into the test suite container, which runs as its own
-    # unprivileged uid 100. A 0600 file owned by the host user is unreadable
-    # there, and Tiger fails at startup with an AccessDeniedException. The same
-    # constraint applies to the rendered Tiger configuration, which carries the
-    # API password for the same reason - see render() in 30-render-config.sh.
-    # run/ is gitignored and `make check` verifies that mechanically.
-    yaml_path.chmod(0o644)
-
-    write_record(pathlib.Path(args.record), records, args, now)
-
-    if args.parity:
-        update_parity(
-            pathlib.Path(args.parity),
-            yaml_path,
-            pathlib.Path(args.upstream) if args.upstream else None,
-            sorted(tokens),
-        )
-
-    print(f"  {len(records)} token(s) installed into {yaml_path}")
-    for rec in records:
-        print(
-            "    %-56s %-22s %4dm left  sha256:%s"
-            % (rec["key"], rec["scope"], (rec["remaining"] or 0) // 60, rec["sha256"][:16])
-        )
-
-
 # The marker that delimits this script's addition to the parity record. Written
 # so the block can be replaced rather than appended to: `make tokens` runs again
 # whenever an hour has passed, and a record that grew a section per minting would
@@ -328,197 +252,316 @@ def cmd_install(args, entries, now):
 PARITY_MARKER = "# --- Parameterised keys (written by scripts/55-mint-tokens.sh) ---"
 
 
-def update_parity(parity_path, staged, upstream, keys):
-    """Re-state the staged contract file's row in TESTDATA-PARITY.txt.
+@dataclass(frozen=True)
+class TokenStaging:
+    """One invocation of this script: what it was pointed at, and when.
 
-    30-render-config.sh writes that record before any token exists, so it
-    reports this file as IDENTICAL - which stops being true the moment the
-    tokens are staged into it. Left alone, the round's own evidence would claim
-    byte-identity for a file that differs from the release in six places.
+    Every path the two subcommands read or write, the claims a token must
+    carry, and the one clock reading every expiry is measured against - all
+    fixed by the command line before the first token is looked at. Holding them
+    together is what lets write_record() and update_parity() be told only what
+    they are recording rather than also where and against what.
 
-    PARAMETERISED is that third state, and it is a CHECKED claim, not a label:
-    every key of the released file must still be present with the released
-    value, except exactly the keys named here, whose released value must have
-    been the empty placeholder. Anything else is a modification of the official
-    contract and stops the round - the same consequence MODIFIED has in
-    scripts/30-render-config.sh, for the same reason.
+    The four paths of the `install` subcommand are absent on `verify`, which
+    neither mints nor records anything.
     """
-    rel = f"{staged.parent.name}/{staged.name}"
-    digest = hashlib.sha256(staged.read_bytes()).hexdigest()
-    allow = set(keys)
 
-    verified = False
-    detail = []
-    if upstream is not None and upstream.is_file():
-        staged_data = load_yaml(staged)
-        up_data = load_yaml(upstream)
+    entries: list
+    yaml: pathlib.Path
+    audience: str
+    issuer: str
+    min_remaining: int
+    now: float
+    token_dir: pathlib.Path = None
+    record: pathlib.Path = None
+    parity: pathlib.Path = None
+    upstream: pathlib.Path = None
+
+    @staticmethod
+    def of(args, entries):
+        """The invocation the parsed command line and the token map describe.
+
+        The clock is read here, once: two tokens minted in the same second must
+        not be reported with different lives, and the subcommands measure every
+        expiry against this one reading.
+        """
+        def path(value):
+            return pathlib.Path(value) if value else None
+
+        return TokenStaging(
+            entries=entries,
+            yaml=pathlib.Path(args.yaml),
+            audience=args.audience,
+            issuer=args.issuer,
+            min_remaining=args.min_remaining,
+            now=datetime.datetime.now(datetime.timezone.utc).timestamp(),
+            token_dir=path(getattr(args, "token_dir", None)),
+            record=path(getattr(args, "record", None)),
+            parity=path(getattr(args, "parity", None)),
+            upstream=path(getattr(args, "upstream", None)),
+        )
+
+    def expectations(self, patient):
+        """What a token must say, for the patient this round's test data names."""
+        return TokenExpectations(audience=self.audience, issuer=self.issuer,
+                                 min_remaining=self.min_remaining,
+                                 patient=patient, now=self.now)
+
+    def install(self):
+        yaml_path = self.yaml
+        data = load_yaml(yaml_path)
+
+        want_patient = data.get(PATIENT_IN_CONTEXT_KEY)
+        if not want_patient:
+            fail(
+                f"{yaml_path} defines no {PATIENT_IN_CONTEXT_KEY}; the patient-context "
+                "tokens cannot be checked against the test data"
+            )
+
+        expected = self.expectations(want_patient)
+
+        tokens = {}
+        records = []
         problems = []
-        for key in sorted(set(up_data) | set(staged_data)):
-            if key not in up_data:
-                problems.append(f"{key}: staged but absent from the released file")
-            elif key not in staged_data:
-                problems.append(f"{key}: in the released file but not staged")
-            elif staged_data[key] != up_data[key] and key not in allow:
-                problems.append(
-                    f"{key}: the staged value differs from the released one and it is "
-                    "not one of the token keys"
+        for entry in self.entries:
+            path = self.token_dir / entry["key"]
+            if not path.is_file():
+                problems.append(f"{entry['key']}: no token was minted (missing {path})")
+                continue
+            token = path.read_text(encoding="utf-8").strip()
+            record, errs = expected.check(StagedToken(entry, token))
+            problems.extend(errs)
+            if record is not None:
+                records.append(record)
+                tokens[entry["key"]] = token
+
+        if problems:
+            fail("the minted tokens are not usable:\n  " + "\n  ".join(problems))
+
+        text = yaml_path.read_text(encoding="utf-8")
+        for key, token in tokens.items():
+            text = set_key(text, key, token)
+        yaml_path.write_text(text, encoding="utf-8")
+
+        # Re-read what was written: the suite reads this file, so the question is
+        # what is on disk, not what was intended.
+        written = load_yaml(yaml_path)
+        for key, token in tokens.items():
+            if written.get(key) != token:
+                fail(
+                    f"{yaml_path}: {key} does not read back as the token that was written. "
+                    "Do not run the Connect module against this file."
                 )
-        for key in sorted(allow):
-            released = up_data.get(key)
-            if released not in (None, "", PLACEHOLDER):
-                problems.append(
-                    f"{key}: the released file defines the value {released!r}; "
-                    "parameterising it would replace official content"
-                )
+
+        # 0644 and not 0600, and that is forced by the consumer: this file is
+        # bind-mounted into the test suite container, which runs as its own
+        # unprivileged uid 100. A 0600 file owned by the host user is unreadable
+        # there, and Tiger fails at startup with an AccessDeniedException. The same
+        # constraint applies to the rendered Tiger configuration, which carries the
+        # API password for the same reason - see render() in 30-render-config.sh.
+        # run/ is gitignored and `make check` verifies that mechanically.
+        yaml_path.chmod(0o644)
+
+        self.write_record(records)
+
+        if self.parity:
+            self.update_parity(sorted(tokens))
+
+        print(f"  {len(records)} token(s) installed into {yaml_path}")
+        for rec in records:
+            print(
+                "    %-56s %-22s %4dm left  sha256:%s"
+                % (rec["key"], rec["scope"], (rec["remaining"] or 0) // 60, rec["sha256"][:16])
+            )
+
+    def verify(self):
+        yaml_path = self.yaml
+        data = load_yaml(yaml_path)
+        want_patient = data.get(PATIENT_IN_CONTEXT_KEY)
+        if not want_patient:
+            fail(f"{yaml_path} defines no {PATIENT_IN_CONTEXT_KEY}")
+
+        expected = self.expectations(want_patient)
+
+        problems = []
+        records = []
+        for entry in self.entries:
+            staged = StagedToken(entry, str(data.get(entry["key"], "") or "").strip())
+            record, errs = expected.check(staged)
+            problems.extend(errs)
+            if record is not None:
+                records.append(record)
+
         if problems:
             fail(
-                "the staged test-data contract no longer matches the official release "
-                "except in the token keys:\n  " + "\n  ".join(problems)
+                "the staged Connect test data is not usable for a run:\n  "
+                + "\n  ".join(problems)
+                + "\n\n  Re-mint with 'make tokens' and start the run straight after."
+                "\n  Note that 'make up' re-renders the configuration and thereby "
+                "re-stages this\n  file from the official contract, restoring the "
+                "placeholders, so the order is\n  always 'make up', then 'make tokens'."
             )
-        verified = True
-        detail = [
-            "# Every other key of the released file is present with the released value;",
-            "# each key below was empty or %r upstream." % PLACEHOLDER,
+
+        for rec in records:
+            print(
+                "  %-56s %-22s %4dm left"
+                % (rec["key"], rec["scope"], (rec["remaining"] or 0) // 60)
+            )
+        print(f"  {len(records)} token(s) usable")
+
+    def write_record(self, records):
+        """run/tiger/TOKENS.txt - what was minted, without the tokens themselves."""
+        self.record.parent.mkdir(parents=True, exist_ok=True)
+        lines = [
+            "# Bearer tokens of this round's ISiK Stufe 5 `Connect` run",
+            "# Written by scripts/55-mint-tokens.sh at "
+            + datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "#",
+            "# NO TOKEN VALUE APPEARS IN THIS FILE. A bearer token is a credential with",
+            "# the full authority of its scope for as long as it lives, so this record",
+            "# identifies each one by the SHA-256 of its exact serialisation instead. That",
+            "# is enough to prove that an archived run and this record describe the same",
+            "# token: re-compute it from the staged contract file with",
+            "#   python3 -c 'import hashlib,sys,yaml;"
+            " d=yaml.safe_load(open(sys.argv[1]));"
+            " print(hashlib.sha256(d[sys.argv[2]].encode()).hexdigest())' \\",
+            "#     run/testdata/Stufe5/connect.yaml <key>",
+            "#",
+            "# The token values themselves are in run/testdata/Stufe5/connect.yaml, which",
+            "# is gitignored, and in the traffic recorded inside each run's",
+            "# debug-report.zip. They must not be reproduced in any published document;",
+            "# see scripts/70-collect-report.sh.",
+            "#",
+            f"# issuer      {self.issuer}",
+            f"# audience    {self.audience}",
+            f"# grant       client_credentials",
+            "#",
+            "# %-54s %-34s %-22s %s" % ("KEY", "CLIENT", "SCOPE", "SHA256"),
         ]
-    else:
-        detail = [
-            "# NOT COMPARED key by key: the released copy of this file was not available",
-            "# (vendor/upstream/testdata is written by scripts/20-fetch-packages.sh).",
-            "# The status is still PARAMETERISED rather than IDENTICAL, because the file",
-            "# on disk demonstrably differs from the release - this script wrote to it.",
+        for rec in records:
+            lines.append(
+                "  %-54s %-34s %-22s %s" % (rec["key"], rec["client"], rec["scope"], rec["sha256"])
+            )
+        lines += ["", "# %-54s %-21s %-21s %s" % ("KEY", "ISSUED (UTC)", "EXPIRES (UTC)", "PATIENT CONTEXT")]
+        for rec in records:
+            def stamp(value):
+                if not isinstance(value, (int, float)):
+                    return "-"
+                return datetime.datetime.fromtimestamp(
+                    value, datetime.timezone.utc
+                ).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+            lines.append(
+                "  %-54s %-21s %-21s %s"
+                % (rec["key"], stamp(rec["iat"]), stamp(rec["exp"]), rec["patient"] or "-")
+            )
+        lines += [
+            "",
+            "# A token's life is AS_TOKEN_LIFESPAN seconds (see .env.example). The check",
+            "# that runs immediately before the Connect run refuses to start it with less",
+            "# than %d seconds left, because an expired token presents as a total"
+            % self.min_remaining,
+            "# authorization failure in the system under test rather than as our mistake.",
+            "",
         ]
+        self.record.write_text("\n".join(lines), encoding="utf-8")
+        self.record.chmod(0o644)
 
-    if not parity_path.is_file():
-        # Nothing to re-state. Not fatal: the tokens are staged and usable, and the
-        # absence of the record is itself reported by 30-render-config.sh.
-        print(f"  no parity record at {parity_path} - the row was not re-stated")
-        return
+    def update_parity(self, keys):
+        """Re-state the staged contract file's row in TESTDATA-PARITY.txt.
 
-    text = parity_path.read_text(encoding="utf-8")
-    text = text.split(PARITY_MARKER)[0].rstrip("\n") + "\n"
+        30-render-config.sh writes that record before any token exists, so it
+        reports this file as IDENTICAL - which stops being true the moment the
+        tokens are staged into it. Left alone, the round's own evidence would claim
+        byte-identity for a file that differs from the release in six places.
 
-    row = re.compile(r"^  \S+(\s+)%s(\s+)\S+$" % re.escape(rel), re.MULTILINE)
-    if row.search(text):
-        text = row.sub("  %-13s %-46s %s" % ("PARAMETERISED", rel, digest), text, count=1)
-    else:
-        print(f"  {rel} has no row in {parity_path.name} - one was appended")
-        text += "  %-13s %-46s %s\n" % ("PARAMETERISED", rel, digest)
+        PARAMETERISED is that third state, and it is a CHECKED claim, not a label:
+        every key of the released file must still be present with the released
+        value, except exactly the keys named here, whose released value must have
+        been the empty placeholder. Anything else is a modification of the official
+        contract and stops the round - the same consequence MODIFIED has in
+        scripts/30-render-config.sh, for the same reason.
+        """
+        rel = f"{self.yaml.parent.name}/{self.yaml.name}"
+        digest = hashlib.sha256(self.yaml.read_bytes()).hexdigest()
+        allow = set(keys)
 
-    lines = [
-        "",
-        PARITY_MARKER,
-        f"# {rel} carries this round's bearer tokens, staged at "
-        + datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        + ".",
-    ] + detail + [
-        "#",
-        "# The values are credentials and are not reproduced here; run/tiger/TOKENS.txt",
-        "# carries the SHA-256 of each one.",
-        "#",
-    ]
-    for key in sorted(allow):
-        lines.append(f"  {key}")
-    lines.append("")
+        verified = False
+        detail = []
+        if self.upstream is not None and self.upstream.is_file():
+            staged_data = load_yaml(self.yaml)
+            up_data = load_yaml(self.upstream)
+            problems = []
+            for key in sorted(set(up_data) | set(staged_data)):
+                if key not in up_data:
+                    problems.append(f"{key}: staged but absent from the released file")
+                elif key not in staged_data:
+                    problems.append(f"{key}: in the released file but not staged")
+                elif staged_data[key] != up_data[key] and key not in allow:
+                    problems.append(
+                        f"{key}: the staged value differs from the released one and it is "
+                        "not one of the token keys"
+                    )
+            for key in sorted(allow):
+                released = up_data.get(key)
+                if released not in (None, "", PLACEHOLDER):
+                    problems.append(
+                        f"{key}: the released file defines the value {released!r}; "
+                        "parameterising it would replace official content"
+                    )
+            if problems:
+                fail(
+                    "the staged test-data contract no longer matches the official release "
+                    "except in the token keys:\n  " + "\n  ".join(problems)
+                )
+            verified = True
+            detail = [
+                "# Every other key of the released file is present with the released value;",
+                "# each key below was empty or %r upstream." % PLACEHOLDER,
+            ]
+        else:
+            detail = [
+                "# NOT COMPARED key by key: the released copy of this file was not available",
+                "# (vendor/upstream/testdata is written by scripts/20-fetch-packages.sh).",
+                "# The status is still PARAMETERISED rather than IDENTICAL, because the file",
+                "# on disk demonstrably differs from the release - this script wrote to it.",
+            ]
 
-    parity_path.write_text(text + "\n".join(lines), encoding="utf-8")
-    how = "verified key by key" if verified else "NOT compared key by key"
-    print(f"  {rel} re-stated as PARAMETERISED in {parity_path.name} ({how})")
+        if not self.parity.is_file():
+            # Nothing to re-state. Not fatal: the tokens are staged and usable, and the
+            # absence of the record is itself reported by 30-render-config.sh.
+            print(f"  no parity record at {self.parity} - the row was not re-stated")
+            return
 
+        text = self.parity.read_text(encoding="utf-8")
+        text = text.split(PARITY_MARKER)[0].rstrip("\n") + "\n"
 
-def write_record(path, records, args, now):
-    """run/tiger/TOKENS.txt - what was minted, without the tokens themselves."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    lines = [
-        "# Bearer tokens of this round's ISiK Stufe 5 `Connect` run",
-        "# Written by scripts/55-mint-tokens.sh at "
-        + datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "#",
-        "# NO TOKEN VALUE APPEARS IN THIS FILE. A bearer token is a credential with",
-        "# the full authority of its scope for as long as it lives, so this record",
-        "# identifies each one by the SHA-256 of its exact serialisation instead. That",
-        "# is enough to prove that an archived run and this record describe the same",
-        "# token: re-compute it from the staged contract file with",
-        "#   python3 -c 'import hashlib,sys,yaml;"
-        " d=yaml.safe_load(open(sys.argv[1]));"
-        " print(hashlib.sha256(d[sys.argv[2]].encode()).hexdigest())' \\",
-        "#     run/testdata/Stufe5/connect.yaml <key>",
-        "#",
-        "# The token values themselves are in run/testdata/Stufe5/connect.yaml, which",
-        "# is gitignored, and in the traffic recorded inside each run's",
-        "# debug-report.zip. They must not be reproduced in any published document;",
-        "# see scripts/70-collect-report.sh.",
-        "#",
-        f"# issuer      {args.issuer}",
-        f"# audience    {args.audience}",
-        f"# grant       client_credentials",
-        "#",
-        "# %-54s %-34s %-22s %s" % ("KEY", "CLIENT", "SCOPE", "SHA256"),
-    ]
-    for rec in records:
-        lines.append(
-            "  %-54s %-34s %-22s %s" % (rec["key"], rec["client"], rec["scope"], rec["sha256"])
-        )
-    lines += ["", "# %-54s %-21s %-21s %s" % ("KEY", "ISSUED (UTC)", "EXPIRES (UTC)", "PATIENT CONTEXT")]
-    for rec in records:
-        def stamp(value):
-            if not isinstance(value, (int, float)):
-                return "-"
-            return datetime.datetime.fromtimestamp(
-                value, datetime.timezone.utc
-            ).strftime("%Y-%m-%dT%H:%M:%SZ")
+        row = re.compile(r"^  \S+(\s+)%s(\s+)\S+$" % re.escape(rel), re.MULTILINE)
+        if row.search(text):
+            text = row.sub("  %-13s %-46s %s" % ("PARAMETERISED", rel, digest), text, count=1)
+        else:
+            print(f"  {rel} has no row in {self.parity.name} - one was appended")
+            text += "  %-13s %-46s %s\n" % ("PARAMETERISED", rel, digest)
 
-        lines.append(
-            "  %-54s %-21s %-21s %s"
-            % (rec["key"], stamp(rec["iat"]), stamp(rec["exp"]), rec["patient"] or "-")
-        )
-    lines += [
-        "",
-        "# A token's life is AS_TOKEN_LIFESPAN seconds (see .env.example). The check",
-        "# that runs immediately before the Connect run refuses to start it with less",
-        "# than %d seconds left, because an expired token presents as a total" % args.min_remaining,
-        "# authorization failure in the system under test rather than as our mistake.",
-        "",
-    ]
-    path.write_text("\n".join(lines), encoding="utf-8")
-    path.chmod(0o644)
+        lines = [
+            "",
+            PARITY_MARKER,
+            f"# {rel} carries this round's bearer tokens, staged at "
+            + datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            + ".",
+        ] + detail + [
+            "#",
+            "# The values are credentials and are not reproduced here; run/tiger/TOKENS.txt",
+            "# carries the SHA-256 of each one.",
+            "#",
+        ]
+        for key in sorted(allow):
+            lines.append(f"  {key}")
+        lines.append("")
 
-
-def cmd_verify(args, entries, now):
-    yaml_path = pathlib.Path(args.yaml)
-    data = load_yaml(yaml_path)
-    want_patient = data.get(PATIENT_IN_CONTEXT_KEY)
-    if not want_patient:
-        fail(f"{yaml_path} defines no {PATIENT_IN_CONTEXT_KEY}")
-
-    expected = TokenExpectations(audience=args.audience, issuer=args.issuer,
-                                 min_remaining=args.min_remaining,
-                                 patient=want_patient, now=now)
-
-    problems = []
-    records = []
-    for entry in entries:
-        staged = StagedToken(entry, str(data.get(entry["key"], "") or "").strip())
-        record, errs = expected.check(staged)
-        problems.extend(errs)
-        if record is not None:
-            records.append(record)
-
-    if problems:
-        fail(
-            "the staged Connect test data is not usable for a run:\n  "
-            + "\n  ".join(problems)
-            + "\n\n  Re-mint with 'make tokens' and start the run straight after."
-            "\n  Note that 'make up' re-renders the configuration and thereby "
-            "re-stages this\n  file from the official contract, restoring the "
-            "placeholders, so the order is\n  always 'make up', then 'make tokens'."
-        )
-
-    for rec in records:
-        print(
-            "  %-56s %-22s %4dm left"
-            % (rec["key"], rec["scope"], (rec["remaining"] or 0) // 60)
-        )
-    print(f"  {len(records)} token(s) usable")
+        self.parity.write_text(text + "\n".join(lines), encoding="utf-8")
+        how = "verified key by key" if verified else "NOT compared key by key"
+        print(f"  {rel} re-stated as PARAMETERISED in {self.parity.name} ({how})")
 
 
 def main():
@@ -545,13 +588,12 @@ def main():
     common(p_verify)
 
     args = parser.parse_args()
-    entries = read_map(sys.stdin)
-    now = datetime.datetime.now(datetime.timezone.utc).timestamp()
+    staging = TokenStaging.of(args, read_map(sys.stdin))
 
     if args.command == "install":
-        cmd_install(args, entries, now)
+        staging.install()
     else:
-        cmd_verify(args, entries, now)
+        staging.verify()
 
 
 if __name__ == "__main__":

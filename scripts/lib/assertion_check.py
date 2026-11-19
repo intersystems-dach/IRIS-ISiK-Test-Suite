@@ -53,6 +53,7 @@ Usage
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import re
 import sys
@@ -507,8 +508,20 @@ def _rel(path: Path) -> str:
         return str(path)
 
 
-def resource_path(root: Path, level: str, rtype: str, rid: str) -> Path:
-    return root / level / f"{rtype}-{rid}.json"
+@dataclasses.dataclass(frozen=True)
+class StagedLevel:
+    """The authored resources of one level, under one data root.
+
+    Both are settled by the command line before the first inventory row is
+    read, so a row is all there is left to say to get at its file.
+    """
+
+    root: Path
+    level: str
+
+    def path_of(self, row: dict) -> Path:
+        """Where the inventory row's resource is authored."""
+        return self.root / self.level / f"{row['resourceType']}-{row['id']}.json"
 
 
 def main() -> int:
@@ -536,13 +549,14 @@ def main() -> int:
             print(f"no resource with id {args.id!r} in {args.level}", file=sys.stderr)
             return 2
 
+    being = StagedLevel(root=args.data_root, level=args.level)
     report = {"level": args.level, "resources": [], "totals": {}}
     tot = {"EXACT": [0, 0], "ELEMENT": [0, 0], "LITERAL": [0, 0], "UNVERIFIED": [0, 0]}
     missing_files: list[str] = []
     failed = 0
 
     for r in rows:
-        path = resource_path(args.data_root, args.level, r["resourceType"], r["id"])
+        path = being.path_of(r)
         if not path.is_file():
             missing_files.append(f"{r['resourceType']}/{r['id']}")
             report["resources"].append({
