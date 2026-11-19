@@ -133,19 +133,37 @@ def access_token_claims(token):
     return payload
 
 
-def token_marker(token, payload, key=None):
-    """What stands in for a token: what it was for, and which token it was.
+def marker(token, what):
+    """What stands in for a withheld token: what it was for, and which one it was.
 
-    The test-data key is used when this round can name it. For a token from an
-    earlier mint there is no key to cite, and the scope out of the token's own
-    claims is the next best thing - it is what a reader of the exchange needs.
+    The SHA-256 prefix is the whole point of the substitution: it proves that
+    two files name the same credential without disclosing it. `what` is how the
+    two callers below name the token, which is the only thing that differs
+    between a token this round staged and one it can only read.
     """
-    if key:
-        what = f"connect token {key}"
-    else:
-        scope = payload.get("scope")
-        what = f"access token for scope {scope!r}" if scope else "access token"
     return f"<redacted: {what} sha256:{digest(token)[:16]}>"
+
+
+def staged_token_marker(token, key):
+    """What stands in for a token this round staged under a test-data key.
+
+    The key is cited because it is more informative than the token: the reader
+    of an exchange learns which scope's token was presented, which is the
+    question a 401 or a 403 raises.
+    """
+    return marker(token, f"connect token {key}")
+
+
+def unnamed_token_marker(token, payload):
+    """What stands in for a token this round cannot name.
+
+    A token from an earlier mint has no staged key to cite, so the scope out of
+    the token's own claims is the next best thing - it is what a reader of the
+    exchange needs.
+    """
+    scope = payload.get("scope")
+    return marker(token, f"access token for scope {scope!r}" if scope
+                  else "access token")
 
 
 def collect_secrets(connect_yaml, env_names):
@@ -175,7 +193,7 @@ def collect_secrets(connect_yaml, env_names):
                 secrets.append((
                     f"connect token {key}",
                     value,
-                    token_marker(value, access_token_claims(value) or {}, key),
+                    staged_token_marker(value, key),
                 ))
         # A missing staged contract is not an error here. A round with no Connect
         # module never staged one, and a round whose run/ was cleaned has nothing
@@ -248,7 +266,7 @@ def replace_unnamed_tokens(text, totals):
         if payload is None:
             return token
         found[token] = payload
-        return token_marker(token, payload)
+        return unnamed_token_marker(token, payload)
 
     out = JWT.sub(sub, text)
     for token, payload in found.items():

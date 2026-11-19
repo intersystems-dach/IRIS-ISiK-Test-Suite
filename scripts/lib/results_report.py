@@ -631,7 +631,7 @@ def excluded_example_rows(declaration: Declaration, table: ExampleTable,
         if got and got != len(ex.rows):
             return frozenset()
     return frozenset(i for i, ex in enumerate(owner)
-                     if not selects(fp.effective_tags(feature, scen, ex)))
+                     if not selects(feature.tags_of_rows(scen, ex)))
 
 
 def match_step_rows(steps: list[dict], table: ExampleTable,
@@ -676,7 +676,11 @@ def match_step_rows(steps: list[dict], table: ExampleTable,
 
     ``excluded`` names rows the level's tag expression did not select, which are
     in the table but cannot have been executed; they are not match candidates.
-    See ``excluded_example_rows()`` for why a step can otherwise land on one.
+    See ``excluded_example_rows()`` for why a step can otherwise land on one. It
+    stays an argument rather than becoming reader state so that this attribution
+    remains a pure function of the steps, the table and what the run selected:
+    the caller matches the same steps twice in one scope, once with the exclusion
+    and once without it, and compares the two attributions.
     """
     parsed = [parse_example_step(s.get("description")) for s in steps]
     if all(p is None for p in parsed):

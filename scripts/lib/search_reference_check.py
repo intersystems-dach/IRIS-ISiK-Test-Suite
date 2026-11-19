@@ -123,7 +123,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from assertion_check import resolve                      # noqa: E402
 from feature_parser import (                             # noqa: E402
     RE_DATA_KEY,
-    effective_tags,
     load_features,
     parse_tag_expression,
 )
@@ -513,11 +512,11 @@ class Level:
                 if scenario.is_outline:
                     variants = [
                         (dict(zip(ex.header, row)),
-                         effective_tags(feature, scenario, ex))
+                         feature.tags_of_rows(scenario, ex))
                         for ex in scenario.examples for row in ex.rows
                     ]
                 else:
-                    variants = [({}, effective_tags(feature, scenario))]
+                    variants = [({}, feature.tags_of(scenario))]
 
                 for row, tags in variants:
                     in_scope = predicate(tags) and not disabled

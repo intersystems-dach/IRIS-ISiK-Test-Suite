@@ -228,8 +228,8 @@ def load_yaml(path):
     return data
 
 
-def set_key(text, key, value):
-    """Replace one key's value in place, preserving every other byte of the file.
+def set_keys(text, values):
+    """Replace each named key's value in place, preserving every other byte.
 
     Deliberately textual rather than a yaml.safe_dump round trip: this file is
     the official contract and its parity against the released version is
@@ -237,12 +237,16 @@ def set_key(text, key, value):
     keys and drop upstream's comments, which would turn a six-line difference
     into an unreadable one.
     """
-    pattern = re.compile(r"^(\s*%s\s*:[ \t]*)(.*)$" % re.escape(key), re.MULTILINE)
-    if not pattern.search(text):
-        fail(f"no line defining {key!r} in the staged contract file")
-    # A JWS compact serialisation is base64url plus two dots, so it is a safe
-    # unquoted YAML scalar; the result is re-parsed below regardless.
-    return pattern.sub(lambda m: m.group(1) + value, text, count=1)
+    for key, value in values.items():
+        pattern = re.compile(r"^(\s*%s\s*:[ \t]*)(.*)$" % re.escape(key),
+                             re.MULTILINE)
+        if not pattern.search(text):
+            fail(f"no line defining {key!r} in the staged contract file")
+        # A JWS compact serialisation is base64url plus two dots, so it is a
+        # safe unquoted YAML scalar; the result is re-parsed by the caller
+        # regardless.
+        text = pattern.sub(lambda m: m.group(1) + value, text, count=1)
+    return text
 
 
 # The marker that delimits this script's addition to the parity record. Written
@@ -338,9 +342,7 @@ class TokenStaging:
         if problems:
             fail("the minted tokens are not usable:\n  " + "\n  ".join(problems))
 
-        text = yaml_path.read_text(encoding="utf-8")
-        for key, token in tokens.items():
-            text = set_key(text, key, token)
+        text = set_keys(yaml_path.read_text(encoding="utf-8"), tokens)
         yaml_path.write_text(text, encoding="utf-8")
 
         # Re-read what was written: the suite reads this file, so the question is

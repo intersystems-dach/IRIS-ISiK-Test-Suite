@@ -69,6 +69,7 @@ requested could not be derived, so it is usable in a pipeline.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import os
 import pathlib
@@ -117,37 +118,53 @@ def load_examples(pkg_dir: pathlib.Path) -> dict[str, list[pathlib.Path]]:
     return index
 
 
-def rewrite_references(doc, namespace: str, available: set[str]):
-    """Replace every Reference.reference with the contract placeholder for its path.
+@dataclasses.dataclass(frozen=True)
+class Placeholders:
+    """The contract placeholders one resource's references may be rewritten to.
 
-    Returns the list of paths that REFERENCE_KEYS does not cover and the list of
-    paths whose key is absent from the resource's namespace. Both are reported by
-    the caller; neither is guessed around.
+    `namespace` is the single contract namespace the resource's own keys lie in,
+    which is what a placeholder names; `available` is every qualified key the
+    level's contract defines, read once per run. Both describe which rewrite is
+    legal rather than what is being rewritten, so they are held here and the
+    document is what the method below is given.
     """
-    unknown_paths: list[str] = []
-    missing_keys: list[tuple[str, str]] = []
 
-    def walk(node, path: str) -> None:
-        if isinstance(node, dict):
-            for key, value in list(node.items()):
-                if key == "reference" and isinstance(value, str):
-                    target_type = value.split("/")[0]
-                    data_key = REFERENCE_KEYS.get(path)
-                    if data_key is None:
-                        unknown_paths.append(f"{path}.reference = {value!r}")
-                        continue
-                    if f"{namespace}.{data_key}" not in available:
-                        missing_keys.append((path, f"{namespace}.{data_key}"))
-                        continue
-                    node[key] = f"{target_type}/{{{{{namespace}.{data_key}}}}}"
-                else:
-                    walk(value, f"{path}.{key}" if path else key)
-        elif isinstance(node, list):
-            for item in node:
-                walk(item, f"{path}[]")
+    namespace: str
+    available: set[str]
 
-    walk(doc, "")
-    return unknown_paths, missing_keys
+    def rewrite_references(self, doc):
+        """Replace every Reference.reference with the placeholder for its path.
+
+        Returns the list of paths that REFERENCE_KEYS does not cover and the
+        list of paths whose key is absent from the resource's namespace. Both
+        are reported by the caller; neither is guessed around.
+        """
+        unknown_paths: list[str] = []
+        missing_keys: list[tuple[str, str]] = []
+
+        def walk(node, path: str) -> None:
+            if isinstance(node, dict):
+                for key, value in list(node.items()):
+                    if key == "reference" and isinstance(value, str):
+                        target_type = value.split("/")[0]
+                        data_key = REFERENCE_KEYS.get(path)
+                        if data_key is None:
+                            unknown_paths.append(f"{path}.reference = {value!r}")
+                            continue
+                        if f"{self.namespace}.{data_key}" not in self.available:
+                            missing_keys.append(
+                                (path, f"{self.namespace}.{data_key}"))
+                            continue
+                        node[key] = (f"{target_type}/"
+                                     f"{{{{{self.namespace}.{data_key}}}}}")
+                    else:
+                        walk(value, f"{path}.{key}" if path else key)
+            elif isinstance(node, list):
+                for item in node:
+                    walk(item, f"{path}[]")
+
+        walk(doc, "")
+        return unknown_paths, missing_keys
 
 
 def main() -> int:
@@ -259,7 +276,8 @@ def main() -> int:
         doc = json.loads(source.read_text(encoding="utf-8"))
         for field in DROP_TOP_LEVEL:
             doc.pop(field, None)
-        unknown, missing = rewrite_references(doc, namespace, available)
+        placeholders = Placeholders(namespace, available)
+        unknown, missing = placeholders.rewrite_references(doc)
         if unknown or missing:
             for u in unknown:
                 print(f"  FAIL  {rtype}/{rid}: reference at an unhandled location: "

@@ -29,9 +29,9 @@ of that block only. The second rule is a genuine trap in this suite -
 ``Stufe5/Medikation/RiskAssessment-Search.feature`` has an ``@Optional`` tag that
 reads, to the eye, as if it belonged to the scenario below it, when it actually
 belongs to the ``Examples`` block above. Getting that wrong changes whether a
-scenario is in the certification scope. :func:`effective_tags` and
-:func:`count_asserting_cases` therefore model the inheritance explicitly instead
-of grepping for tags per file.
+scenario is in the certification scope. :meth:`Feature.tags_of`,
+:meth:`Feature.tags_of_rows` and :func:`count_asserting_cases` therefore model
+the inheritance explicitly instead of grepping for tags per file.
 """
 
 from __future__ import annotations
@@ -185,6 +185,27 @@ class Feature:
     @property
     def test_scenarios(self) -> list[Scenario]:
         return [s for s in self.scenarios if not s.is_precondition]
+
+    # --- Tag scope -----------------------------------------------------------
+    # Cucumber inherits the feature's tags downwards, so they belong to the
+    # file and are held here; what varies is how far down the question is
+    # asked. Two methods rather than one with an optional `examples`, because a
+    # plain scenario and a block of outline rows are two different questions:
+    # the first has one answer per scenario, the second one answer per Examples
+    # block of the same scenario.
+    def tags_of(self, scenario: Scenario) -> list[str]:
+        """Tags as Cucumber sees them for one plain scenario."""
+        return list(self.tags) + list(scenario.tags)
+
+    def tags_of_rows(self, scenario: Scenario, examples: Examples) -> list[str]:
+        """Tags as Cucumber sees them for the rows of one Examples block.
+
+        An `Examples` tag applies to the rows of that block alone - the trap
+        described in the module docstring, which is why the rows of one block
+        can be out of the certification scope while the rest of the same
+        outline is in it.
+        """
+        return self.tags_of(scenario) + list(examples.tags)
 
 
 class FeatureParseError(RuntimeError):
@@ -462,15 +483,6 @@ def parse_tag_expression(expr: str):
     return root
 
 
-def effective_tags(feature: Feature, scenario: Scenario,
-                   examples: Examples | None = None) -> list[str]:
-    """Tags as Cucumber sees them for one scenario, or one Examples row set."""
-    tags = list(feature.tags) + list(scenario.tags)
-    if examples is not None:
-        tags += list(examples.tags)
-    return tags
-
-
 def _selected_per_scenario(feature: Feature, predicate):
     """Each scenario of one feature, with the number of cases `predicate` selects.
 
@@ -485,9 +497,9 @@ def _selected_per_scenario(feature: Feature, predicate):
     for scenario in feature.scenarios:
         if scenario.is_outline:
             selected = sum(len(ex.rows) for ex in scenario.examples
-                           if predicate(effective_tags(feature, scenario, ex)))
+                           if predicate(feature.tags_of_rows(scenario, ex)))
         else:
-            selected = 1 if predicate(effective_tags(feature, scenario)) else 0
+            selected = 1 if predicate(feature.tags_of(scenario)) else 0
         yield scenario, selected
 
 

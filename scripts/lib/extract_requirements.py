@@ -77,7 +77,6 @@ from feature_parser import (  # noqa: E402
     count_asserting_cases,
     count_executed_cases,
     data_keys_in,
-    effective_tags,
     load_features,
     parse_tag_expression,
     runtime_keys_in,
