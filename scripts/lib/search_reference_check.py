@@ -111,6 +111,7 @@ Usage
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import re
 import sys
@@ -285,8 +286,8 @@ def table_query(step, row: dict[str, str]) -> tuple[str, str]:
     and did not.
 
     A cell escapes the token separator as `\\|`, `|` being the cell delimiter, so
-    it is unescaped here; the result is handed to `token_criteria` in the same
-    form a URL query arrives in.
+    it is unescaped here; the result is read by `TokenCriterion.of_query` in the
+    same form a URL query arrives in.
     """
     if len(step.table) != 2:
         return "", f"parameter table has {len(step.table)} row(s), not header + one"
@@ -299,251 +300,313 @@ def table_query(step, row: dict[str, str]) -> tuple[str, str]:
     return "&".join(pairs), ""
 
 
-def search_parameters(packages_root: Path) -> dict[tuple[str, str], dict]:
-    """(resource type, parameter code) -> the token SearchParameter's definition.
+@dataclasses.dataclass(frozen=True)
+class TokenParameters:
+    """The token SearchParameter definitions the pinned packages ship.
 
-    Read from the unpacked FHIR packages, which is where the authority for
-    "`risk` searches `RiskAssessment.prediction.qualitativeRisk`" actually lives.
-    Only `type: token` is indexed - this check models no other search type.
-
-    `hl7.fhir.r4.examples` ships copies of the core definitions; a package whose
-    name ends in `.examples` is therefore skipped, so that the specification's own
-    definition is the one used rather than whichever sorted last.
+    Held as one object rather than passed along because they are read once per
+    run and every lookup below is against that one reading of them.
     """
-    out: dict[tuple[str, str], dict] = {}
-    if not packages_root.is_dir():
-        return out
-    for pkg in sorted(packages_root.iterdir()):
-        if not pkg.is_dir() or pkg.name.split("#")[0].endswith(".examples"):
-            continue
-        for path in sorted(pkg.rglob("*.json")):
-            try:
-                doc = json.loads(path.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, UnicodeDecodeError, OSError):
+
+    definitions: dict[tuple[str, str], dict]
+
+    @property
+    def is_empty(self) -> bool:
+        """Whether no definition was read - the packages are not unpacked yet."""
+        return not self.definitions
+
+    @staticmethod
+    def of(packages_root: Path) -> "TokenParameters":
+        """The definitions under one root of unpacked packages.
+
+        Indexed by (resource type, parameter code).
+
+        Read from the unpacked FHIR packages, which is where the authority for
+        "`risk` searches `RiskAssessment.prediction.qualitativeRisk`" actually lives.
+        Only `type: token` is indexed - this check models no other search type.
+
+        `hl7.fhir.r4.examples` ships copies of the core definitions; a package whose
+        name ends in `.examples` is therefore skipped, so that the specification's own
+        definition is the one used rather than whichever sorted last.
+        """
+        out: dict[tuple[str, str], dict] = {}
+        if not packages_root.is_dir():
+            return TokenParameters(out)
+        for pkg in sorted(packages_root.iterdir()):
+            if not pkg.is_dir() or pkg.name.split("#")[0].endswith(".examples"):
                 continue
-            if not isinstance(doc, dict) or doc.get("resourceType") != "SearchParameter":
-                continue
-            if doc.get("type") != "token" or not doc.get("code"):
-                continue
-            for base in doc.get("base") or []:
-                out.setdefault((base, doc["code"]), {
-                    "expression": doc.get("expression") or "",
-                    "url": doc.get("url") or "",
-                    "package": pkg.name,
-                })
-    return out
-
-
-def token_path(rtype: str, code: str, defs: dict[tuple[str, str], dict]
-               ) -> tuple[str | None, str]:
-    """The element path `<rtype>.<code>` searches, or None and why not.
-
-    Returns the path *without* the leading resource type, which is the form
-    `assertion_check.resolve` takes. A union expression is accepted when exactly
-    one alternative is a plain path rooted at the searched type - `Observation.code
-    | Observation.component.code` is two, so it is skipped rather than halved.
-    """
-    spec = defs.get((rtype, code))
-    root = rtype
-    if spec is None:
-        # The parameters every resource has - `_tag`, `_security`, `_profile` -
-        # are defined once with base `Resource` and an expression rooted there,
-        # so a per-type lookup can never find them. `_tag` is the one of those
-        # this gate must resolve: the suite searches by it and asserts the result
-        # is non-empty, which is a requirement on the corpus like any other.
-        spec = defs.get(("Resource", code))
-        root = "Resource"
-    if spec is None:
-        return None, "no token SearchParameter for this type in the pinned packages"
-    expr = " ".join((spec["expression"] or "").split())
-    if not expr:
-        return None, "the SearchParameter carries no expression"
-    alts = [a.strip() for a in expr.split("|")]
-    plain = [a for a in alts
-             if RE_PLAIN_PATH.match(a) and a.split(".", 1)[0] == root]
-    if len(plain) != 1:
-        return None, f"expression not modelled by this check: {expr}"
-    return plain[0].split(".", 1)[1], ""
-
-
-def token_matches(node, system: str | None, code: str) -> bool:
-    """Does one element value satisfy a `[system|]code` token criterion?
-
-    The three spellings a token parameter can land on, per the FHIR search
-    specification: a CodeableConcept (match any of its codings), a Coding or an
-    Identifier (match the pair), and a primitive `code` (match the code alone -
-    a primitive carries no system, so a criterion that names one still matches
-    here, and the system is checked wherever the data can express it).
-    """
-    if isinstance(node, str):
-        return node == code
-    if not isinstance(node, dict):
-        return False
-    if isinstance(node.get("coding"), list):
-        return any(token_matches(c, system, code) for c in node["coding"])
-    # Coding spells the code `code`; Identifier and ContactPoint spell it `value`.
-    have = node.get("code") if "code" in node else node.get("value")
-    if have != code:
-        return False
-    return system is None or node.get("system") == system
-
-
-def token_criteria(rtype: str, query: str) -> list[tuple[str, str | None, list[str]]]:
-    """(parameter, system, candidate codes) per token-shaped criterion in a query.
-
-    A comma-separated value list is FHIR's OR, so the criterion is satisfied by
-    any one of its codes. A modifier or prefix (`identifier:of-type`, `date=gt...`)
-    is left to the caller's parameter lookup to reject: a modified parameter is not
-    the plain token match this check models, so the name is kept verbatim and will
-    simply not resolve.
-    """
-    out: list[tuple[str, str | None, list[str]]] = []
-    for pair in query.split("&"):
-        if "=" not in pair:
-            continue
-        name, _, raw = pair.partition("=")
-        name = unquote_plus(name).strip()
-        if not name or name in CONTROL_PARAMS:
-            continue
-        # Form-encoded, so `+` is a space and a literal plus arrives as `%2B`.
-        # `unquote` instead of `unquote_plus` here reported
-        # Stufe5/Basis/Patient-Search-Extended.feature:67 as unsatisfied, because
-        # it searches `telecom=030+1234567` while the seeded Patient carries
-        # `030 1234567` - and that scenario passes, the suite's own next step
-        # asserting `telecom = '030 1234567'` with the space.
-        value = unquote_plus(raw).strip()
-        if not value or "$" in value:        # an unresolved contract placeholder
-            continue
-        system: str | None = None
-        codes: list[str] = []
-        for alternative in value.split(","):
-            alternative = alternative.strip()
-            if "|" in alternative:
-                sys_part, _, code_part = alternative.rpartition("|")
-                if not code_part:            # `system|` is "any code in system"
+            for path in sorted(pkg.rglob("*.json")):
+                try:
+                    doc = json.loads(path.read_text(encoding="utf-8"))
+                except (json.JSONDecodeError, UnicodeDecodeError, OSError):
                     continue
-                system = sys_part or None
-                codes.append(code_part)
-            else:
-                codes.append(alternative)
-        if codes:
-            out.append((name, system, codes))
-    return out
+                if (not isinstance(doc, dict)
+                        or doc.get("resourceType") != "SearchParameter"):
+                    continue
+                if doc.get("type") != "token" or not doc.get("code"):
+                    continue
+                for base in doc.get("base") or []:
+                    out.setdefault((base, doc["code"]), {
+                        "expression": doc.get("expression") or "",
+                        "url": doc.get("url") or "",
+                        "package": pkg.name,
+                    })
+        return TokenParameters(out)
+
+    def token_path(self, rtype: str, code: str) -> tuple[str | None, str]:
+        """The element path `<rtype>.<code>` searches, or None and why not.
+
+        Returns the path *without* the leading resource type, which is the form
+        `assertion_check.resolve` takes. A union expression is accepted when exactly
+        one alternative is a plain path rooted at the searched type - `Observation.code
+        | Observation.component.code` is two, so it is skipped rather than halved.
+        """
+        spec = self.definitions.get((rtype, code))
+        root = rtype
+        if spec is None:
+            # The parameters every resource has - `_tag`, `_security`, `_profile` -
+            # are defined once with base `Resource` and an expression rooted there,
+            # so a per-type lookup can never find them. `_tag` is the one of those
+            # this gate must resolve: the suite searches by it and asserts the result
+            # is non-empty, which is a requirement on the corpus like any other.
+            spec = self.definitions.get(("Resource", code))
+            root = "Resource"
+        if spec is None:
+            return None, "no token SearchParameter for this type in the pinned packages"
+        expr = " ".join((spec["expression"] or "").split())
+        if not expr:
+            return None, "the SearchParameter carries no expression"
+        alts = [a.strip() for a in expr.split("|")]
+        plain = [a for a in alts
+                 if RE_PLAIN_PATH.match(a) and a.split(".", 1)[0] == root]
+        if len(plain) != 1:
+            return None, f"expression not modelled by this check: {expr}"
+        return plain[0].split(".", 1)[1], ""
 
 
-def requirements(features_root: Path, level: str, predicate,
-                 values: dict[str, str],
-                 params: dict[tuple[str, str], dict] | None = None) -> list[dict]:
-    """One entry per (type, path, value) a search scenario requires of the corpus.
+@dataclasses.dataclass(frozen=True)
+class TokenCriterion:
+    """One token-shaped criterion of a search query, and what satisfies it.
 
-    Every scenario is described, in or out of the level's scope, and each entry
-    records which it was under `inScope`. Selecting is left to the caller: no
-    entry is ever merged with another, so dropping the out-of-scope ones here or
-    after the fact comes to the same thing, and the predicate then has one
-    meaning in this module instead of two.
+    A comma-separated value list is FHIR's OR, so any one of `codes` satisfies
+    the criterion; `system` is the one the `system|code` alternatives named.
     """
-    out: list[dict] = []
-    for feature in load_features(features_root):
-        if feature.level != level:
-            continue
-        disabled = any(t.lower() == "@disabled" for t in feature.tags)
 
-        for scenario in feature.scenarios:
-            if scenario.is_precondition:
+    parameter: str
+    system: str | None
+    codes: list[str]
+
+    @property
+    def value(self) -> str:
+        """The criterion as the query spells it, for the report."""
+        return (f"{self.system}|" if self.system else "") + ",".join(self.codes)
+
+    @staticmethod
+    def of_query(query: str) -> list["TokenCriterion"]:
+        """One criterion per token-shaped `name=value` pair of a query string.
+
+        A modifier or prefix (`identifier:of-type`, `date=gt...`)
+        is left to the caller's parameter lookup to reject: a modified parameter is not
+        the plain token match this check models, so the name is kept verbatim and will
+        simply not resolve.
+        """
+        out: list["TokenCriterion"] = []
+        for pair in query.split("&"):
+            if "=" not in pair:
                 continue
-            # An outline is expanded per row so that `<entrytype>` and
-            # `<searchParameter>` become real element paths. Rows carry their own
-            # tags via the Examples block, so scope is decided per row - the suite
-            # has Examples blocks that are @Optional under a mandatory scenario.
-            if scenario.is_outline:
-                variants = [
-                    (dict(zip(ex.header, row)), effective_tags(feature, scenario, ex))
-                    for ex in scenario.examples for row in ex.rows
-                ]
-            else:
-                variants = [({}, effective_tags(feature, scenario))]
-
-            for row, tags in variants:
-                in_scope = predicate(tags) and not disabled
-
-                searched: str | None = None
-                query: str = ""
-                for step in scenario.steps:
-                    text = expand(step.full, row)
-
-                    url = RE_SEARCH_URL.search(text)
-                    if url:
-                        searched = url.group(1)
-                        step_match = RE_SEARCH_STEP.search(text)
-                        query = (step_match.group("query") or "") if step_match else ""
+            name, _, raw = pair.partition("=")
+            name = unquote_plus(name).strip()
+            if not name or name in CONTROL_PARAMS:
+                continue
+            # Form-encoded, so `+` is a space and a literal plus arrives as `%2B`.
+            # `unquote` instead of `unquote_plus` here reported
+            # Stufe5/Basis/Patient-Search-Extended.feature:67 as unsatisfied, because
+            # it searches `telecom=030+1234567` while the seeded Patient carries
+            # `030 1234567` - and that scenario passes, the suite's own next step
+            # asserting `telecom = '030 1234567'` with the space.
+            value = unquote_plus(raw).strip()
+            if not value or "$" in value:        # an unresolved contract placeholder
+                continue
+            system: str | None = None
+            codes: list[str] = []
+            for alternative in value.split(","):
+                alternative = alternative.strip()
+                if "|" in alternative:
+                    sys_part, _, code_part = alternative.rpartition("|")
+                    if not code_part:            # `system|` is "any code in system"
                         continue
+                    system = sys_part or None
+                    codes.append(code_part)
+                else:
+                    codes.append(alternative)
+            if codes:
+                out.append(TokenCriterion(parameter=name, system=system,
+                                         codes=codes))
+        return out
 
-                    post = RE_SEARCH_POST.search(text)
-                    if post:
-                        searched = post.group(1)
-                        query, why = table_query(step, row)
-                        if why:
+    def satisfied_by(self, node) -> bool:
+        """Does one element value of a seeded resource satisfy this criterion?"""
+        return any(self.matches(node, code) for code in self.codes)
+
+    def matches(self, node, code: str) -> bool:
+        """Does one element value carry this system and the given code?
+
+        The three spellings a token parameter can land on, per the FHIR search
+        specification: a CodeableConcept (match any of its codings), a Coding or an
+        Identifier (match the pair), and a primitive `code` (match the code alone -
+        a primitive carries no system, so a criterion that names one still matches
+        here, and the system is checked wherever the data can express it).
+        """
+        if isinstance(node, str):
+            return node == code
+        if not isinstance(node, dict):
+            return False
+        if isinstance(node.get("coding"), list):
+            return any(self.matches(c, code) for c in node["coding"])
+        # Coding spells the code `code`; Identifier and ContactPoint spell it `value`.
+        have = node.get("code") if "code" in node else node.get("value")
+        if have != code:
+            return False
+        return self.system is None or node.get("system") == self.system
+
+
+@dataclasses.dataclass(frozen=True)
+class Level:
+    """The level being checked, and everything fixed for the whole of it.
+
+    The feature tree, the tag predicate that decides scope, the contract values a
+    placeholder resolves through and the SearchParameter definitions are all
+    settled before a single scenario is read, so they are held here rather than
+    threaded through the walk over the features.
+    """
+
+    name: str
+    features: Path
+    predicate: object
+    values: dict[str, str]
+    params: TokenParameters
+
+    def requirements(self) -> list[dict]:
+        """One entry per (type, path, value) a search scenario requires of the corpus.
+
+        Every scenario is described, in or out of the level's scope, and each entry
+        records which it was under `inScope`. Selecting is left to the caller: no
+        entry is ever merged with another, so dropping the out-of-scope ones here or
+        after the fact comes to the same thing, and the predicate then has one
+        meaning in this module instead of two.
+        """
+        features_root, level, predicate = self.features, self.name, self.predicate
+        values, params = self.values, self.params
+        out: list[dict] = []
+        for feature in load_features(features_root):
+            if feature.level != level:
+                continue
+            disabled = any(t.lower() == "@disabled" for t in feature.tags)
+
+            for scenario in feature.scenarios:
+                if scenario.is_precondition:
+                    continue
+                # An outline is expanded per row so that `<entrytype>` and
+                # `<searchParameter>` become real element paths. Rows carry their own
+                # tags via the Examples block, so scope is decided per row - the suite
+                # has Examples blocks that are @Optional under a mandatory scenario.
+                if scenario.is_outline:
+                    variants = [
+                        (dict(zip(ex.header, row)),
+                         effective_tags(feature, scenario, ex))
+                        for ex in scenario.examples for row in ex.rows
+                    ]
+                else:
+                    variants = [({}, effective_tags(feature, scenario))]
+
+                for row, tags in variants:
+                    in_scope = predicate(tags) and not disabled
+
+                    searched: str | None = None
+                    query: str = ""
+                    for step in scenario.steps:
+                        text = expand(step.full, row)
+
+                        url = RE_SEARCH_URL.search(text)
+                        if url:
+                            searched = url.group(1)
+                            step_match = RE_SEARCH_STEP.search(text)
+                            query = ((step_match.group("query") or "")
+                                     if step_match else "")
+                            continue
+
+                        post = RE_SEARCH_POST.search(text)
+                        if post:
+                            searched = post.group(1)
+                            query, why = table_query(step, row)
+                            if why:
+                                out.append({"kind": "reference",
+                                            "level": level, "type": None,
+                                            "element": None, "value": None,
+                                            "inScope": in_scope,
+                                            "feature": feature.rel,
+                                            "scenario": scenario.name,
+                                            "line": step.line,
+                                            "unmodelled": f"{text} [{why}]"})
+                            continue
+
+                        # The token criteria of the search this step requires to be
+                        # non-empty. Emitted here rather than at the search step so
+                        # that an unguarded search - one the suite lets come back
+                        # empty - produces no requirement on the corpus.
+                        if (COUNT_NONEMPTY in text and searched and query
+                                and not params.is_empty):
+                            resolved_query, missing = resolve_keys(query, values)
+                            for criterion in TokenCriterion.of_query(resolved_query):
+                                path, why = params.token_path(searched,
+                                                              criterion.parameter)
+                                out.append({
+                                    "kind": "token", "level": level, "type": searched,
+                                    "element": path, "parameter": criterion.parameter,
+                                    "system": criterion.system,
+                                    "codes": criterion.codes,
+                                    "value": criterion.value,
+                                    "strayAnchor": False, "inScope": in_scope,
+                                    "feature": feature.rel, "scenario": scenario.name,
+                                    "line": step.line,
+                                    "unresolvedKeys": sorted(missing),
+                                    "skipped": None if path else why,
+                                })
+                            continue
+
+                        found: list[tuple[str, str]] = []
+                        for element, target in RE_BUNDLE_REF.findall(text):
+                            found.append((element, target))
+                        for m in RE_ALL_MATCHES.finditer(text):
+                            found.append((m.group("element"), m.group("value")))
+                        if not found:
+                            continue
+                        if searched is None:
+                            # An assertion over bundle entries with no preceding search
+                            # in the same scenario. Reported rather than skipped: it
+                            # would mean a step shape this check does not model.
                             out.append({"kind": "reference",
                                         "level": level, "type": None,
                                         "element": None, "value": None,
-                                        "inScope": in_scope, "feature": feature.rel,
-                                        "scenario": scenario.name, "line": step.line,
-                                        "unmodelled": f"{text} [{why}]"})
-                        continue
-
-                    # The token criteria of the search this step requires to be
-                    # non-empty. Emitted here rather than at the search step so
-                    # that an unguarded search - one the suite lets come back
-                    # empty - produces no requirement on the corpus.
-                    if COUNT_NONEMPTY in text and searched and query and params:
-                        resolved_query, missing = resolve_keys(query, values)
-                        for name, system, codes in token_criteria(searched,
-                                                                  resolved_query):
-                            path, why = token_path(searched, name, params)
+                                        "inScope": in_scope,
+                                        "feature": feature.rel,
+                                        "scenario": scenario.name,
+                                        "line": step.line, "unmodelled": text})
+                            continue
+                        for element, target in found:
+                            value, missing = resolve_keys(target, values)
+                            # A stray `$` after the placeholder - see STRAY_ANCHOR.
+                            stray = value.endswith("$")
                             out.append({
-                                "kind": "token", "level": level, "type": searched,
-                                "element": path, "parameter": name,
-                                "system": system, "codes": codes,
-                                "value": (f"{system}|" if system else "") + ",".join(codes),
-                                "strayAnchor": False, "inScope": in_scope,
+                                "kind": "reference",
+                                "level": level, "type": searched, "element": element,
+                                "value": value.rstrip("$") if stray else value,
+                                "strayAnchor": stray, "inScope": in_scope,
                                 "feature": feature.rel, "scenario": scenario.name,
                                 "line": step.line,
                                 "unresolvedKeys": sorted(missing),
-                                "skipped": None if path else why,
                             })
-                        continue
-
-                    found: list[tuple[str, str]] = []
-                    for element, target in RE_BUNDLE_REF.findall(text):
-                        found.append((element, target))
-                    for m in RE_ALL_MATCHES.finditer(text):
-                        found.append((m.group("element"), m.group("value")))
-                    if not found:
-                        continue
-                    if searched is None:
-                        # An assertion over bundle entries with no preceding search
-                        # in the same scenario. Reported rather than skipped: it
-                        # would mean a step shape this check does not model.
-                        out.append({"kind": "reference",
-                                    "level": level, "type": None, "element": None,
-                                    "value": None, "inScope": in_scope,
-                                    "feature": feature.rel, "scenario": scenario.name,
-                                    "line": step.line, "unmodelled": text})
-                        continue
-                    for element, target in found:
-                        value, missing = resolve_keys(target, values)
-                        # A stray `$` after the placeholder - see STRAY_ANCHOR.
-                        stray = value.endswith("$")
-                        out.append({
-                            "kind": "reference",
-                            "level": level, "type": searched, "element": element,
-                            "value": value.rstrip("$") if stray else value,
-                            "strayAnchor": stray, "inScope": in_scope,
-                            "feature": feature.rel, "scenario": scenario.name,
-                            "line": step.line,
-                            "unresolvedKeys": sorted(missing),
-                        })
-    return out
+        return out
 
 
 def corpus(data_root: Path, level: str) -> dict[str, list[dict]]:
@@ -605,6 +668,9 @@ def check(reqs: list[dict], data: dict[str, list[dict]]) -> list[dict]:
             continue
         if entry.get("kind") == "token":
             docs = data.get(entry["type"], [])
+            criterion = TokenCriterion(parameter=entry["parameter"],
+                                       system=entry["system"],
+                                       codes=entry["codes"])
             if entry.get("skipped"):
                 # Not modelled, so it states nothing either way. Left without a
                 # verdict so that neither the count of satisfied requirements nor
@@ -615,9 +681,8 @@ def check(reqs: list[dict], data: dict[str, list[dict]]) -> list[dict]:
             hits, carriers = [], []
             for doc in docs:
                 for node in resolve(doc, entry["element"]):
-                    for code in entry["codes"]:
-                        if token_matches(node, entry["system"], code):
-                            hits.append(doc["_file"])
+                    if criterion.satisfied_by(node):
+                        hits.append(doc["_file"])
                     carriers.append(
                         f"{doc['_file']}: "
                         + json.dumps(node, ensure_ascii=False, sort_keys=True)[:160])
@@ -684,8 +749,8 @@ def main() -> int:
     # the older contract of this check and do not need them, and `make packages`
     # is what populates the directory. Without it the token criteria are simply
     # not mined, and the summary says so rather than reporting zero of them.
-    params = search_parameters(args.packages)
-    if not params:
+    params = TokenParameters.of(args.packages)
+    if params.is_empty:
         print(f"note: no token SearchParameter definitions under {args.packages} "
               f"- search criteria are not checked this run (run: make packages)",
               file=sys.stderr)
@@ -693,9 +758,10 @@ def main() -> int:
     rc = 0
     report: list[dict] = []
     for level in selected:
-        values = testdata_contract(level, req)
-        predicate = parse_tag_expression(exprs[level])
-        reqs = requirements(args.features, level, predicate, values, params)
+        being = Level(name=level, features=args.features,
+                      predicate=parse_tag_expression(exprs[level]),
+                      values=testdata_contract(level, req), params=params)
+        reqs = being.requirements()
         if not args.all:
             reqs = [r for r in reqs if r["inScope"]]
         data = corpus(args.data_root, level)
