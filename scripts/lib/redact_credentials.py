@@ -343,7 +343,10 @@ def cmd_scan(args):
         for value, label in values.items():
             if value in text:
                 hits.append((path, label, text.count(value)))
-        for match in set(JWT.findall(text)):
+        # Sorted, not merely de-duplicated: the refusal below lists what it
+        # found, and a listing that comes out in a different order on every
+        # process is not something a reader can compare against the last run.
+        for match in sorted(set(JWT.findall(text))):
             if match in values:
                 continue  # already reported above, under its test-data key
             payload = access_token_claims(match)
