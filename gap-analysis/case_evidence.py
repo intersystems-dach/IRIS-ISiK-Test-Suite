@@ -469,124 +469,6 @@ def fixture_of(resolved_request: str) -> str:
     return m.group(1) if m else ""
 
 
-def expected_received(failure: dict, failing: dict | None,
-                      response: dict | None) -> dict:
-    """The one-line statement of what was expected against what came back.
-
-    Read from the suite's own assertion error where it states both - Tiger's
-    `Element value: <actual> Expected: <expected>` form, which every status-code
-    assertion produces - and otherwise from the assertion text and the response
-    status line separately. Nothing is computed: where the record does not state an
-    expectation in comparable terms, the field says so.
-    """
-    msg = (failure or {}).get("message") or ""
-    m = _ELEMENT.search(msg)
-    if m:
-        actual = m.group(1).strip()
-        expected = m.group(2).strip().split("\n")[0].strip()
-        return {"expected": expected, "received": actual,
-                "comparable": True,
-                "line": f"expected `{expected}`, received `{actual}`"}
-
-    step = (failing or {}).get("resolved") or (failure or {}).get("step") or ""
-    want = _MATCHES.search(step.strip())
-    status = ""
-    if response:
-        sm = _STATUS.match(response.get("head") or "")
-        status = sm.group(1) if sm else (response.get("title") or "")
-    if want and status:
-        return {"expected": want.group(1), "received": status, "comparable": True,
-                "line": f"expected `{want.group(1)}`, received HTTP `{status}`"}
-    if status:
-        return {"expected": "", "received": status, "comparable": False,
-                "line": f"the assertion is not about the status code; the SUT "
-                        f"answered HTTP `{status}`"}
-    return {"expected": "", "received": "", "comparable": False,
-            "line": "the official report records no response for this case"}
-
-
-def curl_for(request: dict | None, level_run: dict, archive_dir: str) -> list[str]:
-    """The request replayed against the round's own endpoint, as shell.
-
-    Built from the raw request the SUT received rather than from the suite's own
-    cURL, because the suite's cURL names its proxy alias (`http://fhirserver/`) and
-    not a reachable URL. Four headers are dropped: the two the proxy added
-    (`Proxy-Connection`, `Host`), the one curl must compute itself
-    (`Content-Length`), and the credential. `Accept-Encoding` is dropped as well,
-    so the reply comes back readable.
-
-    The credential is dropped but not replaced by a fixed one: a request the
-    suite presented with a SMART-on-FHIR access token is not the same request
-    when replayed with the harness's own user, and a scope verdict replayed that
-    way would be a measurement of something else. Which form was on the wire is
-    read off the header that was dropped.
-    """
-    if not request:
-        return []
-    head = (request.get("head") or "").split("\n")
-    if not head:
-        return []
-    m = _REQLINE.match(head[0])
-    if not m:
-        return []
-    method, path = m.group(1), m.group(2)
-    base = (level_run.get("sut") or {}).get("baseUrlFromHost") or ""
-    prefix = ""
-    if base:
-        # The path on the wire carries the endpoint's own prefix; the base URL
-        # recorded for the host carries it too. Join them without doubling it.
-        tail = "/" + base.split("://", 1)[-1].split("/", 1)[-1] if "/" in \
-            base.split("://", 1)[-1] else ""
-        if tail and tail != "/" and path.startswith(tail):
-            prefix, path = tail, path[len(tail):] or "/"
-    drop = ("proxy-connection:", "host:", "content-length:", "authorization:",
-            "accept-encoding:", "user-agent:")
-    headers = [h for h in head[1:]
-               if h.strip() and not h.lower().startswith(drop)]
-    # The scheme, read off the header that is dropped below. By the time this runs
-    # the credential itself is withheld and the scheme is not - see _withhold().
-    bearer = any(h.lower().startswith("authorization: bearer") for h in head[1:])
-    body = request.get("body") or ""
-
-    lines = [f'BASE={base}' + (f"   # {archive_dir}/run.json, sut.baseUrlFromHost"
-                               if base else "")]
-    if bearer:
-        # No token is quoted here, nor is one recoverable from the archive: the
-        # record keeps the SHA-256 of the ones this round used and the parameters
-        # they were minted with. A replay therefore needs a token of its own, of
-        # the same scope, and needs it fresh - they live one hour. The record is
-        # cited as it names itself, not under the archive directory: it is one
-        # file of the round's provenance, which is shared by the archives.
-        record = (level_run.get("authorizationServer") or {}).get("tokenRecord")
-        lines.append('TOKEN=   # a token of this scenario\'s scope, minted as '
-                     + (f"{record} records" if record
-                        else "this round's token record records")
-                     + " ('make tokens')")
-        cmd = ['curl -i -H "Authorization: Bearer $TOKEN"']
-    else:
-        cmd = ['curl -i -u "$SUT_USER:$SUT_PASSWORD"']
-    # The TLS listener is addressed by the name its certificate was issued for,
-    # which is not in DNS and whose issuer is this round's own authority: both
-    # are supplied here rather than left for the reader to discover from a
-    # handshake failure. run/tls/ca.crt is re-created by `make all`, together
-    # with the certificate it signs.
-    if base.startswith("https://"):
-        authority = base.split("://", 1)[1].split("/", 1)[0]
-        host, _, port = authority.partition(":")
-        cmd.append(f"     --resolve {host}:{port or '443'}:127.0.0.1")
-        cmd.append("     --cacert run/tls/ca.crt")
-    for h in headers:
-        k, _, v = h.partition(":")
-        cmd.append(f"     -H '{k.strip()}: {v.strip()}'")
-    if method != "GET":
-        cmd.append(f"     -X {method}")
-    if body:
-        cmd.append("     --data-binary @request-body.json")
-    cmd.append(f'     "$BASE{path}"')
-    lines.append(" \\\n".join(cmd))
-    return lines
-
-
 # =============================================================================
 # Assembling
 # =============================================================================
@@ -730,6 +612,123 @@ class DocumentedCase:
         self.archive_dir = case.get("measuredIn") or level.directory
         self.run = level.runs.get(self.archive_dir) or level.run
 
+    def outcome_statement(self, failing: dict | None,
+                          response: dict | None) -> dict:
+        """The one-line statement of what was expected against what came back.
+
+        Read from the suite's own assertion error where it states both - Tiger's
+        `Element value: <actual> Expected: <expected>` form, which every status-code
+        assertion produces - and otherwise from the assertion text and the response
+        status line separately. Nothing is computed: where the record does not state an
+        expectation in comparable terms, the field says so.
+        """
+        failure = self.case.get("failure") or {}
+        msg = failure.get("message") or ""
+        m = _ELEMENT.search(msg)
+        if m:
+            actual = m.group(1).strip()
+            expected = m.group(2).strip().split("\n")[0].strip()
+            return {"expected": expected, "received": actual,
+                    "comparable": True,
+                    "line": f"expected `{expected}`, received `{actual}`"}
+
+        step = (failing or {}).get("resolved") or failure.get("step") or ""
+        want = _MATCHES.search(step.strip())
+        status = ""
+        if response:
+            sm = _STATUS.match(response.get("head") or "")
+            status = sm.group(1) if sm else (response.get("title") or "")
+        if want and status:
+            return {"expected": want.group(1), "received": status, "comparable": True,
+                    "line": f"expected `{want.group(1)}`, received HTTP `{status}`"}
+        if status:
+            return {"expected": "", "received": status, "comparable": False,
+                    "line": f"the assertion is not about the status code; the SUT "
+                            f"answered HTTP `{status}`"}
+        return {"expected": "", "received": "", "comparable": False,
+                "line": "the official report records no response for this case"}
+
+    def replay_commands(self, request: dict | None) -> list[str]:
+        """The request replayed against the round's own endpoint, as shell.
+
+        Built from the raw request the SUT received rather than from the suite's own
+        cURL, because the suite's cURL names its proxy alias (`http://fhirserver/`) and
+        not a reachable URL. Four headers are dropped: the two the proxy added
+        (`Proxy-Connection`, `Host`), the one curl must compute itself
+        (`Content-Length`), and the credential. `Accept-Encoding` is dropped as well,
+        so the reply comes back readable.
+
+        The credential is dropped but not replaced by a fixed one: a request the
+        suite presented with a SMART-on-FHIR access token is not the same request
+        when replayed with the harness's own user, and a scope verdict replayed that
+        way would be a measurement of something else. Which form was on the wire is
+        read off the header that was dropped.
+        """
+        if not request:
+            return []
+        head = (request.get("head") or "").split("\n")
+        if not head:
+            return []
+        m = _REQLINE.match(head[0])
+        if not m:
+            return []
+        method, path = m.group(1), m.group(2)
+        base = (self.run.get("sut") or {}).get("baseUrlFromHost") or ""
+        prefix = ""
+        if base:
+            # The path on the wire carries the endpoint's own prefix; the base URL
+            # recorded for the host carries it too. Join them without doubling it.
+            tail = "/" + base.split("://", 1)[-1].split("/", 1)[-1] if "/" in \
+                base.split("://", 1)[-1] else ""
+            if tail and tail != "/" and path.startswith(tail):
+                prefix, path = tail, path[len(tail):] or "/"
+        drop = ("proxy-connection:", "host:", "content-length:", "authorization:",
+                "accept-encoding:", "user-agent:")
+        headers = [h for h in head[1:]
+                   if h.strip() and not h.lower().startswith(drop)]
+        # The scheme, read off the header that is dropped below. By the time this runs
+        # the credential itself is withheld and the scheme is not - see _withhold().
+        bearer = any(h.lower().startswith("authorization: bearer") for h in head[1:])
+        body = request.get("body") or ""
+
+        cite = f"   # {self.archive_dir}/run.json, sut.baseUrlFromHost"
+        lines = [f'BASE={base}' + (cite if base else "")]
+        if bearer:
+            # No token is quoted here, nor is one recoverable from the archive: the
+            # record keeps the SHA-256 of the ones this round used and the parameters
+            # they were minted with. A replay therefore needs a token of its own, of
+            # the same scope, and needs it fresh - they live one hour. The record is
+            # cited as it names itself, not under the archive directory: it is one
+            # file of the round's provenance, which is shared by the archives.
+            record = (self.run.get("authorizationServer") or {}).get("tokenRecord")
+            lines.append('TOKEN=   # a token of this scenario\'s scope, minted as '
+                         + (f"{record} records" if record
+                            else "this round's token record records")
+                         + " ('make tokens')")
+            cmd = ['curl -i -H "Authorization: Bearer $TOKEN"']
+        else:
+            cmd = ['curl -i -u "$SUT_USER:$SUT_PASSWORD"']
+        # The TLS listener is addressed by the name its certificate was issued for,
+        # which is not in DNS and whose issuer is this round's own authority: both
+        # are supplied here rather than left for the reader to discover from a
+        # handshake failure. run/tls/ca.crt is re-created by `make all`, together
+        # with the certificate it signs.
+        if base.startswith("https://"):
+            authority = base.split("://", 1)[1].split("/", 1)[0]
+            host, _, port = authority.partition(":")
+            cmd.append(f"     --resolve {host}:{port or '443'}:127.0.0.1")
+            cmd.append("     --cacert run/tls/ca.crt")
+        for h in headers:
+            k, _, v = h.partition(":")
+            cmd.append(f"     -H '{k.strip()}: {v.strip()}'")
+        if method != "GET":
+            cmd.append(f"     -X {method}")
+        if body:
+            cmd.append("     --data-binary @request-body.json")
+        cmd.append(f'     "$BASE{path}"')
+        lines.append(" \\\n".join(cmd))
+        return lines
+
     def entry(self) -> dict:
         """This case, as one entry of the annex and of the JSON beside it."""
         case, bundle = self.case, self.level.round.bundle
@@ -761,7 +760,7 @@ class DocumentedCase:
         failure = case.get("failure") or {}
         ex = case.get("example") or {}
         gap = gaps.get(case_key(case)) or {}
-        verdict = expected_received(failure, steps["failing"], response)
+        verdict = self.outcome_statement(steps["failing"], response)
 
         return {
             "level": level,
@@ -809,7 +808,7 @@ class DocumentedCase:
                 "note": traffic_note,
             },
             "outcomeLine": verdict["line"],
-            "reproduce": curl_for(request, run, archive_dir),
+            "reproduce": self.replay_commands(request),
         }
 
 

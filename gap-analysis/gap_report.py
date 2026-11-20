@@ -486,34 +486,6 @@ def canonical_record(index: dict, url: str) -> tuple[str, list] | None:
     return None
 
 
-def requirement_rows(index: dict, bucket: str, key: str) -> list[dict]:
-    return ((index.get("conformance") or {}).get(bucket) or {}).get(key) or []
-
-
-def fmt_requirements(rows: list[dict], level: str | None) -> tuple[list[str], list[str]]:
-    """(prose lines, packages) for a set of CapabilityStatement requirement rows.
-
-    Rows for the level under test come first: `Account.read` is required by both an
-    ISiK 3 and an ISiK 5 conformance resource, and a developer reading a Stufe 5
-    failure wants the Stufe 5 one named first.
-    """
-    rows = sorted(rows, key=lambda r: (r.get("isikLevel") != level,
-                                       r.get("expectation") != "SHALL",
-                                       r.get("capabilityStatement") or ""))
-    lines, pkgs = [], []
-    for r in rows:
-        exp = r.get("expectation") or "unspecified expectation"
-        lvl = r.get("isikLevel") or "level-independent"
-        line = (f"`{exp}` per `{r.get('capabilityStatement')}` ({lvl}), "
-                f"shipped by `{r.get('package')}`")
-        if r.get("definition"):
-            line += f"\n    definition: {r['definition']}"
-        lines.append(line)
-        if r.get("package") and r["package"] not in pkgs:
-            pkgs.append(r["package"])
-    return lines, pkgs
-
-
 # =============================================================================
 # One failing case
 # =============================================================================
@@ -612,6 +584,34 @@ class FailingCase:
                                     f"`{self.indexed['context']}` context, which "
                                     "neither the step shape nor the response decides")
         return "UNCLASSIFIED", "the step shape is not in the classification table"
+
+    def requirement_rows(self, bucket: str, key: str) -> list[dict]:
+        """What one bucket of the conformance index records under one key."""
+        return ((self.index.get("conformance") or {}).get(bucket) or {}).get(key) or []
+
+    def requirement_citations(self, rows: list[dict]) -> tuple[list[str], list[str]]:
+        """(prose lines, packages) for a set of CapabilityStatement requirement rows.
+
+        Rows for the level under test come first: `Account.read` is required by both
+        an ISiK 3 and an ISiK 5 conformance resource, and a developer reading a
+        Stufe 5 failure wants the Stufe 5 one named first. Which level that is is
+        this case's own, which is why this is a method on the case.
+        """
+        rows = sorted(rows, key=lambda r: (r.get("isikLevel") != self.level,
+                                           r.get("expectation") != "SHALL",
+                                           r.get("capabilityStatement") or ""))
+        lines, pkgs = [], []
+        for r in rows:
+            exp = r.get("expectation") or "unspecified expectation"
+            lvl = r.get("isikLevel") or "level-independent"
+            line = (f"`{exp}` per `{r.get('capabilityStatement')}` ({lvl}), "
+                    f"shipped by `{r.get('package')}`")
+            if r.get("definition"):
+                line += f"\n    definition: {r['definition']}"
+            lines.append(line)
+            if r.get("package") and r["package"] not in pkgs:
+                pkgs.append(r["package"])
+        return lines, pkgs
 
     def attribution(self, category: str) -> dict:
         """The FHIR feature under test, and which package supplies it.
@@ -741,8 +741,8 @@ class FailingCase:
                 out["feature"] = (f"search parameter `{name}`"
                                   + (f" of type `{ptype}`" if ptype else "")
                                   + f" on `{rtype}`")
-                rows = requirement_rows(self.index, "searchParams",
-                                        f"{rtype}|{name}|{ptype}")
+                rows = self.requirement_rows("searchParams",
+                                             f"{rtype}|{name}|{ptype}")
                 if not rows:
                     declared = ((self.index.get("conformance") or {})
                                 .get("searchParams") or {})
@@ -753,7 +753,7 @@ class FailingCase:
                             f"no ISiK CapabilityStatement declares `{name}` on "
                             f"`{rtype}` with type `{ptype}`; the rows below are the "
                             "same parameter declared with another type")
-                lines, pkgs = fmt_requirements(rows, self.level)
+                lines, pkgs = self.requirement_citations(rows)
                 out["requirements"].extend(lines)
                 out["packages"].extend(pkgs)
                 defs = {r.get("definition") for r in rows if r.get("definition")}
@@ -775,9 +775,8 @@ class FailingCase:
             out["mechanism"] = "interaction declaration in the CapabilityStatement"
             if code and rtype:
                 out["feature"] = f"the `{code}` interaction on `{rtype}`"
-                lines, pkgs = fmt_requirements(
-                    requirement_rows(self.index, "interactions", f"{rtype}|{code}"),
-                    self.level)
+                lines, pkgs = self.requirement_citations(
+                    self.requirement_rows("interactions", f"{rtype}|{code}"))
                 out["requirements"].extend(lines)
                 out["packages"].extend(pkgs)
                 out["expected"] = (f"`GET [base]/metadata` returns a "
@@ -807,9 +806,9 @@ class FailingCase:
                 out["feature"] = (f"operation `${code}`"
                                   + (f" on `{rtype}`" if rtype else "")
                                   + (f" ({scope}-level)" if scope else ""))
-                rows = requirement_rows(self.index, "operations", f"{rtype}|{code}") \
-                    or requirement_rows(self.index, "operations", f"*|{code}")
-                lines, pkgs = fmt_requirements(rows, self.level)
+                rows = self.requirement_rows("operations", f"{rtype}|{code}") \
+                    or self.requirement_rows("operations", f"*|{code}")
+                lines, pkgs = self.requirement_citations(rows)
                 out["requirements"].extend(lines)
                 out["packages"].extend(pkgs)
                 # The OperationDefinition itself: its declared scopes are what a
@@ -847,7 +846,7 @@ class FailingCase:
                     rows = [r for k, v in ((self.index.get("conformance") or {})
                                            .get("searchParams") or {}).items()
                             if k.startswith(f"{rtype}|{pname}|") for r in v]
-                    lines, pkgs = fmt_requirements(rows, self.level)
+                    lines, pkgs = self.requirement_citations(rows)
                     if lines:
                         out["requirements"].append(f"parameter `{pname}`: " + lines[0])
                     out["packages"].extend(p for p in pkgs if p not in out["packages"])
@@ -1374,8 +1373,8 @@ def corpus_evidence(corpus: StagedCorpus, message: str | None) -> dict | None:
     was given**. The staged corpus is in the bundle, so that comparison is
     arithmetic rather than opinion.
 
-    Why this exists next to test_data_evidence() rather than inside it. That
-    function identifies the resource from the failing request's path and asks the
+    Why this exists next to SeededLevel.recorded_defect() rather than inside it.
+    That method identifies the resource from the failing request's path and asks the
     seed step whether the write, the read-back or the pre-run `$validate` already
     objected. Neither channel reaches this class of defect:
 
@@ -1582,43 +1581,60 @@ def corpus_reason(corpus_ev: dict) -> str:
     return f"{head}{more}. The SUT returned what it was given"
 
 
-def test_data_evidence(seed: dict, level: str, http: dict | None) -> dict | None:
-    """Positive evidence that the resource this failure touched was already broken.
+@dataclass(frozen=True)
+class SeededLevel:
+    """What the seed step recorded about one level of a round.
 
-    Only the SUT-facing artefacts of the seed step count: a write that failed, a
-    read-back that failed, a pre-run `$validate` error, or a pre-run assertion check
-    that found the required field missing. Anything less and the failure stays with
-    the SUT.
+    The level and its seed record settle each other, and both are fixed before
+    any failure is looked at - so a failure is all there is left to say, as with
+    StagedCorpus above.
     """
-    if not http or not http.get("path"):
-        return None
-    entry = seed.get(level) or {}
-    if not entry.get("present"):
-        return None
-    m = RE_ID_IN_PATH.search(http["path"])
-    if not m:
-        return None
-    key = (m.group(1), m.group(2))
-    reasons = []
-    res = (entry.get("ids") or {}).get(key)
-    if res:
-        write = res.get("write") or {}
-        read = res.get("read") or {}
-        val = res.get("validate") or {}
-        if write.get("status") and not (200 <= int(write["status"]) < 300):
-            reasons.append(f"the seed write returned HTTP {write['status']}")
-        if read.get("ok") is False:
-            reasons.append(f"the pre-run read-back failed "
-                           f"(HTTP {read.get('status')}: {read.get('detail') or '-'})")
-        for err in (val.get("errors") or [])[:4]:
-            reasons.append(f"pre-run `$validate` reported: {err}")
-    for row in (entry.get("assertionFailures") or {}).get(key, [])[:4]:
-        reasons.append(f"the pre-run assertion check failed at {row.get('cite')}: "
-                       f"{row.get('detail')}")
-    if not reasons:
-        return None
-    return {"resourceType": key[0], "id": key[1], "reasons": reasons,
-            "source": f"provenance/seed/{level}.json"}
+    level: str
+    record: dict
+
+    @staticmethod
+    def of(round_: Round, level: str) -> "SeededLevel":
+        """The seed record of one level of a round."""
+        return SeededLevel(level=level, record=round_.seed.get(level) or {})
+
+    def recorded_defect(self, http: dict | None) -> dict | None:
+        """Positive evidence that the resource this failure touched was already broken.
+
+        Only the SUT-facing artefacts of the seed step count: a write that failed, a
+        read-back that failed, a pre-run `$validate` error, or a pre-run assertion
+        check that found the required field missing. Anything less and the failure
+        stays with the SUT.
+        """
+        if not http or not http.get("path"):
+            return None
+        entry = self.record
+        if not entry.get("present"):
+            return None
+        m = RE_ID_IN_PATH.search(http["path"])
+        if not m:
+            return None
+        key = (m.group(1), m.group(2))
+        reasons = []
+        res = (entry.get("ids") or {}).get(key)
+        if res:
+            write = res.get("write") or {}
+            read = res.get("read") or {}
+            val = res.get("validate") or {}
+            if write.get("status") and not (200 <= int(write["status"]) < 300):
+                reasons.append(f"the seed write returned HTTP {write['status']}")
+            if read.get("ok") is False:
+                reasons.append(
+                    f"the pre-run read-back failed "
+                    f"(HTTP {read.get('status')}: {read.get('detail') or '-'})")
+            for err in (val.get("errors") or [])[:4]:
+                reasons.append(f"pre-run `$validate` reported: {err}")
+        for row in (entry.get("assertionFailures") or {}).get(key, [])[:4]:
+            reasons.append(f"the pre-run assertion check failed at {row.get('cite')}: "
+                           f"{row.get('detail')}")
+        if not reasons:
+            return None
+        return {"resourceType": key[0], "id": key[1], "reasons": reasons,
+                "source": f"provenance/seed/{self.level}.json"}
 
 
 # =============================================================================
@@ -2066,8 +2082,8 @@ def analyse(round_: Round) -> dict:
             else:
                 prereq_rule = None
                 # Test-data override, on positive evidence only.
-                evidence = test_data_evidence(round_.seed, level,
-                                              failure.get("http"))
+                evidence = SeededLevel.of(round_, level) \
+                                      .recorded_defect(failure.get("http"))
                 corpus_ev = corpus_evidence(StagedCorpus.of(round_, level),
                                             failure.get("message"))
                 if evidence and category != "RESPONSE_FORMAT":

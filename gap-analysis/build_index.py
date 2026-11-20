@@ -1298,11 +1298,11 @@ def resolve_canonical(canonicals: dict[str, list], url: str) -> tuple[str, list]
     return (alt, hit) if hit else None
 
 
-def index_validation_modules(reqs: dict, canonicals: dict[str, list],
-                             plugins_dir: Path) -> tuple[dict, list[str]]:
+class ValidationModuleIndex:
     """module id -> {level, profiles, packages, plugin}.
 
-    Two independent derivations, deliberately kept apart:
+    Two independent derivations, deliberately kept apart - and kept apart in the
+    code too, one method each:
 
     * **measured** - the profile canonicals the feature files hand to that module,
       resolved through the unpacked package set. Works on both package routes.
@@ -1310,109 +1310,131 @@ def index_validation_modules(reqs: dict, canonicals: dict[str, list],
       when present, absent on the ``simplifier`` route.
 
     Both are recorded. Where they disagree, the disagreement is the finding.
+
+    The notes accumulate on the index itself, in the order the derivations run,
+    so that neither derivation has to hand a second return value to the next.
+    The package canonicals are the one thing both the measured derivation and
+    the reader of this index resolve against, so they are what it is built with.
     """
-    notes: list[str] = []
-    modules: dict[str, dict] = {}
-    # Aggregated rather than per-occurrence: `https://…/Bundle` alone would emit
-    # 38 identical notes and bury everything else.
-    rescheme: dict[str, str] = {}
-    unresolved: dict[str, set[str]] = {}
 
-    for feat in reqs.get("features", []):
-        for canonical, module_ids in (feat.get("profiles") or {}).items():
-            for mid in module_ids:
-                m = modules.setdefault(mid, {
-                    "profiles": {}, "features": set(), "levels": set(),
-                    "measuredPackages": {},
-                })
-                m["profiles"].setdefault(canonical, 0)
-                m["profiles"][canonical] += 1
-                m["features"].add(feat["rel"])
-                m["levels"].add(feat["level"])
-                found = resolve_canonical(canonicals, canonical)
-                if found:
-                    declared, hit = found
-                    m["measuredPackages"][hit[0]] = \
-                        m["measuredPackages"].get(hit[0], 0) + 1
-                    if declared != canonical:
-                        rescheme[canonical] = f"{declared} ({hit[0]})"
-                else:
-                    unresolved.setdefault(canonical, set()).add(mid)
+    def __init__(self, canonicals: dict[str, list]):
+        self.canonicals = canonicals
+        self.notes: list[str] = []
+        self.modules: dict[str, dict] = {}
+        self.plugins: dict[str, dict] = {}
 
-    for asserted, declared in sorted(rescheme.items()):
-        notes.append(f"the feature files assert profile {asserted}, but the "
-                     f"packages declare it as {declared}; matched on the "
-                     "scheme-insensitive canonical")
-    for canonical, mids in sorted(unresolved.items()):
-        notes.append(f"validation module(s) {', '.join(sorted(mids))} assert "
-                     f"profile {canonical}, which no unpacked package supplies - "
-                     "a failure on it cannot name a supplying package")
+    def measure(self, reqs: dict) -> None:
+        """Record what the feature files hand each module, resolved."""
+        # Aggregated rather than per-occurrence: `https://…/Bundle` alone would
+        # emit 38 identical notes and bury everything else.
+        rescheme: dict[str, str] = {}
+        unresolved: dict[str, set[str]] = {}
 
-    plugins: dict[str, dict] = {}
-    if plugins_dir.is_dir() and yaml is not None:
-        sys.path.insert(0, str(REPO / "scripts" / "lib"))
-        from plan_packages import load_plugin        # noqa: PLC0415  (optional dep)
-        for entry in sorted(plugins_dir.iterdir()):
-            cfg = entry / "config.yaml"
-            if cfg.is_file():
-                try:
-                    plugins[entry.name] = load_plugin(str(cfg))
-                except SystemExit:
-                    # load_plugin exits on a malformed descriptor. The index must
-                    # not take the whole `make packages` down with it: the measured
-                    # derivation still stands and the defect is reported.
-                    notes.append(f"refv plugin descriptor {cfg} is malformed and "
-                                 "was skipped")
-    elif not plugins_dir.is_dir():
-        notes.append("vendor/refv-plugins/ is absent (PACKAGE_SOURCE=simplifier, "
-                     "or `make packages` has not run) - validation-module "
-                     "attribution is derived from the observed profile canonicals "
-                     "only, with no declared dependency list to check it against")
-    elif yaml is None:
-        notes.append("PyYAML is unavailable, so the refv plugin descriptors were "
-                     "not read; attribution falls back to the measured canonicals")
+        for feat in reqs.get("features", []):
+            for canonical, module_ids in (feat.get("profiles") or {}).items():
+                for mid in module_ids:
+                    m = self.modules.setdefault(mid, {
+                        "profiles": {}, "features": set(), "levels": set(),
+                        "measuredPackages": {},
+                    })
+                    m["profiles"].setdefault(canonical, 0)
+                    m["profiles"][canonical] += 1
+                    m["features"].add(feat["rel"])
+                    m["levels"].add(feat["level"])
+                    found = resolve_canonical(self.canonicals, canonical)
+                    if found:
+                        declared, hit = found
+                        m["measuredPackages"][hit[0]] = \
+                            m["measuredPackages"].get(hit[0], 0) + 1
+                        if declared != canonical:
+                            rescheme[canonical] = f"{declared} ({hit[0]})"
+                    else:
+                        unresolved.setdefault(canonical, set()).add(mid)
 
-    out: dict[str, dict] = {}
-    for mid, m in sorted(modules.items()):
-        plugin = plugins.get(mid)
-        rec = {
-            "levels": sorted(m["levels"]),
-            "features": len(m["features"]),
-            "profiles": sorted(m["profiles"]),
-            "measuredPackages": [p for p, _ in sorted(m["measuredPackages"].items(),
-                                                      key=lambda kv: (-kv[1], kv[0]))],
-        }
-        if plugin:
-            rec["declared"] = {
-                "primaryPackages": plugin["primaryPackages"],
-                "dependencies": plugin["dependencies"],
-                "snapshotDependencies": plugin["snapshotDependencies"],
-                "ignoredCodeSystems": plugin["ignoredCodeSystems"],
-                "ignoredValueSets": plugin["ignoredValueSets"],
-                "specUrl": plugin["specUrl"],
-                "configFile": plugin["configFile"],
+        for asserted, declared in sorted(rescheme.items()):
+            self.notes.append(f"the feature files assert profile {asserted}, but "
+                              f"the packages declare it as {declared}; matched on "
+                              "the scheme-insensitive canonical")
+        for canonical, mids in sorted(unresolved.items()):
+            self.notes.append(f"validation module(s) {', '.join(sorted(mids))} "
+                              f"assert profile {canonical}, which no unpacked "
+                              "package supplies - a failure on it cannot name a "
+                              "supplying package")
+
+    def read_plugins(self, plugins_dir: Path) -> None:
+        """Record what each module's own refv plugin descriptor declares."""
+        if plugins_dir.is_dir() and yaml is not None:
+            sys.path.insert(0, str(REPO / "scripts" / "lib"))
+            from plan_packages import load_plugin    # noqa: PLC0415  (optional dep)
+            for entry in sorted(plugins_dir.iterdir()):
+                cfg = entry / "config.yaml"
+                if cfg.is_file():
+                    try:
+                        self.plugins[entry.name] = load_plugin(str(cfg))
+                    except SystemExit:
+                        # load_plugin exits on a malformed descriptor. The index
+                        # must not take the whole `make packages` down with it:
+                        # the measured derivation still stands and the defect is
+                        # reported.
+                        self.notes.append(f"refv plugin descriptor {cfg} is "
+                                          "malformed and was skipped")
+        elif not plugins_dir.is_dir():
+            self.notes.append(
+                "vendor/refv-plugins/ is absent (PACKAGE_SOURCE=simplifier, "
+                "or `make packages` has not run) - validation-module "
+                "attribution is derived from the observed profile canonicals "
+                "only, with no declared dependency list to check it against")
+        elif yaml is None:
+            self.notes.append(
+                "PyYAML is unavailable, so the refv plugin descriptors were "
+                "not read; attribution falls back to the measured canonicals")
+
+    def records(self) -> dict:
+        """One record per module, with both derivations side by side."""
+        out: dict[str, dict] = {}
+        for mid, m in sorted(self.modules.items()):
+            plugin = self.plugins.get(mid)
+            rec = {
+                "levels": sorted(m["levels"]),
+                "features": len(m["features"]),
+                "profiles": sorted(m["profiles"]),
+                "measuredPackages": [
+                    p for p, _ in sorted(m["measuredPackages"].items(),
+                                         key=lambda kv: (-kv[1], kv[0]))],
             }
-            declared = {p.replace("#", "@") for p in plugin["primaryPackages"]}
-            unexpected = [p for p in rec["measuredPackages"] if p not in declared]
-            if unexpected and declared:
-                # Not an error: `CORE` asserts hl7.fhir.r4.core profiles and every
-                # ISiK module inherits from de.basisprofil.r4, so a measured
-                # package outside the declared primaries is normal. Recorded so
-                # the gap report can name the primary package first.
-                rec["measuredBeyondPrimary"] = unexpected
-        else:
-            rec["declared"] = None
-        out[mid] = rec
+            if plugin:
+                rec["declared"] = {
+                    "primaryPackages": plugin["primaryPackages"],
+                    "dependencies": plugin["dependencies"],
+                    "snapshotDependencies": plugin["snapshotDependencies"],
+                    "ignoredCodeSystems": plugin["ignoredCodeSystems"],
+                    "ignoredValueSets": plugin["ignoredValueSets"],
+                    "specUrl": plugin["specUrl"],
+                    "configFile": plugin["configFile"],
+                }
+                declared = {p.replace("#", "@") for p in plugin["primaryPackages"]}
+                unexpected = [p for p in rec["measuredPackages"]
+                              if p not in declared]
+                if unexpected and declared:
+                    # Not an error: `CORE` asserts hl7.fhir.r4.core profiles and
+                    # every ISiK module inherits from de.basisprofil.r4, so a
+                    # measured package outside the declared primaries is normal.
+                    # Recorded so the gap report can name the primary first.
+                    rec["measuredBeyondPrimary"] = unexpected
+            else:
+                rec["declared"] = None
+            out[mid] = rec
 
-    # `CORE` is the validator's built-in module for base FHIR resources; it has no
-    # plugin descriptor and never will. Say so, rather than leaving a reader to
-    # wonder why one module has no declared dependency list.
-    if "CORE" in out and out["CORE"]["declared"] is None:
-        out["CORE"]["note"] = ("the reference validator's built-in module for base "
-                               "FHIR R4 resources; it ships no refv plugin, so it "
-                               "has no declared dependency list by design")
+        # `CORE` is the validator's built-in module for base FHIR resources; it
+        # has no plugin descriptor and never will. Say so, rather than leaving a
+        # reader to wonder why one module has no declared dependency list.
+        if "CORE" in out and out["CORE"]["declared"] is None:
+            out["CORE"]["note"] = ("the reference validator's built-in module for "
+                                   "base FHIR R4 resources; it ships no refv "
+                                   "plugin, so it has no declared dependency list "
+                                   "by design")
 
-    return out, notes
+        return out
 
 
 # =============================================================================
@@ -1465,9 +1487,11 @@ def main() -> int:
                      "Stufe 5 naming pattern; its conformance resources are "
                      "indexed without a level")
 
-    modules, module_notes = index_validation_modules(reqs, pkg["canonicals"],
-                                                     args.plugins)
-    notes.extend(module_notes)
+    module_index = ValidationModuleIndex(pkg["canonicals"])
+    module_index.measure(reqs)
+    module_index.read_plugins(args.plugins)
+    modules = module_index.records()
+    notes.extend(module_index.notes)
 
     xver = index_cross_version_extensions(args.features_root, args.packages)
     for url, rec in sorted(xver.items()):
