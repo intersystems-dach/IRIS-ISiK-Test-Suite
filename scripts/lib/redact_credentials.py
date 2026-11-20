@@ -221,7 +221,14 @@ def collect_secrets(connect_yaml, env_names):
     return secrets
 
 
-def walk(roots, exempt):
+def files_under(roots, exempt):
+    """Every file the roots offer for rewriting or scanning.
+
+    Symlinks and directories are not files to rewrite; a root that is itself a
+    file is yielded as given. `exempt` holds substrings matched against the path
+    relative to its root, which is how the verbatim upstream report is left
+    untouched.
+    """
     for root in roots:
         root = pathlib.Path(root)
         if root.is_file():
@@ -282,7 +289,7 @@ def cmd_rewrite(args):
     touched = 0
     seen = 0
 
-    for path in walk(args.roots, args.exempt):
+    for path in files_under(args.roots, args.exempt):
         seen += 1
         text = read_text(path)
         if text is None:
@@ -324,7 +331,7 @@ def cmd_scan(args):
     shaped = []
     scanned = 0
 
-    for path in walk(args.roots, args.exempt):
+    for path in files_under(args.roots, args.exempt):
         scanned += 1
         try:
             raw = path.read_bytes()

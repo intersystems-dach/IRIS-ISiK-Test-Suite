@@ -299,6 +299,7 @@ def sort_key(case: Case) -> Tuple[str, str, int, str, int]:
 
 
 def address(case: Case) -> Dict[str, str]:
+    """Everything that identifies one case, for a line of the join."""
     return {
         "level": case["level"],
         "module": case["module"],

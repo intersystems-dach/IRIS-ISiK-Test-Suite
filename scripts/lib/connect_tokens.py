@@ -360,7 +360,7 @@ class TokenStaging:
         # unprivileged uid 100. A 0600 file owned by the host user is unreadable
         # there, and Tiger fails at startup with an AccessDeniedException. The same
         # constraint applies to the rendered Tiger configuration, which carries the
-        # API password for the same reason - see render() in 30-render-config.sh.
+        # API password for the same reason - see render_tiger() in 30-render-config.sh.
         # run/ is gitignored and `make check` verifies that mechanically.
         yaml_path.chmod(0o644)
 

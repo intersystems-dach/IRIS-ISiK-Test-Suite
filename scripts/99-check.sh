@@ -499,7 +499,7 @@ section "4. Template placeholders"
 #
 # Checked per template family, not against a pooled set of every placeholder the
 # renderer knows. There are three render functions with deliberately disjoint
-# substitution tables - render() for Tiger's YAML, render_gateway() for the Web
+# substitution tables - render_tiger() for Tiger's YAML, render_gateway() for the Web
 # Gateway's INI and Apache config, render_realm() for the authorization server's
 # realm - and pooling them would accept a Tiger placeholder in an Apache file, or
 # the realm's client secret in either, which is exactly the mix-up the separation
@@ -509,7 +509,7 @@ import pathlib, re, sys
 
 renderer = pathlib.Path("scripts/30-render-config.sh").read_text(encoding="utf-8")
 
-FUNCS = ("render", "render_gateway", "render_realm")
+FUNCS = ("render_tiger", "render_gateway", "render_realm")
 
 # Each render function's SUBST dict is the authority for what that family can
 # substitute. Split on the function definitions so the tables stay apart; the
@@ -538,7 +538,7 @@ for i, (name, start) in enumerate(bounds):
         sys.exit(1)
 
 # Which template directory each function renders.
-FAMILIES = [("tiger", "render"), ("webgateway", "render_gateway"),
+FAMILIES = [("tiger", "render_tiger"), ("webgateway", "render_gateway"),
             ("keycloak", "render_realm")]
 
 fails = 0
@@ -585,8 +585,8 @@ PY
 # aborts the run before executing a single scenario - two minutes, `Tests run: 0`,
 # and a test-report.zip holding only pom.xml. It is a one-word regression with no
 # other symptom, so the derivation is asserted rather than trusted: the templates
-# must take the value from a placeholder (not hardcode it), and render() must
-# compute it as the negation of runTestsOnStart.
+# must take the value from a placeholder (not hardcode it), and render_tiger()
+# must compute it as the negation of runTestsOnStart.
 python3 - <<'PY'
 import pathlib, re, sys
 

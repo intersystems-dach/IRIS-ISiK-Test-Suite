@@ -121,7 +121,7 @@ trap cleanup EXIT
 # Read from the server rather than assumed: a mismatch between the issuer in the
 # token and the issuer IRIS discovered is rejected with a bare 401, which would
 # otherwise be investigated as a defect in the system under test.
-discovery() {
+fetch_discovery_document() {
   local out="$1" code
   code="$(curl "${CURL_COMMON[@]}" -o "$out" -w '%{http_code}' \
             "${AS_REALM_URL}/.well-known/openid-configuration" 2>"${WORK}/curl.err")" || {
@@ -141,7 +141,7 @@ chmod 0700 "$WORK"
 
 step "Authorization server"
 
-discovery "${WORK}/discovery.json"
+fetch_discovery_document "${WORK}/discovery.json"
 ACTUAL_ISSUER="$(json_field "${WORK}/discovery.json" issuer)"
 TOKEN_ENDPOINT="$(json_field "${WORK}/discovery.json" token_endpoint)"
 

@@ -257,6 +257,7 @@ def dedupe_anomalies(records: list[dict]) -> list[dict]:
 
 
 def verdict_of(result: str) -> str:
+    """The verdict this report records for one Serenity result string."""
     r = (result or "").upper()
     if r in PASS_RESULTS:
         return "pass"
@@ -321,6 +322,7 @@ def load_outcomes(report_dir: Path) -> tuple[list[OutcomeFile], list[str], list[
 
 
 def walk_steps(steps: Iterable[dict] | None, depth: int = 0) -> Iterator[tuple[int, dict]]:
+    """Every step of a Serenity step tree with its depth, parents first."""
     for step in steps or []:
         if not isinstance(step, dict):
             continue
@@ -1602,6 +1604,7 @@ def cell(value: Any, limit: int = 0) -> str:
 
 
 def pct(part: int, whole: int) -> str:
+    """A share to one decimal place, or "-" where there is nothing to divide."""
     return f"{100.0 * part / whole:.1f}%" if whole else "-"
 
 
@@ -1615,7 +1618,8 @@ def cite(case: dict) -> str:
     return f"{case['feature']}:{line}" if line else case["feature"]
 
 
-def render(doc: dict, run_root: Path) -> str:
+def render_markdown(doc: dict, run_root: Path) -> str:
+    """The whole of analysis/results.md, from the assembled document."""
     out: list[str] = []
     w = out.append
     expected_levels = doc["suiteLevels"]
@@ -2373,6 +2377,7 @@ CSV_COLUMNS = ("level", "module", "feature", "featureLine", "scenario", "example
 
 
 def write_csv(doc: dict, path: Path) -> int:
+    """One row per test case at `path`; returns how many were written."""
     n = 0
     with path.open("w", encoding="utf-8", newline="") as fh:
         writer = csv.writer(fh)
@@ -2555,7 +2560,8 @@ def main() -> int:
 
     (out_dir / "results.json").write_text(
         json.dumps(doc, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    (out_dir / "results.md").write_text(render(doc, run_root), encoding="utf-8")
+    (out_dir / "results.md").write_text(render_markdown(doc, run_root),
+                                       encoding="utf-8")
     rows = write_csv(doc, out_dir / "scenario-verdicts.csv")
 
     # Summary to stderr: the shell wrapper prints it, and `make report` output is

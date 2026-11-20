@@ -465,16 +465,18 @@ def check_resource(doc: dict, assertions: list[dict]) -> list[dict]:
                             "detail": f"nothing checkable derived: {expr[:90]}"})
             continue
 
-        def absent(alt: dict[str, bool]) -> list[str]:
+        def unmatched_literals(alt: dict[str, bool]) -> list[str]:
+            """The literals of one alternative the resource does not carry."""
             return sorted(
                 l for l, is_substr in alt.items()
                 if not (any(l in s for s in strings) if is_substr else l in strings))
 
         # One satisfied alternative satisfies the assertion. Where none is, the
         # closest miss is reported - the one an author is most likely to have meant.
-        misses = sorted((absent(alt) for alt in alternatives), key=len)
+        misses = sorted((unmatched_literals(alt) for alt in alternatives), key=len)
         missing_lits = misses[0] if misses else []
-        lits = min(alternatives, key=lambda a: len(absent(a))) if alternatives else {}
+        lits = (min(alternatives, key=lambda a: len(unmatched_literals(a)))
+                if alternatives else {})
 
         missing_roots = sorted(r for r in roots if not resolve(doc, r))
         if roots:
@@ -496,6 +498,7 @@ def check_resource(doc: dict, assertions: list[dict]) -> list[dict]:
 
 
 def load_inventory(level: str, req_path: Path) -> list[dict]:
+    """One row per resource the level's features assert something about."""
     data = json.loads(req_path.read_text(encoding="utf-8"))
     return data["levels"][level]["resources"]
 

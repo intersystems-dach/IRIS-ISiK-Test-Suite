@@ -498,6 +498,7 @@ def attribute_profiles(feature) -> dict[str, dict[str, set[str]]]:
 
 
 def infer_types(text: str) -> dict[str, set[str]]:
+    """Data key -> the resource types a feature's own steps state for that key."""
     found: dict[str, set[str]] = collections.defaultdict(set)
     for _name, rx in TYPE_RULES:
         for rtype, key in rx.findall(text):
@@ -1101,6 +1102,7 @@ def _indent_block(text: str, prefix: str = "> ") -> str:
 
 
 def render_requirements(data: dict, level: str) -> str:
+    """The whole of one level's TESTDATA-REQUIREMENTS.md."""
     feats = [f for f in data["features"] if f["level"] == level]
     roll = data["levels"][level]
     lines: list[str] = []
@@ -1245,6 +1247,7 @@ NO_PROFILE_REASON = {
 
 
 def render_inventory(data: dict) -> str:
+    """The whole of RESOURCE-INVENTORY.md, across every level."""
     lines: list[str] = []
     A = lines.append
     A("# Resource inventory - what must exist in the SUT before a run")

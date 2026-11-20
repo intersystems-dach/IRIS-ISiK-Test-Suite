@@ -63,8 +63,11 @@ def read_members(path):
     return out
 
 
-def key_elements(obj):
-    """Rewrite element arrays as id-keyed maps so order stops mattering.
+def with_elements_keyed(obj):
+    """The same document with its element arrays rewritten as id-keyed maps.
+
+    Order then stops mattering, which is the whole point: the two producers
+    write the same differential in different orders.
 
     Only applied to `differential.element` and `snapshot.element`, where FHIR
     guarantees `id` is unique within the list. Anything without an `id` keeps its
@@ -81,7 +84,7 @@ def key_elements(obj):
                 elems[eid if eid is not None else f'#{i}'] = e
             out[k] = {**{kk: vv for kk, vv in v.items() if kk != 'element'}, 'element': elems}
         else:
-            out[k] = key_elements(v) if isinstance(v, dict) else v
+            out[k] = with_elements_keyed(v) if isinstance(v, dict) else v
     return out
 
 
@@ -93,7 +96,7 @@ def compare_json(a_bytes, b_bytes):
     except (ValueError, UnicodeDecodeError):
         return 'differ', 'not parseable as JSON'
 
-    ka, kb = key_elements(a), key_elements(b)
+    ka, kb = with_elements_keyed(a), with_elements_keyed(b)
     if ka == kb:
         return 'equal', ''
 
@@ -105,7 +108,7 @@ def compare_json(a_bytes, b_bytes):
             side = 'bundled' if 'snapshot' in ka else 'published'
             return 'snapshot', f'snapshot present only in the {side} copy'
 
-    return 'differ', describe(ka, kb)
+    return 'differ', difference_account(ka, kb)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -187,7 +190,7 @@ class Account:
             self.lines.append(f'{at.path or "value"}: {sa!r} vs {sb!r}')
 
 
-def describe(a, b):
+def difference_account(a, b):
     """A short, readable account of where two parsed documents part ways."""
     account = Account()
     account.note(Place(a, b))

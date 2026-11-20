@@ -78,7 +78,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from seed_order import load, order                       # noqa: E402
+from seed_order import load_corpus, seeding_order        # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -300,8 +300,8 @@ class StagedCorpus:
         asserts something about the corpus rather than putting it in place, and a
         round may legitimately be run without it.
         """
-        nodes = load(self.data_root, self.level)
-        sequence = order(nodes)
+        nodes = load_corpus(self.data_root, self.level)
+        sequence = seeding_order(nodes)
 
         caps = self.endpoint.capability()
         record = {

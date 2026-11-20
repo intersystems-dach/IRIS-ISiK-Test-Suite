@@ -88,8 +88,8 @@ TYPE_RANK = {
 DEFAULT_RANK = 75
 
 
-def load(data_root: Path, level: str) -> dict[str, dict]:
-    """`Type/id` -> {file, resourceType, id, refs}."""
+def load_corpus(data_root: Path, level: str) -> dict[str, dict]:
+    """The level's staged bodies: `Type/id` -> {file, resourceType, id, refs}."""
     root = data_root / level
     if not root.is_dir():
         raise SystemExit(f"{root} does not exist - run: scripts/lib/build_testdata.py")
@@ -104,11 +104,11 @@ def load(data_root: Path, level: str) -> dict[str, dict]:
         if key in nodes:
             raise SystemExit(f"{path}: {key} is also declared by {nodes[key]['file']}")
         nodes[key] = {"file": path.name, "resourceType": rtype, "id": rid,
-                      "refs": sorted(collect(doc))}
+                      "refs": sorted(references_in(doc))}
     return nodes
 
 
-def collect(doc) -> set[str]:
+def references_in(doc) -> set[str]:
     """Every literal `Type/id` reference string anywhere in the body."""
     out: set[str] = set()
 
@@ -127,7 +127,7 @@ def collect(doc) -> set[str]:
     return out
 
 
-def order(nodes: dict[str, dict]) -> list[dict]:
+def seeding_order(nodes: dict[str, dict]) -> list[dict]:
     """Dependencies first, deterministic, cycles broken explicitly.
 
     Kahn's algorithm over the reference graph. A node is ready when every resource
@@ -174,8 +174,8 @@ def main() -> int:
                     help="emit the full ordering as JSON instead of TSV")
     args = ap.parse_args()
 
-    nodes = load(args.data_root, args.level)
-    seq = order(nodes)
+    nodes = load_corpus(args.data_root, args.level)
+    seq = seeding_order(nodes)
 
     if args.json:
         print(json.dumps(seq, indent=2, ensure_ascii=False))

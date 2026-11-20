@@ -112,7 +112,7 @@ PROXY_ADMIN_PORT=9011
 #   $1  template   $2  file name within the variant's directory   $3  SUT base URL
 #
 # Three positional arguments, and they stay positional: all three renderers here
-# (render, render_gateway, render_realm) take the same shape - a template, where
+# (render_tiger, render_gateway, render_realm) take the same shape - a template, where
 # it goes, and the one value that cannot be read from the environment - and
 # `make check` finds each renderer and its substitution table by that boundary.
 # The calls here and to render_gateway are inside a loop - over the levels, and
@@ -123,17 +123,17 @@ PROXY_ADMIN_PORT=9011
 # so the WorkflowUI stays off.
 render_unattended() {
   RUN_TESTS_ON_START=true ACTIVATE_WORKFLOW_UI=false \
-    render "$1" "${OUT_TIGER}/$2" "$3"
+    render_tiger "$1" "${OUT_TIGER}/$2" "$3"
 }
 
 # Manual: the container comes up, serves the WorkflowUI and waits for an operator
 # to start the run from it. This is the case the UI exists for.
 render_manual() {
   RUN_TESTS_ON_START=false ACTIVATE_WORKFLOW_UI=true \
-    render "$1" "${OUT_TIGER_MANUAL}/$2" "$3"
+    render_tiger "$1" "${OUT_TIGER_MANUAL}/$2" "$3"
 }
 
-render() {
+render_tiger() {
   local tmpl="$1" out="$2" base_url="$3"
 
   mkdir -p "$(dirname "$out")"
@@ -143,8 +143,8 @@ render() {
   SUT_PASSWORD="$SUT_PASSWORD" \
   WORKFLOW_UI_PORT="$WORKFLOW_UI_PORT" \
   PROXY_ADMIN_PORT="$PROXY_ADMIN_PORT" \
-  RUN_TESTS_ON_START="${RUN_TESTS_ON_START:?render() is called through render_unattended or render_manual, which set it}" \
-  ACTIVATE_WORKFLOW_UI="${ACTIVATE_WORKFLOW_UI:?render() is called through render_unattended or render_manual, which set it}" \
+  RUN_TESTS_ON_START="${RUN_TESTS_ON_START:?render_tiger() is called through render_unattended or render_manual, which set it}" \
+  ACTIVATE_WORKFLOW_UI="${ACTIVATE_WORKFLOW_UI:?render_tiger() is called through render_unattended or render_manual, which set it}" \
   python3 - "$tmpl" "$out" <<'PY'
 import os
 import sys
@@ -290,9 +290,9 @@ fi
 # and 404s.
 #
 # Separate substitution table from the Tiger one: these files are INI and Apache
-# config, not YAML, and the keys have nothing in common. Sharing render() would
-# mean allowing Tiger's placeholders in Apache config and vice versa, and losing
-# the YAML syntax check that render() performs.
+# config, not YAML, and the keys have nothing in common. Sharing render_tiger()
+# would mean allowing Tiger's placeholders in Apache config and vice versa, and
+# losing the YAML syntax check that render_tiger() performs.
 render_gateway() {
   local tmpl="$1" out="$2"
 
@@ -581,7 +581,7 @@ ok "staged ${staged} test-data contract files into run/testdata/"
 # later round to import by accident.
 rm -rf "$OUT_AS"
 
-# A function, like render() and render_gateway() above, and for a reason beyond
+# A function, like render_tiger() and render_gateway() above, and for a reason beyond
 # symmetry: `make check` reads each render function's substitution table on its
 # own and holds exactly one template directory to it, so a placeholder that
 # belongs to the realm cannot be silently accepted in an Apache configuration or
