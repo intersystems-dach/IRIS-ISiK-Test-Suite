@@ -154,6 +154,7 @@ from typing import Any
 # insert is for the case where a sibling imports this module instead.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from derive_testdata import staged_file_name  # noqa: E402
 from requirements_corpus import testdata_contract  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
@@ -748,7 +749,7 @@ def main() -> int:
         problems: list[str] = []
 
         for r in rows:
-            name = f"{r['resourceType']}-{r['id']}.json"
+            name = staged_file_name(r)
             # Level tier before common tier, and within each tier the last --src
             # first, so that a generation-specific tree can override a shared body
             # without the shared body having to know it exists.
@@ -857,7 +858,7 @@ def main() -> int:
                                 + ", ".join(sorted(body.unresolved)))
                 rc = 1
                 continue
-            if f"{doc.get('resourceType')}-{doc.get('id')}.json" != src.name:
+            if staged_file_name(doc) != src.name:
                 problems.append(f"  {src.name}: body declares "
                                 f"{doc.get('resourceType')}/{doc.get('id')}, which does "
                                 f"not match the filename")

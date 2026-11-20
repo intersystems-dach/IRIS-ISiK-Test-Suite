@@ -165,7 +165,7 @@ import re
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from derive_testdata import REFERENCE_KEYS  # noqa: E402
+from derive_testdata import REFERENCE_KEYS, staged_file_name  # noqa: E402
 
 # FHIR elements that are list-valued where a reference assertion names them without
 # an index. Extracted from the R4 base definitions of the resources this rig seeds;
@@ -1302,7 +1302,7 @@ class StagedResource:
     @property
     def file_name(self) -> str:
         """The staged body's file name, as derive_testdata.py writes it."""
-        return f"{self.row['resourceType']}-{self.row['id']}.json"
+        return staged_file_name(self.row)
 
     def reconcile(self, doc: dict) -> Reconciled:
         """Apply what the assertions determine to one staged body, in place."""

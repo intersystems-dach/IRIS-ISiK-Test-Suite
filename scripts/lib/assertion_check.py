@@ -59,6 +59,13 @@ import re
 import sys
 from pathlib import Path
 
+# Invoked as a standalone script, so sys.path[0] is already this directory; the
+# insert is for the case where a sibling imports this module instead -
+# search_reference_check.py does.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from derive_testdata import staged_file_name  # noqa: E402
+
 REPO = Path(__file__).resolve().parents[2]
 
 # FHIRPath function names, operators and literals that are not FHIR elements.
@@ -524,7 +531,7 @@ class StagedLevel:
 
     def path_of(self, row: dict) -> Path:
         """Where the inventory row's resource is authored."""
-        return self.root / self.level / f"{row['resourceType']}-{row['id']}.json"
+        return self.root / self.level / staged_file_name(row)
 
 
 def main() -> int:

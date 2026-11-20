@@ -100,6 +100,22 @@ REFERENCE_KEYS = {
 DROP_TOP_LEVEL = ("id", "meta", "text")
 
 
+def staged_file_name(resource) -> str:
+    """The name a staged body is filed under: `ResourceType-id.json`.
+
+    The grammar lives here because this is the tool that writes the files; the
+    tools that look for them, stage them and check them import it, so that the
+    four cannot drift apart.
+
+    `resource` is anything carrying `resourceType` and `id`: an inventory row
+    or a body. A hand-written body that declares neither yields
+    `None-None.json`, which matches no file name - and so is reported as a
+    mismatch by build_testdata.py, which is the right answer for a body that
+    declares nothing.
+    """
+    return f"{resource.get('resourceType')}-{resource.get('id')}.json"
+
+
 def load_examples(pkg_dir: pathlib.Path) -> dict[str, list[pathlib.Path]]:
     """Index every example instance in a package by the profiles it claims."""
     ex_dir = pkg_dir / "examples"
@@ -229,8 +245,8 @@ def main() -> int:
     out_dir = pathlib.Path(args.out)
     src_roots = [pathlib.Path(s) for s in args.src]
 
-    def has_source(resource_type: str, rid: str) -> bool:
-        name = f"{resource_type}-{rid}.json"
+    def has_authored_body(name: str) -> bool:
+        """Whether one of the --src roots already holds this body by hand."""
         for root in src_roots:
             if (root / args.level / name).is_file() or (root / "common" / name).is_file():
                 return True
@@ -242,9 +258,9 @@ def main() -> int:
         rtype, rid = row["resourceType"], row["id"]
         if not row.get("inScope", True):
             continue
-        if has_source(rtype, rid):
+        if has_authored_body(staged_file_name(row)):
             continue
-        target = out_dir / f"{rtype}-{rid}.json"
+        target = out_dir / staged_file_name(row)
         if target.is_file() and not args.overwrite:
             continue
 
