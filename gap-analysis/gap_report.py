@@ -384,13 +384,13 @@ RE_EMPTY_RESULT_ASSERT = re.compile(
 # used rather than the step's own resolved description because the description
 # truncates long header values - measured on the 2026-11-16 Connect round, where
 # the `Authorization` cell ends mid-token - while the cURL carries the request in
-# full. A step that recorded no cURL yields no method, and bearer_read() is then
+# full. A step that recorded no cURL yields no method, and is_bearer_read() is
 # False: no evidence, not a negative finding.
 RE_CURL_METHOD = re.compile(r'curl\b[^\n]*?-X\s+([A-Z]+)')
 RE_CURL_BEARER = re.compile(r'(?i)-H\s+["\']?Authorization:\s*Bearer\s+(\S+)')
 
 
-def bearer_read(resolved: str) -> bool:
+def is_bearer_read(resolved: str) -> bool:
     """Whether that request was a read presented with an access token.
 
     Both halves have to hold. A read, because the write verdicts below say "the
@@ -443,6 +443,7 @@ def response_code_verdict(failure: dict,
     # category, so it is tested by matching candidate codes against it rather
     # than by comparing strings.
     def admits(*codes: int) -> bool:
+        """Whether the pattern the step required admits any of these codes."""
         return any(re.fullmatch(expected, str(c)) for c in codes)
 
     if code >= 500:
@@ -451,7 +452,7 @@ def response_code_verdict(failure: dict,
     accepted = 200 <= code < 300
     wanted_ok = admits(200, 201, 204)
     wanted_bad = admits(400, 404, 405, 422, 500)
-    if accepted and wanted_bad and not wanted_ok and bearer_read(resolved):
+    if accepted and wanted_bad and not wanted_ok and is_bearer_read(resolved):
         return "AUTHORIZATION_REFUSAL_FORM", (
             f"{got}. The request was a read presented with an access token, so "
             "nothing was written; the scope's refusal was not signalled as a "
@@ -1727,6 +1728,7 @@ def request_as_resolved(run_dir: Path, case: dict) -> str:
     last = ""
 
     def walk(steps) -> bool:
+        """Record the last request step reached; True once a failure stops it."""
         nonlocal last
         for st in steps or []:
             if not isinstance(st, dict):
@@ -1910,6 +1912,7 @@ def suite_conflict_verdict(index: dict, message: str | None
 
 
 def truncate(text: str, limit: int = MAX_BODY) -> str:
+    """The text, cut at `limit` characters with its full length stated."""
     text = (text or "").strip()
     if len(text) <= limit:
         return text
@@ -2007,6 +2010,7 @@ class Finding:
 # =============================================================================
 
 def analyse(round_: Round) -> dict:
+    """Every distinct defect of the round, grouped, with the per-level tallies."""
     results, index = round_.results, round_.index
     groups: dict[tuple, dict] = {}
     per_level: dict[str, dict] = {}
@@ -2357,7 +2361,7 @@ LOADER_OWNERS = {
 }
 
 
-def render(round_: Round, analysis: dict) -> str:
+def render_markdown(round_: Round, analysis: dict) -> str:
     """The Markdown document, from the round it is about and what it found.
 
     The round carries the inputs the prose quotes - the results analysis, the
@@ -2788,6 +2792,7 @@ def render_loader_appendix(w, results: dict) -> None:
 
 
 def render_entry(w, e: dict) -> None:
+    """One entry of the work list: the defect, its occurrences, its evidence."""
     occ = e["occurrences"]
     first = occ[0]
     title = CAT_TITLE.get(e["category"], e["category"])
@@ -3008,7 +3013,7 @@ def main() -> int:
     out_json = args.out_json or (
         out_md.parent / "gap-analysis.json" if args.out_md
         else run_dir / "gap-analysis.json")
-    out_md.write_text(render(round_, analysis), encoding="utf-8")
+    out_md.write_text(render_markdown(round_, analysis), encoding="utf-8")
     out_json.write_text(json.dumps({
         "runId": results.get("runId"),
         "generatedAt": generated_at,

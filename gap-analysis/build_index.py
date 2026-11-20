@@ -1042,6 +1042,7 @@ def index_cross_version_extensions(root: Path, packages_dir: Path) -> dict:
 
 
 def level_of_package(name: str) -> str | None:
+    """Which ISiK level a package name belongs to, or None for neither."""
     if name == "de.gematik.isik" or name.startswith("de.gematik.isik5"):
         return "Stufe5"
     if name.startswith("de.gematik.isik-") or name.startswith("de.gematik.isik3-"):

@@ -182,6 +182,7 @@ class Bundle:
         self._zips: dict[tuple[str, str], zipfile.ZipFile] = {}
 
     def _zip(self, level_dir: str, which: str) -> zipfile.ZipFile | None:
+        """One named archive of one level, opened once and then kept open."""
         key = (level_dir, which)
         if key not in self._zips:
             path = self.run_dir / level_dir / "official" / f"{which}.zip"
@@ -260,6 +261,7 @@ def _raw_bytes(text: str) -> tuple[bytes, bool]:
 
 
 def _split(buf: bytes) -> tuple[str, bytes]:
+    """(headers, body) of one raw message, split at the first blank line."""
     for sep in (b"\r\n\r\n", b"\n\n"):
         i = buf.find(sep)
         if i >= 0:
@@ -374,10 +376,12 @@ _ESCAPES = {"\\": "\\", '"': '"', "n": "\n", "t": "\t"}
 
 
 def _unescape(text: str) -> str:
+    """The entities the suite writes into a step description, decoded."""
     return _ESCAPED.sub(lambda m: _ESCAPES[m.group(1)], text)
 
 
 def _report_data(step: dict, prefix: str) -> list[dict]:
+    """The step's own `reportData` rows whose title starts with `prefix`."""
     return [rd for rd in (step.get("reportData") or [])
             if isinstance(rd, dict) and str(rd.get("title") or "").startswith(prefix)]
 
@@ -412,12 +416,14 @@ def read_steps(subtree: list[dict]) -> dict:
     # keeps the two forms identical, which is what makes a diff of two rounds
     # meaningful.
     def resolved(step: dict) -> str:
+        """The step as the suite resolved it, with the credential withheld."""
         rows = _report_data(step, "Tiger Resolved Step Description")
         if rows and rows[0].get("contents"):
             return redact(_unescape(str(rows[0]["contents"])))
         return redact(str(step.get("description") or ""))
 
     def walk(steps) -> None:
+        """Record the request step, the traffic log and the failing step."""
         nonlocal request, rbel, failing
         for st in steps or []:
             if not isinstance(st, dict):
@@ -465,6 +471,7 @@ _REQLINE = re.compile(r"^([A-Z]+) (\S+) HTTP/\d\.\d")
 
 
 def fixture_of(resolved_request: str) -> str:
+    """The fixture file a resolved request step read, or "" for none."""
     m = _FIXTURE.search(resolved_request or "")
     return m.group(1) if m else ""
 
@@ -501,12 +508,14 @@ def gap_lookup(gap_doc: dict | None) -> dict:
 
 
 def case_key(case: dict) -> tuple:
+    """What identifies one case across the documents of a round."""
     ex = case.get("example") or {}
     return (case.get("level"), case.get("feature"), case.get("featureLine"),
             case.get("scenario"), (ex.get("label") or "").strip() or None)
 
 
 def sort_key(case: dict) -> tuple:
+    """Document order: module, feature, feature line, example, scenario."""
     ex = case.get("example") or {}
     return (case.get("module") or "", case.get("feature") or "",
             case.get("featureLine") or 0, ex.get("index") or 0,
@@ -875,7 +884,7 @@ def front_matter(round_: Round) -> list[str]:
     return out
 
 
-def render(round_: Round, analysis: dict) -> str:
+def render_markdown(round_: Round, analysis: dict) -> str:
     """The Markdown annex, from the round it documents and the cases it found."""
     results, gap_doc = round_.results, round_.gap_doc
     entries = analysis["entries"]
@@ -1032,6 +1041,7 @@ def render(round_: Round, analysis: dict) -> str:
 
 
 def derivation_clause() -> list[str]:
+    """Clause 3 - the one source each field of an entry is read from."""
     w: list[str] = []
     w.append("## 3 How each entry was derived")
     w.append("")
@@ -1213,6 +1223,7 @@ def derivation_clause() -> list[str]:
 
 
 def reconciliation_clause(round_: Round, entries: list[dict]) -> list[str]:
+    """Clause 6 - this annex's case count against the official report's."""
     results, gap_doc = round_.results, round_.gap_doc
     w: list[str] = []
     w.append("## 6 Reconciliation")
@@ -1260,6 +1271,7 @@ def reconciliation_clause(round_: Round, entries: list[dict]) -> list[str]:
 
 
 def heading_of(e: dict) -> str:
+    """The heading one entry carries: feature, line, scenario, example."""
     h = f"{e['feature']}:{e['featureLine']} · {e['scenario']}"
     if e.get("example") and e["example"].get("index"):
         h += f" · example {e['example']['index']}"
@@ -1651,7 +1663,7 @@ def main() -> int:
 
     out_md = args.out_md or (run_dir / "CASE-EVIDENCE.md")
     out_json = args.out_json or (run_dir / "case-evidence.json")
-    out_md.write_text(render(round_, analysis), encoding="utf-8")
+    out_md.write_text(render_markdown(round_, analysis), encoding="utf-8")
     out_json.write_text(json.dumps(
         {"runId": results.get("runId"), "generatedAt": generated,
          "generator": GENERATOR, "audience": "InterSystems IRIS for Health developers",
