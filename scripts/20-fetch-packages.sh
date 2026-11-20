@@ -70,6 +70,23 @@ UPSTREAM_DIR="${VENDOR_DIR}/upstream"
 # One container, several extractions: creating it is the slow part, and taking
 # everything from the same container guarantees that the plugin descriptors, the
 # feature files and the upstream test-data contract all come from one image.
+# The name and version an archive declares, as `name version`, or nothing where
+# it declares neither. Read out of the archive's own package.json rather than
+# parsed out of the filename, because a filename like
+# dvmd.kdl.r4.2022-2022.1.2.tgz is ambiguous about where the name ends and the
+# version begins.
+#
+# Four callers ask this one question - the pool census, the download check, the
+# unpack loop and the manifest - and asking it four times in four places is how
+# two of them come to disagree about which package a tarball is. Silent on every
+# failure, because each caller decides for itself what an unreadable archive
+# means: one skips it with a warning, another refuses the round.
+package_identity() {
+  tar -xzOf "$1" package/package.json 2>/dev/null \
+    | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["name"], d["version"])' 2>/dev/null \
+    || true
+}
+
 extract_from_image() {
   local cid
   log "extracting suite artefacts from ${TESTSUITE_REF}"
@@ -362,14 +379,12 @@ for p in plan.get("allPackages", []):
   need_cmd curl
   local registry="${SIMPLIFIER_REGISTRY:-https://packages.simplifier.net}"
 
-  # What the pool already holds, keyed name#version read from each archive's own
-  # package.json - the filenames are ambiguous (dvmd.kdl.r4.2022-2022.1.2.tgz).
+  # What the pool already holds, keyed name#version as each archive declares it.
   local -A pool=()
   local tgz meta pname pversion
   shopt -s nullglob
   for tgz in "$TGZ_DIR"/*.tgz; do
-    meta="$(tar -xzOf "$tgz" package/package.json 2>/dev/null \
-      | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["name"], d["version"])' 2>/dev/null || true)"
+    meta="$(package_identity "$tgz")"
     [[ -n "$meta" ]] || continue
     read -r pname pversion <<<"$meta"
     pool["${pname}#${pversion}"]=1
@@ -402,8 +417,7 @@ for p in plan.get("allPackages", []):
   ${registry}, then re-run 'make packages'."; }
     # A 200 with the wrong content would surface much later as a mis-named package
     # directory, so the archive is checked here against what was asked for.
-    meta="$(tar -xzOf "$out" package/package.json 2>/dev/null \
-      | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["name"], d["version"])' 2>/dev/null || true)"
+    meta="$(package_identity "$out")"
     [[ "$meta" == "${name} ${version}" ]] \
       || { rm -f "$out"; die "${registry}/${name}/${version} served '${meta:-nothing readable}', not ${name} ${version}"; }
     if [[ "$kind" == implicit ]]; then
@@ -462,11 +476,7 @@ unpacked=0
 for tgz in "$TGZ_DIR"/*.tgz; do
   [[ -e "$tgz" ]] || die "no tarballs to unpack in ${TGZ_DIR#$REPO_ROOT/}"
 
-  # Read name+version from the archive's own package.json rather than parsing the
-  # filename: a filename like dvmd.kdl.r4.2022-2022.1.2.tgz is ambiguous about
-  # where the name ends and the version begins.
-  meta="$(tar -xzOf "$tgz" package/package.json 2>/dev/null \
-    | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["name"], d["version"])' 2>/dev/null || true)"
+  meta="$(package_identity "$tgz")"
   if [[ -z "$meta" ]]; then
     warn "skipping ${tgz##*/}: no readable package/package.json"
     continue
@@ -539,8 +549,7 @@ MANIFEST="${PACKAGES_DIR}/MANIFEST.txt"
   printf '# %-56s %-12s %s\n' 'PACKAGE' 'VERSION' 'SHA256(tarball)'
   for tgz in "$TGZ_DIR"/*.tgz; do
     [[ -e "$tgz" ]] || continue
-    meta="$(tar -xzOf "$tgz" package/package.json 2>/dev/null \
-      | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["name"], d["version"])' 2>/dev/null || true)"
+    meta="$(package_identity "$tgz")"
     [[ -n "$meta" ]] || continue
     read -r pname pversion <<<"$meta"
     printf '  %-56s %-12s %s\n' "$pname" "$pversion" "$(sha256_of "$tgz")"
