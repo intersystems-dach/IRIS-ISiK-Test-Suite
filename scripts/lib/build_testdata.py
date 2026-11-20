@@ -369,6 +369,7 @@ def pattern_resolver(packages_dir: Path, pins: tuple[str, ...]):
     cache: dict[Path, dict] = {}
 
     def resolve(name: str, tail: str) -> tuple[str | None, str | None]:
+        """(value, why-not) for one element of one named StructureDefinition."""
         if name not in index:
             return None, (f"no StructureDefinition named {name!r} in this level's "
                           f"pinned packages")
@@ -594,6 +595,7 @@ class BodySubstitution:
             return [self.apply(v) for v in node]
         if isinstance(node, str):
             def data_repl(m):
+                """The staged value of one test-data key, or the text unchanged."""
                 key = m.group(1)
                 if key in self.sources.contract:
                     return self.sources.contract[key]
@@ -614,6 +616,7 @@ class BodySubstitution:
                 return m.group(0)
 
             def profile_repl(m):
+                """The canonical of one named profile, or the text unchanged."""
                 name = m.group(1)
                 if name not in self.sources.profiles:
                     self.unresolved.add(f"profile.{name}")
@@ -621,6 +624,7 @@ class BodySubstitution:
                 return self.sources.profiles[name]
 
             def pattern_repl(m):
+                """The value a profile fixes for one element, or the text unchanged."""
                 name, tail = m.group(1), m.group(2)
                 if self.sources.patterns is None:
                     self.unresolved.add(f"pattern.{name}.{tail} (no packages indexed)")

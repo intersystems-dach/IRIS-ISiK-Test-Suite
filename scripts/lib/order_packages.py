@@ -127,6 +127,7 @@ REWRITE_REASONS = {
 
 
 def read_package_json(pkg_dir: str) -> dict:
+    """The package manifest of one extracted package, or {} if it has none."""
     path = os.path.join(pkg_dir, "package.json")
     try:
         with open(path, encoding="utf-8") as fh:

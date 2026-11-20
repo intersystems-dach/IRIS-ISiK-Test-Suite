@@ -97,6 +97,11 @@ def claims(token):
 
 
 def audiences(payload):
+    """The `aud` claim as a list, however the issuer wrote it.
+
+    A single audience is a string in Keycloak's tokens and a list once a second
+    one is added, so a reader that assumes either shape is wrong half the time.
+    """
     aud = payload.get("aud")
     if aud is None:
         return []
@@ -216,6 +221,7 @@ class TokenExpectations:
 
 
 def load_yaml(path):
+    """The staged Connect test data, as the flat mapping it has to be."""
     if not path.is_file():
         fail(
             f"{path} does not exist. It is staged by scripts/30-render-config.sh "
@@ -290,6 +296,7 @@ class TokenStaging:
         expiry against this one reading.
         """
         def path(value):
+            """One optional path argument, absent on the `verify` subcommand."""
             return pathlib.Path(value) if value else None
 
         return TokenStaging(
@@ -312,6 +319,13 @@ class TokenStaging:
                                  patient=patient, now=self.now)
 
     def install(self):
+        """Write the minted tokens into the staged test data, and record them.
+
+        Reads each token from the file `make tokens` minted it into, checks it
+        against what this round's test data requires, and refuses the lot if any
+        one of them fails - a partially staged contract would run and produce
+        verdicts that are about the staging rather than about the SUT.
+        """
         yaml_path = self.yaml
         data = load_yaml(yaml_path)
 
@@ -377,6 +391,13 @@ class TokenStaging:
             )
 
     def verify(self):
+        """Check the already-staged tokens without touching anything.
+
+        What `make check` and the start of a run call: the same checks as
+        install(), read from the staged file itself, so a contract whose tokens
+        expired between minting and running is reported before the suite starts
+        rather than as six authorization failures afterwards.
+        """
         yaml_path = self.yaml
         data = load_yaml(yaml_path)
         want_patient = data.get(PATIENT_IN_CONTEXT_KEY)
@@ -447,6 +468,7 @@ class TokenStaging:
         lines += ["", "# %-54s %-21s %-21s %s" % ("KEY", "ISSUED (UTC)", "EXPIRES (UTC)", "PATIENT CONTEXT")]
         for rec in records:
             def stamp(value):
+                """One epoch claim as a UTC timestamp, or `-` if it carried none."""
                 if not isinstance(value, (int, float)):
                     return "-"
                 return datetime.datetime.fromtimestamp(
@@ -571,6 +593,7 @@ def main():
     sub = parser.add_subparsers(dest="command", required=True)
 
     def common(p):
+        """The options both subcommands take: the file and the claims required."""
         p.add_argument("--yaml", required=True, help="the staged testdata/Stufe5/connect.yaml")
         p.add_argument("--audience", required=True, help="the aud claim every token must carry")
         p.add_argument("--issuer", required=True, help="the iss claim every token must carry")

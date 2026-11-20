@@ -155,6 +155,12 @@ def strip_parens(expr: str) -> str:
 
 
 def _branch_roots(expr: str) -> set[str]:
+    """The resource elements one branch names at its root.
+
+    What is left after the literals, the parenthesised groups and the type
+    operands are taken out is a set of path chains rooted at the resource; the
+    head of each is the element the branch reads.
+    """
     out: set[str] = set()
     cleaned = RE_TYPE_OPERAND.sub(" ", strip_parens(RE_QUOTED.sub(" ", expr)))
     for chain in RE_CHAIN.findall(cleaned):
@@ -197,6 +203,7 @@ def _mask(expr: str) -> tuple[str, list[str]]:
     lits: list[str] = []
 
     def sub(m: re.Match) -> str:
+        """Set this literal aside and leave its index behind in the text."""
         lits.append(m.group(0)[1:-1])
         return f"\x00{len(lits) - 1}\x00"
 
@@ -267,6 +274,7 @@ def literal_alternatives(expr: str) -> list[dict[str, bool]]:
     masked, lits = _mask(expr)
 
     def walk(s: str) -> list[dict[str, bool]]:
+        """The alternatives one sub-expression offers, one dict per branch."""
         branches = split_or(s)
         if len(branches) > 1:
             out: list[dict[str, bool]] = []

@@ -113,6 +113,7 @@ def references_in(doc) -> set[str]:
     out: set[str] = set()
 
     def walk(node) -> None:
+        """Collect every literal reference this resource makes, at any depth."""
         if isinstance(node, dict):
             ref = node.get("reference")
             if isinstance(ref, str) and RE_REF.match(ref):
@@ -143,6 +144,7 @@ def seeding_order(nodes: dict[str, dict]) -> list[dict]:
     out: list[dict] = []
 
     def rank(key: str) -> tuple[int, str]:
+        """Order among resources that may be seeded together: type, then file."""
         return (TYPE_RANK.get(nodes[key]["resourceType"], DEFAULT_RANK),
                 nodes[key]["file"])
 

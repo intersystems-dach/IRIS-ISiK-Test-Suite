@@ -266,6 +266,7 @@ def resolve_keys(text: str, values: dict[str, str]) -> tuple[str, set[str]]:
     missing: set[str] = set()
 
     def repl(m: re.Match) -> str:
+        """The staged value of one test-data key, noting any this level lacks."""
         key = m.group(1)
         if key not in values:
             missing.add(key)

@@ -159,6 +159,7 @@ class Placeholders:
         missing_keys: list[tuple[str, str]] = []
 
         def walk(node, path: str) -> None:
+            """Turn every reference this body carries into its test-data key."""
             if isinstance(node, dict):
                 for key, value in list(node.items()):
                     if key == "reference" and isinstance(value, str):

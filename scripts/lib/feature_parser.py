@@ -105,6 +105,7 @@ class Step:
 
     @property
     def full(self) -> str:
+        """The line as the feature file spells it, keyword included."""
         return f"{self.keyword}{self.text}"
 
 
@@ -128,10 +129,16 @@ class Scenario:
 
     @property
     def is_outline(self) -> bool:
+        """Whether this block is data-driven, and so has Examples rows."""
         return self.keyword == "Scenario Outline"
 
     @property
     def is_precondition(self) -> bool:
+        """Whether this block documents required test data rather than asserting.
+
+        Both spellings of the tag count, and a trailing colon is tolerated - see
+        the reasoning below.
+        """
         # Two spellings for one thing: Stufe 3 says @vorbedingung, Stufe 5 says
         # @Precondition. Both mark a block that documents required test data
         # rather than exercising the SUT - its steps only record prose.
@@ -171,19 +178,23 @@ class Feature:
     # folder is therefore the authoritative grouping.
     @property
     def level(self) -> str:
+        """Which ISiK level this feature belongs to: the top folder of its path."""
         return self.rel.split("/", 1)[0]
 
     @property
     def module(self) -> str:
+        """Which module of the level, or "(root)" for a feature directly in it."""
         parts = self.rel.split("/")
         return parts[1] if len(parts) > 2 else "(root)"
 
     @property
     def precondition_scenarios(self) -> list[Scenario]:
+        """The blocks that only state required test data."""
         return [s for s in self.scenarios if s.is_precondition]
 
     @property
     def test_scenarios(self) -> list[Scenario]:
+        """The blocks that assert conformance, which are the countable cases."""
         return [s for s in self.scenarios if not s.is_precondition]
 
     # --- Tag scope -----------------------------------------------------------
@@ -418,6 +429,7 @@ def load_features(root: Path) -> list[Feature]:
 
 
 def _tokenise(expr: str) -> list[str]:
+    """The tag expression as its atoms: parentheses, tags and the operators."""
     return re.findall(r"\(|\)|@[\w:-]+|and|or|not", expr)
 
 
@@ -427,15 +439,18 @@ def parse_tag_expression(expr: str):
     pos = 0
 
     def peek() -> str | None:
+        """The token the parse has reached, or None at the end."""
         return tokens[pos] if pos < len(tokens) else None
 
     def take() -> str:
+        """Consume the token the parse has reached and return it."""
         nonlocal pos
         tok = tokens[pos]
         pos += 1
         return tok
 
     def primary():
+        """A parenthesised expression, a negation, or one tag."""
         tok = peek()
         if tok is None:
             raise FeatureParseError(f"tag expression ended early: {expr!r}")
@@ -460,6 +475,7 @@ def parse_tag_expression(expr: str):
         raise FeatureParseError(f"unexpected token {tok!r} in tag expression {expr!r}")
 
     def and_expr():
+        """A run of primaries joined by `and`, which binds tighter than `or`."""
         node = primary()
         while peek() == "and":
             take()
@@ -469,6 +485,7 @@ def parse_tag_expression(expr: str):
         return node
 
     def or_expr():
+        """A run of conjunctions joined by `or`: the whole expression."""
         node = and_expr()
         while peek() == "or":
             take()

@@ -165,6 +165,7 @@ class Account:
 
     @property
     def text(self):
+        """The account as one table cell, or "differs" where nothing was noted."""
         return '; '.join(self.lines) or 'differs'
 
     def note(self, at):

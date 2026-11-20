@@ -97,6 +97,7 @@ MIN_SECRET_LEN = 12
 
 
 def digest(value):
+    """The SHA-256 of a withheld value, which is what gets published instead."""
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
@@ -268,6 +269,7 @@ def replace_unnamed_tokens(text, totals):
     found = {}
 
     def sub(match):
+        """One token-shaped string, marked if it really is an access token."""
         token = match.group(0)
         payload = access_token_claims(token)
         if payload is None:
@@ -283,6 +285,7 @@ def replace_unnamed_tokens(text, totals):
 
 
 def cmd_rewrite(args):
+    """Replace every credential value in the given roots by its marker."""
     secrets = collect_secrets(args.connect_yaml, args.env_secret)
 
     totals = {label: 0 for label, _, _ in secrets}

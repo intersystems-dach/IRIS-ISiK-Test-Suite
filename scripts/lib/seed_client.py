@@ -183,6 +183,7 @@ class Endpoint:
 
     @staticmethod
     def _parse(raw: bytes) -> object:
+        """The response body as JSON, or a short quote of it when it is not."""
         if not raw:
             return None
         try:

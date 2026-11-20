@@ -229,6 +229,7 @@ REWRITE_OWNERS = {
 
 
 def sha256_of(path: Path) -> str:
+    """The SHA-256 of a file, read in chunks because the archives are large."""
     h = hashlib.sha256()
     with path.open("rb") as fh:
         for chunk in iter(lambda: fh.read(1 << 20), b""):
@@ -459,6 +460,7 @@ class FeatureIndex:
             self.by_rel[feature.rel] = feature
 
     def scenario(self, rel: str, name: str) -> fp.Scenario | None:
+        """The parsed scenario one outcome names, or None if the index has none."""
         feature = self.by_rel.get(rel)
         if feature is None:
             return None
@@ -540,6 +542,7 @@ class ExampleTable:
 
     @staticmethod
     def of(outcome: dict) -> "ExampleTable":
+        """The Examples table an outcome carries, empty where it carries none."""
         table = outcome.get("dataTable")
         if not isinstance(table, dict):
             return ExampleTable([], [])
@@ -980,6 +983,7 @@ class OutcomeReader:
 # -----------------------------------------------------------------------------
 
 def read_json(path: Path) -> Any | None:
+    """The JSON a file holds, or None where it is absent or unreadable."""
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -1668,12 +1672,14 @@ def render_markdown(doc: dict, run_root: Path) -> str:
     cols = [m for lv in levels for m in lv.get("measurements") or [lv]]
 
     def col_label(m: dict) -> str:
+        """The heading of one archive's column: its level, and its module if any."""
         return (f"{m['level']} · {m['module']}" if m.get("module") else m["level"])
 
     w("| | " + " | ".join(col_label(m) for m in cols) + " |")
     w("|---|" + "---|" * len(cols))
 
     def row(label: str, fn) -> None:
+        """One row of the table: a label, then that field of every archive."""
         w(f"| {label} | " + " | ".join(cell(fn(m)) for m in cols) + " |")
 
     row("Archive directory", lambda lv: f"`{lv['directory']}/official/`")

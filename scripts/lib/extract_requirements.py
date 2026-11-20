@@ -389,6 +389,7 @@ def attribute_assertions(feature, values: dict[str, object] | None = None) -> di
     values = values or {}
 
     def resolve_placeholders(text: str) -> str:
+        """The step as the suite will send it: every key replaced by its value."""
         return RE_DATA_KEY.sub(
             lambda m: str(values.get(m.group(1), m.group(0))), text)
 
@@ -701,6 +702,14 @@ class Extraction:
         return values, origin
 
     def analyse(self) -> dict:
+        """Every requirement the corpus states, with what the extraction found.
+
+        The one entry point of this tool: reads the feature tree, selects each
+        level's scenarios by its own tag expression, resolves the test-data keys
+        the steps carry, and returns the requirements together with the defects
+        the reading itself exposed - a namespace nothing loads, a key no file
+        stages, a scenario no level selects.
+        """
         features_root, tag_expr, basekeys = (
             self.features_root, self.tag_expr, self.basekeys)
         features = load_features(features_root)
@@ -1097,6 +1106,7 @@ class Extraction:
 # -----------------------------------------------------------------------------
 
 def _indent_block(text: str, prefix: str = "> ") -> str:
+    """The text as one Markdown block quote, blank lines included."""
     return "\n".join(prefix + line if line.strip() else prefix.rstrip()
                      for line in text.splitlines())
 

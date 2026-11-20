@@ -289,6 +289,7 @@ def sort_key(case: Case) -> Tuple[str, str, int, str, int]:
     line 100 would precede line 29.
     """
     def num(value: str) -> int:
+        """The field as a number, or -1 where the round recorded none."""
         try:
             return int(value)
         except (TypeError, ValueError):

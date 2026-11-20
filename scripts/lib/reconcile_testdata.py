@@ -300,6 +300,7 @@ class Ctx:
         return found
 
     def is_list(self, name: str, parent: str | None = None) -> bool:
+        """Whether this element repeats, and so has to be written as an array."""
         # The element one level up decides first, where it decides at all: inside a
         # Reference every child is 0..1 (see REFERENCE_ELEMENTS).
         if parent in REFERENCE_ELEMENTS and name in REFERENCE_CHILDREN:
@@ -344,6 +345,7 @@ def parse_chain(expr: str) -> list[str]:
 
 
 def parse_literal(match: re.Match):
+    """The value an assertion compares against, as the type it was written in."""
     if match.group("text") is not None:
         return match.group("text")
     num = match.group("num")
@@ -916,6 +918,7 @@ class Walker:
         written: list[str] = []
 
         def walk(node, where: str) -> None:
+            """Write the display of every Coding in this body that lacks one."""
             if isinstance(node, dict):
                 code, system = node.get("code"), node.get("system")
                 if (isinstance(code, str) and isinstance(system, str)
@@ -999,6 +1002,7 @@ class DisplayEvidence:
 
     @staticmethod
     def _note(into: dict, seen: SeenDisplay) -> None:
+        """Record one display under its code and system, in whichever bucket."""
         if seen.is_usable:
             into.setdefault((seen.code, seen.system), set()).add(seen.display)
 
@@ -1041,6 +1045,7 @@ def build_display_index(pkg_dirs: list[pathlib.Path]) -> dict[tuple[str, str], s
     seen = DisplayEvidence()
 
     def walk(node) -> None:
+        """Record every code this resource displays, wherever it occurs in it."""
         if isinstance(node, dict):
             seen.note_usage(SeenDisplay(node.get("code"), node.get("system"),
                                         node.get("display")))
@@ -1051,11 +1056,13 @@ def build_display_index(pkg_dirs: list[pathlib.Path]) -> dict[tuple[str, str], s
                 walk(item)
 
     def walk_codesystem(doc: dict) -> None:
+        """Record what one shipped CodeSystem defines, concepts nested and all."""
         url = doc.get("url")
         if not isinstance(url, str):
             return
 
         def concepts(nodes) -> None:
+            """One level of the concept tree, and every level below it."""
             for concept in nodes or []:
                 if not isinstance(concept, dict):
                     continue
