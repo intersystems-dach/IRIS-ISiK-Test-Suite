@@ -153,9 +153,9 @@ import sys
 # may be substituted is per family and stays in this function. See the module's
 # own header.
 sys.path.insert(0, os.path.join(os.environ["SCRIPTS_DIR"], "lib"))
-from template_placeholders import leftover_placeholders, unknown_placeholders
+from template_placeholders import Rendering
 
-tmpl_path, out_path = sys.argv[1], sys.argv[2]
+rendering = Rendering.of(sys.argv)
 
 # Only these keys are substitutable. An unknown @@NAME@@ in a template is a
 # template bug and must not silently render as an empty string.
@@ -169,19 +169,15 @@ SUBST = {
     "ACTIVATE_WORKFLOW_UI": os.environ["ACTIVATE_WORKFLOW_UI"],
 }
 
-with open(tmpl_path, encoding="utf-8") as fh:
+with open(rendering.template, encoding="utf-8") as fh:
     text = fh.read()
 
-unknown = unknown_placeholders(text, SUBST)
-if unknown:
-    sys.exit(f"30-render-config.sh: {tmpl_path}: unknown placeholder(s): {', '.join(unknown)}")
+rendering.refuse_unknown(text, SUBST)
 
 for key, value in SUBST.items():
     text = text.replace(f"@@{key}@@", value)
 
-left = leftover_placeholders(text)
-if left:
-    sys.exit(f"30-render-config.sh: {out_path}: unresolved placeholder(s): {', '.join(left)}")
+rendering.refuse_leftover(text)
 
 # The result must be valid YAML before the container gets it: Tiger fails with a
 # Spring configuration stack trace that says nothing useful about which line is
@@ -192,9 +188,9 @@ try:
 except ImportError:
     print("  (PyYAML unavailable - rendered YAML not syntax-checked)", file=sys.stderr)
 except Exception as exc:  # yaml.YAMLError
-    sys.exit(f"30-render-config.sh: {out_path}: rendered file is not valid YAML: {exc}")
+    sys.exit(f"30-render-config.sh: {rendering.output}: rendered file is not valid YAML: {exc}")
 
-with open(out_path, "w", encoding="utf-8") as fh:
+with open(rendering.output, "w", encoding="utf-8") as fh:
     fh.write(text)
 PY
 
@@ -311,9 +307,9 @@ import os
 import sys
 
 sys.path.insert(0, os.path.join(os.environ["SCRIPTS_DIR"], "lib"))
-from template_placeholders import leftover_placeholders, unknown_placeholders
+from template_placeholders import Rendering
 
-tmpl_path, out_path = sys.argv[1], sys.argv[2]
+rendering = Rendering.of(sys.argv)
 
 SUBST = {
     "IRIS_IP":               os.environ["IRIS_IP"],
@@ -329,21 +325,17 @@ SUBST = {
     "SUT_PORT_HTTPS_INTERNAL": os.environ["SUT_PORT_HTTPS_INTERNAL"],
 }
 
-with open(tmpl_path, encoding="utf-8") as fh:
+with open(rendering.template, encoding="utf-8") as fh:
     text = fh.read()
 
-unknown = unknown_placeholders(text, SUBST)
-if unknown:
-    sys.exit(f"30-render-config.sh: {tmpl_path}: unknown placeholder(s): {', '.join(unknown)}")
+rendering.refuse_unknown(text, SUBST)
 
 for key, value in SUBST.items():
     text = text.replace(f"@@{key}@@", value)
 
-left = leftover_placeholders(text)
-if left:
-    sys.exit(f"30-render-config.sh: {out_path}: unresolved placeholder(s): {', '.join(left)}")
+rendering.refuse_leftover(text)
 
-with open(out_path, "w", encoding="utf-8") as fh:
+with open(rendering.output, "w", encoding="utf-8") as fh:
     fh.write(text)
 PY
 }
@@ -604,9 +596,10 @@ import sys
 import yaml
 
 sys.path.insert(0, os.path.join(os.environ["SCRIPTS_DIR"], "lib"))
-from template_placeholders import leftover_placeholders, unknown_placeholders
+from template_placeholders import Rendering
 
-tmpl_path, out_path, contract_path = sys.argv[1], sys.argv[2], sys.argv[3]
+rendering = Rendering.of(sys.argv)
+contract_path = sys.argv[3]
 
 with open(contract_path, encoding="utf-8") as fh:
     contract = yaml.safe_load(fh) or {}
@@ -624,12 +617,10 @@ SUBST = {
     "CONNECT_PATIENT_IN_CONTEXT": patient,
 }
 
-with open(tmpl_path, encoding="utf-8") as fh:
+with open(rendering.template, encoding="utf-8") as fh:
     text = fh.read()
 
-unknown = unknown_placeholders(text, SUBST)
-if unknown:
-    sys.exit(f"30-render-config.sh: {tmpl_path}: unknown placeholder(s): {', '.join(unknown)}")
+rendering.refuse_unknown(text, SUBST)
 
 for key, value in SUBST.items():
     # Every placeholder but one sits inside a JSON string literal, and the
@@ -642,14 +633,12 @@ for key, value in SUBST.items():
     else:
         text = text.replace(f"@@{key}@@", json.dumps(value)[1:-1])
 
-left = leftover_placeholders(text)
-if left:
-    sys.exit(f"30-render-config.sh: {out_path}: unresolved placeholder(s): {', '.join(left)}")
+rendering.refuse_leftover(text)
 
 try:
     realm = json.loads(text)
 except Exception as exc:
-    sys.exit(f"30-render-config.sh: {out_path}: rendered file is not valid JSON: {exc}")
+    sys.exit(f"30-render-config.sh: {rendering.output}: rendered file is not valid JSON: {exc}")
 
 if not isinstance(realm.get("accessTokenLifespan"), int):
     sys.exit("30-render-config.sh: AS_TOKEN_LIFESPAN must be an integer number of "
@@ -698,7 +687,7 @@ def strip_comments(node):
         return [strip_comments(v) for v in node]
     return node
 
-with open(out_path, "w", encoding="utf-8") as fh:
+with open(rendering.output, "w", encoding="utf-8") as fh:
     json.dump(strip_comments(realm), fh, indent=2, ensure_ascii=False)
     fh.write("\n")
 
